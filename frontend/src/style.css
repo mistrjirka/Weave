@@ -4157,3 +4157,413 @@ textarea:focus-visible {
     min-height: 60px;
   }
 }
+
+/* Project lifecycle: create, resume, and inspect examples are separate actions. */
+.new-project-mobile {
+  display: none;
+}
+.topbar-actions .new-project-button {
+  background: #edf3e8;
+  color: #35582a;
+  border: 1px solid #d7e4ce;
+  border-radius: 6px;
+  padding: 8px 11px;
+}
+.topbar-actions .new-project-button:hover {
+  background: #e1ecd9;
+}
+.project-meta {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.project-browser p,
+.new-project-form p {
+  font-size: 12px;
+  line-height: 1.7;
+  color: #526747;
+}
+.project-browser-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 18px;
+}
+.project-browser-actions p {
+  margin: 0;
+}
+.project-browser-actions > button {
+  flex-shrink: 0;
+}
+.project-tabs {
+  display: flex;
+  gap: 6px;
+  border-bottom: 1px solid #dfe7d9;
+  margin-bottom: 18px;
+}
+.project-tabs > button {
+  padding: 11px 12px;
+  border-bottom: 2px solid transparent;
+  font-size: 12px;
+  color: #526747;
+  min-width: 0;
+  min-height: 44px;
+}
+.project-tabs > button[aria-selected="true"] {
+  color: #2b5120;
+  background: #f3f7ee;
+  border-color: #496f35;
+}
+.project-tabs > button:hover {
+  background: #f3f7ee;
+}
+.project-tabs > button > span {
+  background: #e6eedf;
+  border-radius: 10px;
+  padding: 1px 6px;
+  font-size: 10px;
+}
+.project-browser-search {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  border: 1px solid #dce5d4;
+  border-radius: 6px;
+  padding: 0 12px;
+  margin-bottom: 18px;
+  color: #58704a;
+}
+.project-browser-search:focus-within {
+  outline: 2px solid #6b8b52;
+  outline-offset: 2px;
+}
+.project-browser-search input {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  min-width: 0;
+  flex: 1;
+  padding: 11px 0;
+  color: #263b30;
+}
+.example-project-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+.example-project-card {
+  border: 1px solid #dfe5d9;
+  border-radius: 9px;
+  background: #fbfcf8;
+  padding: 16px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.example-card-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #486338;
+}
+.example-card-heading :is(h3, h4) {
+  margin: 0;
+  font-size: 13px;
+  color: #2c4432;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+.example-card-heading > svg {
+  flex-shrink: 0;
+}
+.example-card-heading > span {
+  margin-left: auto;
+  color: #65518a;
+  background: #eee8f7;
+  border-radius: 4px;
+  font-size: 9px;
+  padding: 3px 5px;
+}
+.example-project-card > p {
+  flex: 1;
+  margin: 10px 0 14px;
+  overflow-wrap: anywhere;
+}
+.example-card-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: flex-start;
+}
+.example-card-actions button {
+  min-height: 38px;
+  text-align: left;
+  justify-content: flex-start;
+  font-size: 11px;
+  color: #3b5e2e;
+}
+.example-card-actions .small-button {
+  background: #fff;
+  border-color: #d8e2d0;
+  color: #3b5e2e;
+}
+.example-card-actions button:hover {
+  background: #edf3e6;
+}
+.project-empty {
+  text-align: center;
+  padding: 30px 15px;
+  color: #526747;
+}
+.project-empty > svg {
+  margin-bottom: 8px;
+}
+.project-empty h3 {
+  color: #2c4432;
+  font-size: 16px;
+}
+.project-empty p {
+  max-width: 400px;
+  margin: 12px auto 20px;
+}
+.project-document-list .saved-project {
+  margin: 0;
+  border-bottom: 1px solid #e5eade;
+  gap: 12px;
+}
+.project-document-list .open-saved-project {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  padding: 15px 0;
+  gap: 12px;
+  color: #344e2b;
+}
+.open-saved-project > span {
+  min-width: 0;
+  flex: 1;
+}
+.open-saved-project strong {
+  display: block;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.open-saved-project small {
+  display: block;
+  color: #526747;
+  font-size: 11px;
+  margin-top: 5px;
+}
+.project-document-list .saved-project > button:last-child {
+  min-height: 44px;
+  min-width: 44px;
+  color: #8c4330;
+}
+.new-project-form > p {
+  margin: 0 0 20px;
+}
+.new-project-form .inline-error {
+  color: #9c462e;
+}
+.new-project-form .property-field {
+  margin-bottom: 18px;
+}
+.new-project-form select {
+  width: 100%;
+  padding: 11px 12px;
+  border: 1px solid #dce5d4;
+  background: #fff;
+  color: #263b30;
+  border-radius: 6px;
+}
+.starter-description {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  background: #f4f7ee;
+  border: 1px solid #e0e8d8;
+  padding: 15px;
+  border-radius: 8px;
+  color: #466336;
+}
+.starter-description > svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+.starter-description strong {
+  font-size: 12px;
+  color: #344e2b;
+}
+.starter-description p {
+  margin: 6px 0 0;
+}
+.new-project-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-top: 25px;
+}
+.new-project-actions button {
+  min-height: 42px;
+}
+.collection-description {
+  color: #c3d0b8;
+  font-size: 11px;
+  line-height: 1.65;
+  margin: 0 8px 13px;
+}
+.sidebar .compact-reference-card {
+  margin: 10px 0;
+  padding: 12px;
+  border-color: #405543;
+  background: #22372b;
+}
+.sidebar .compact-reference-card .example-card-heading {
+  color: #d3c4ee;
+}
+.sidebar .compact-reference-card h4 {
+  margin: 0;
+  color: #eef5e8;
+  font-size: 12px;
+  text-transform: none;
+  letter-spacing: normal;
+}
+.compact-reference-card .example-card-heading > span {
+  display: none;
+}
+.sidebar .compact-reference-card > p {
+  color: #c3d0b8;
+  font-size: 11px;
+  line-height: 1.6;
+  margin: 8px 0;
+}
+.sidebar .compact-reference-card button {
+  color: #d9e8cc;
+  font-size: 11px;
+  padding: 7px;
+  min-height: 38px;
+}
+.sidebar .compact-reference-card .small-button {
+  background: #304934;
+  border-color: #607455;
+  color: #f0f6e8;
+}
+.sidebar .compact-reference-card button:hover {
+  background: #3a543b;
+}
+.browse-projects {
+  color: #d9e8cc;
+  font-size: 11px;
+  min-height: 42px;
+  justify-content: flex-start;
+  margin: 6px;
+}
+.browse-projects:hover {
+  background: #304934;
+}
+.reference-use-example {
+  white-space: nowrap;
+  min-height: 34px;
+}
+.reference-use-example span {
+  font-size: 10px;
+}
+@media (max-width: 700px) {
+  .example-project-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .project-browser-actions {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .project-tabs > button {
+    flex: 1;
+    padding: 10px 6px;
+    font-size: 11px;
+  }
+  .project-tabs > button > svg {
+    display: none;
+  }
+  .project-tabs > button > span {
+    display: none;
+  }
+  .example-card-actions button {
+    min-height: 44px;
+  }
+  .reference-use-example span {
+    display: none;
+  }
+}
+@media (max-width: 600px) {
+  .topbar-actions .new-project-button {
+    min-height: 34px;
+    margin-right: 4px;
+    gap: 4px;
+    padding: 6px 8px;
+  }
+  .topbar-actions .new-project-button .new-project-desktop {
+    display: none;
+  }
+  .topbar-actions .new-project-button .new-project-mobile {
+    display: inline;
+    font-size: 11px;
+  }
+  .project-heading {
+    flex: 1;
+    min-width: 0;
+  }
+  .project-heading > div {
+    min-width: 0;
+  }
+  .project-title {
+    max-width: 100%;
+  }
+  .project-meta {
+    max-width: 100%;
+  }
+}
+.current-project-draft {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 18px;
+  padding: 15px;
+  background: #f4f7ed;
+  border: 1px solid #dbe6cf;
+  border-radius: 8px;
+  color: #456235;
+}
+.current-project-draft > svg {
+  flex-shrink: 0;
+}
+.current-project-draft > div {
+  flex: 1;
+  min-width: 0;
+}
+.current-project-draft h3 {
+  font-size: 13px;
+  margin: 0 0 5px;
+  color: #2c4431;
+  overflow-wrap: anywhere;
+}
+.current-project-draft p {
+  margin: 0;
+}
+.current-project-draft button {
+  flex-shrink: 0;
+  color: #3c5f2e;
+}
+@media (max-width: 600px) {
+  .current-project-draft {
+    flex-wrap: wrap;
+  }
+  .current-project-draft > div {
+    flex-basis: calc(100% - 40px);
+  }
+  .current-project-draft button {
+    margin-left: 34px;
+  }
+}

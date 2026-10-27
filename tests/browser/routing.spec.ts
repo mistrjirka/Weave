@@ -1,3 +1,4 @@
+import { openExample } from "./helpers";
 import { test, expect } from "@playwright/test";
 import type { Page } from "@playwright/test";
 import type { Graph, Project, GraphNode } from "../../frontend/src/types";
@@ -169,18 +170,7 @@ for (const mobile of [false, true])
       .click();
     let count = 0;
     for (const template of templates) {
-      await page.getByRole("button", { name: "Models", exact: true }).click();
-      await page
-        .locator(".library-group")
-        .filter({
-          has: page.getByRole("heading", {
-            name: "Reference architectures",
-            exact: true,
-          }),
-        })
-        .locator(".model-item")
-        .filter({ hasText: template.name })
-        .click();
+      await openExample(page, template.name);
       // Traverse by clicking each scope, checking all authored variants including every Needle layer.
       async function visit(path: string[]) {
         await expect
@@ -290,11 +280,7 @@ test("dragging cards recomputes their connected and bypass paths", async ({
   page,
 }) => {
   await page.goto("/");
-  await page.getByRole("button", { name: "Models", exact: true }).click();
-  await page
-    .locator(".model-item")
-    .filter({ hasText: "Decoder transformer" })
-    .click();
+  await openExample(page, "Decoder transformer");
   await page.getByRole("button", { name: "Open loop body" }).click();
   await page
     .getByRole("button", { name: "Show edge labels", exact: true })
@@ -323,8 +309,7 @@ test("expanded attention routes Q/K/V branches, output gates, and optional masks
   page,
 }) => {
   await page.goto("/");
-  await page.getByRole("button", { name: "Models", exact: true }).click();
-  await page.locator(".model-item").filter({ hasText: "Thimble" }).click();
+  await openExample(page, "Thimble");
   await page.getByRole("button", { name: "Open loop body" }).click();
   await page.locator('.react-flow__node[data-id="attn"]').click();
   await page.getByRole("button", { name: "Edit attention internals" }).click();
@@ -471,11 +456,7 @@ test("starting edits cancels pending initial arrangement", async ({ page }) => {
     await gate;
     await route.continue();
   });
-  await page.getByRole("button", { name: "Models", exact: true }).click();
-  await page
-    .locator(".model-item")
-    .filter({ hasText: "Blank project" })
-    .click();
+  await openExample(page, "Blank project");
   await page.getByRole("button", { name: "Blocks", exact: true }).click();
   await page
     .locator(".library-item")

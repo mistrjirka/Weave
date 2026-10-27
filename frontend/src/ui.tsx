@@ -59,7 +59,7 @@ export function Dialog({
     const previous = document.activeElement as HTMLElement | null;
     const background = Array.from(
       document.querySelectorAll<HTMLElement>(
-        ".app-shell > main, .app-shell > aside",
+        ".app-shell > main, .app-shell > aside, .app-shell > nav, .app-shell > .drawer-backdrop",
       ),
     );
     background.forEach((el) => {

@@ -38,7 +38,7 @@ import {
   Database,
   Download,
   ExternalLink,
-  FileJson,
+  FilePlus2,
   FolderOpen,
   GitBranch,
   Layers3,
@@ -47,6 +47,7 @@ import {
   Tags,
   Maximize2,
   Plus,
+  Pencil,
   Redo2,
   RotateCcw,
   Save,
@@ -85,6 +86,17 @@ import {
 import { ReferencePane } from "./ReferencePane";
 import { SplitDivider } from "./SplitDivider";
 import { DesignAdvice } from "./DesignAdvice";
+import {
+  ProjectBrowser,
+  NewProjectForm,
+  ReferenceCard,
+} from "./ProjectBrowser";
+import { createProject } from "./projectWorkflow";
+import type {
+  OpenProjectOptions,
+  ProjectTab,
+  SavedProject,
+} from "./projectWorkflow";
 import { readWorkspaceLocation, workspaceURL } from "./workspaceLocation";
 import type { ReferenceLocation } from "./workspaceLocation";
 import { catalog } from "./catalog";
@@ -112,6 +124,7 @@ import {
   previewSchema,
   unrollSchema,
   codeSchema,
+  recoveryStatusSchema,
 } from "./api";
 import type { NodeProps, Edge } from "@xyflow/react";
 import type { LucideIcon } from "lucide-react";
@@ -794,12 +807,6 @@ function Field<T extends JsonValue>({
   );
 }
 
-type SavedProject = {
-  id: string;
-  name: string;
-  description: string;
-  updated?: string;
-};
 function Bootstrap() {
   const [state, setState] = useState<
     | { status: "loading" }
@@ -913,10 +920,36 @@ function Workbench({
     [search, setSearch] = useState(""),
     [report, setReport] = useState<ValidationReport | null>(null),
     [source, setSource] = useState(""),
-    [modal, setModal] = useState<string | null>(null),
+    [modal, setModal] = useState<string | null>(
+      initialLocation.workspace === "new"
+        ? "new-project"
+        : initialLocation.workspace
+          ? "projects"
+          : null,
+    ),
     [toast, setToast] = useState(""),
     [busy, setBusy] = useState(false),
-    [dirty, setDirty] = useState(false);
+    [dirty, setDirty] = useState(() => {
+      try {
+        const status = recoveryStatusSchema.safeParse(
+          JSON.parse(localStorage.getItem("weave.project.status") || "null"),
+        );
+        if (status.success && status.data.id === initial.id)
+          return status.data.dirty;
+      } catch {}
+      return (
+        initial.id.startsWith("project-") &&
+        !initialSaved.some((p) => p.id === initial.id)
+      );
+    });
+  const [projectTab, setProjectTab] = useState<ProjectTab>(
+    initialLocation.workspace === "examples" ? "examples" : "projects",
+  );
+  const [starterId, setStarterId] = useState(
+    initialTemplates.some((p) => p.id === initialLocation.starter)
+      ? initialLocation.starter || "blank"
+      : "blank",
+  );
   const [history, setHistory] = useState<Project[]>([]),
     [future, setFuture] = useState<Project[]>([]),
     [customBlocks, setCustomBlocks] = useState<NodeData[]>([]),
@@ -958,6 +991,13 @@ function Workbench({
       reference: referenceChoice,
       referenceLocation,
       ratio: splitRatio,
+      workspace:
+        modal === "new-project"
+          ? "new"
+          : modal === "projects"
+            ? projectTab
+            : null,
+      starter: modal === "new-project" ? starterId : null,
     });
     if (url !== window.location.href)
       window.history.replaceState(window.history.state, "", url);
@@ -972,6 +1012,9 @@ function Workbench({
     referenceChoice,
     referenceLocation,
     splitRatio,
+    modal,
+    projectTab,
+    starterId,
   ]);
   const [arranging, setArranging] = useState(false),
     [showLabels, setShowLabels] = useState(false);
@@ -980,9 +1023,8 @@ function Workbench({
   const [selectedEdge, setSelectedEdge] = useState<string | null>(null);
   const [insertKind, setInsertKind] = useState<InsertionKind>("linear");
   const [pendingLoad, setPendingLoad] = useState<{
-    project: Project | { id: string; name: string; description: string };
-    isSaved: boolean;
-    arrange: boolean;
+    project: Project | SavedProject;
+    options: OpenProjectOptions;
   } | null>(null);
   const [saving, setSaving] = useState(false);
   const [deletedProject, setDeletedProject] = useState<Project | null>(null);
@@ -1058,6 +1100,14 @@ function Workbench({
       if (result.success) setCustomBlocks(result.data.nodes.map((n) => n.data));
     } catch {}
   }, []);
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        "weave.project.status",
+        JSON.stringify({ id: project.id, dirty }),
+      );
+    } catch {}
+  }, [project.id, dirty]);
   useEffect(() => {
     if (!project) return;
     try {
@@ -1428,21 +1478,21 @@ function Workbench({
     }
   }
   async function loadProject(
-    p: Project | { id: string; name: string; description: string },
-    isSaved = false,
-    force = false,
-    arrange = false,
+    p: Project | SavedProject,
+    options: OpenProjectOptions = {},
   ) {
-    if (dirty && !force) {
-      setPendingLoad({ project: p, isSaved, arrange });
+    if (dirty && !options.force) {
+      setPendingLoad({ project: p, options });
       setModal("unsaved");
       return false;
     }
     try {
-      const next = isSaved
+      const next = options.saved
         ? projectSchema.parse(await api("/projects/" + p.id))
         : projectSchema.parse(p);
-      pendingArrangement.current = new Set(arrange ? arrangeExample(next) : []);
+      pendingArrangement.current = new Set(
+        options.arrange ? arrangeExample(next) : [],
+      );
       setProject(next);
       ref.current = next;
       setPath([]);
@@ -1450,7 +1500,7 @@ function Workbench({
       setSelectedEdge(null);
       setHistory([]);
       setFuture([]);
-      setDirty(false);
+      setDirty(!!options.newDraft);
       setModal(null);
       setPendingLoad(null);
       setMobilePanel(null);
@@ -1463,6 +1513,22 @@ function Workbench({
       notify(String(e));
       return false;
     }
+  }
+  function startNewProject(starter = "blank") {
+    setStarterId(starter);
+    setMobilePanel(null);
+    setModal("new-project");
+  }
+  function viewReference(example: Project) {
+    setReferenceChoice("example:" + example.id);
+    setReferenceLocation({ blocks: [], node: null });
+    setSplitView(true);
+    setTab("graph");
+    setModal(null);
+    setMobilePanel(null);
+    notify(
+      "Reference opened beside your project. Your graph is still editable on the left.",
+    );
   }
   async function deleteSavedProject(p: { id: string }) {
     try {
@@ -1863,9 +1929,11 @@ function Workbench({
           className="workspace-button"
           onClick={() => setModal("projects")}
         >
-          <span className="workspace-avatar">N</span>
+          <span className="workspace-avatar">
+            <FolderOpen size={18} aria-hidden="true" />
+          </span>
           <span>
-            Neural workspace<small>Self-hosted · personal</small>
+            Your workspace<small>Projects & examples</small>
           </span>
           <ChevronDown size={14} />
         </button>
@@ -1888,19 +1956,23 @@ function Workbench({
             }}
           >
             <FolderOpen size={14} />
-            Models
+            Projects
           </button>
         </div>
         <div className="library-search">
           <Search size={14} />
           <input
-            aria-label="Search blocks"
+            aria-label={
+              left === "blocks"
+                ? "Search blocks"
+                : "Search projects and examples"
+            }
             name="library-search"
             autoComplete="off"
             placeholder={
               left === "blocks"
                 ? "Find a building block…"
-                : "Find an architecture…"
+                : "Find a project or example…"
             }
             value={search}
             onChange={(e) => setSearch(e.target.value)}
@@ -1995,66 +2067,78 @@ function Workbench({
           ) : (
             <>
               <div className="library-group">
-                <h3>Reference architectures</h3>
-                {templates
-                  .filter((t) =>
-                    t.name.toLowerCase().includes(search.toLowerCase()),
+                <h3>Your projects</h3>
+                <p className="collection-description">Saved on this server</p>
+                {saved
+                  .filter((p) =>
+                    p.name
+                      .toLocaleLowerCase()
+                      .includes(search.toLocaleLowerCase()),
                   )
-                  .map((t) => (
-                    <button
-                      className={
-                        "model-item " + (project.id === t.id ? "active" : "")
-                      }
-                      key={t.id}
-                      onClick={() => loadProject(t, false, false, true)}
-                    >
-                      <span
-                        className={
-                          "model-symbol " +
-                          (t.id === "combined" ? "mint" : "violet")
-                        }
-                      >
-                        {t.id.startsWith("needle")
-                          ? "N" + t.id.slice(-1)
-                          : t.id === "thimble"
-                            ? "T"
-                            : t.id === "diffusion"
-                              ? "◇"
-                              : t.id === "looped"
-                                ? "↻"
-                                : "⌘"}
-                      </span>
-                      <span>
-                        {t.name}
-                        <small>
-                          {t.id.startsWith("needle")
-                            ? "Source-linked reference"
-                            : t.id === "combined"
-                              ? "Composable example"
-                              : "Editable architecture"}
-                        </small>
-                      </span>
-                    </button>
-                  ))}
-              </div>
-              {saved.length > 0 && (
-                <div className="library-group">
-                  <h3>Saved projects</h3>
-                  {saved.map((p) => (
+                  .map((p) => (
                     <button
                       className="model-item"
                       key={p.id}
-                      onClick={() => loadProject(p, true)}
+                      onClick={() => loadProject(p, { saved: true })}
+                      title="Open saved project"
                     >
-                      <FileJson size={16} />
+                      <FolderOpen size={16} aria-hidden="true" />
                       <span>
                         {p.name}
-                        <small>{p.updated}</small>
+                        <small>Open saved project</small>
                       </span>
                     </button>
                   ))}
-                </div>
-              )}
+                {!saved.length && (
+                  <p className="collection-description">
+                    No saved projects yet. Create a network with New project,
+                    then Save it here.
+                  </p>
+                )}
+                {!!saved.length &&
+                  !saved.some((p) =>
+                    p.name
+                      .toLocaleLowerCase()
+                      .includes(search.toLocaleLowerCase()),
+                  ) && (
+                    <p className="collection-description" role="status">
+                      No saved projects match “{search}”.
+                    </p>
+                  )}
+                <button
+                  className="browse-projects"
+                  onClick={() => {
+                    setProjectTab("projects");
+                    setModal("projects");
+                  }}
+                >
+                  <FolderOpen size={14} aria-hidden="true" />
+                  Manage projects
+                </button>
+              </div>
+              <div className="library-group">
+                <h3>Reference architectures</h3>
+                <p className="collection-description">
+                  View beside your work, or create your own copy.
+                </p>
+                {templates
+                  .filter(
+                    (t) =>
+                      t.id !== "blank" &&
+                      (t.name + " " + t.description)
+                        .toLocaleLowerCase()
+                        .includes(search.toLocaleLowerCase()),
+                  )
+                  .map((t) => (
+                    <ReferenceCard
+                      key={t.id}
+                      project={t}
+                      compact
+                      onView={() => viewReference(t)}
+                      onUse={() => startNewProject(t.id)}
+                    />
+                  ))}
+              </div>
             </>
           )}
         </div>
@@ -2075,19 +2159,37 @@ function Workbench({
             <div>
               <button
                 className="project-title"
-                title={project.name}
+                title="Rename and configure project"
+                aria-label={`Project settings: ${project.name}`}
                 onClick={() => setModal("settings")}
               >
                 {project.name}
-                <ChevronDown size={14} />
+                <Pencil size={12} aria-hidden="true" />
               </button>
               <span className="project-meta">
                 NEURAL GRAPH STUDIO <span> / </span>{" "}
-                {dirty ? "Unsaved changes" : "Local workspace"}
+                {saved.some((p) => p.id === project.id)
+                  ? dirty
+                    ? "Unsaved changes"
+                    : "Saved on server"
+                  : templates.some((p) => p.id === project.id)
+                    ? dirty
+                      ? "Unsaved example changes"
+                      : "Example · use as starting point"
+                    : "Draft · save to keep on server"}
               </span>
             </div>
           </div>
           <div className="topbar-actions">
+            <button
+              className="subtle-button new-project-button"
+              aria-label="New project"
+              onClick={() => startNewProject()}
+            >
+              <FilePlus2 size={16} aria-hidden="true" />
+              <span className="new-project-desktop">New project</span>
+              <span className="new-project-mobile">New</span>
+            </button>
             <button
               className="subtle-button"
               aria-label="Import project JSON"
@@ -2632,6 +2734,7 @@ function Workbench({
                   }}
                   location={referenceLocation}
                   onNavigate={setReferenceLocation}
+                  onUseExample={(p) => startNewProject(p.id)}
                   nodeTypes={nodeTypes}
                   onClose={closeSplitView}
                 />
@@ -3115,7 +3218,12 @@ function Workbench({
                       Layers, memory, loops, and sampling all share one canvas.
                       Combine them, then package your own blocks.
                     </p>
-                    <button onClick={() => setModal("projects")}>
+                    <button
+                      onClick={() => {
+                        setProjectTab("examples");
+                        setModal("projects");
+                      }}
+                    >
                       Explore architectures
                       <ArrowRight size={13} />
                     </button>
@@ -3151,7 +3259,7 @@ function Workbench({
           }}
         >
           <FolderOpen size={18} />
-          Models
+          Projects
         </button>
         <button
           aria-expanded={mobilePanel === "properties"}
@@ -3184,6 +3292,7 @@ function Workbench({
       />
       {modal && (
         <Dialog
+          key={modal}
           className={modal === "projects" ? "wide" : ""}
           label={
             modal === "tokenizer"
@@ -3192,7 +3301,9 @@ function Workbench({
                 ? "Project settings"
                 : modal === "unsaved"
                   ? "Unsaved changes"
-                  : "Open architecture"
+                  : modal === "new-project"
+                    ? "New project"
+                    : "Projects & examples"
           }
           onClose={() => {
             setModal(null);
@@ -3212,10 +3323,12 @@ function Workbench({
                 {modal === "tokenizer"
                   ? "Connect a tokenizer"
                   : modal === "projects"
-                    ? "Open an architecture"
-                    : modal === "unsaved"
-                      ? "Keep your changes?"
-                      : "Project settings"}
+                    ? "Projects & examples"
+                    : modal === "new-project"
+                      ? "New project"
+                      : modal === "unsaved"
+                        ? "Keep your changes?"
+                        : "Project settings"}
               </h2>
             </div>
             <button onClick={() => setModal(null)} aria-label="Close dialog">
@@ -3232,7 +3345,9 @@ function Workbench({
             <>
               <p className="unsaved-description">
                 You have unsaved changes in <strong>{project.name}</strong>.
-                Save them before opening {pendingLoad?.project.name}.
+                Save them before{" "}
+                {pendingLoad?.options.newDraft ? "creating" : "opening"}{" "}
+                {pendingLoad?.project.name}.
               </p>
               <div className="unsaved-actions">
                 <button
@@ -3241,29 +3356,29 @@ function Workbench({
                   onClick={async () => {
                     const next = pendingLoad;
                     if (next && (await saveProject()))
-                      await loadProject(
-                        next.project,
-                        next.isSaved,
-                        true,
-                        next.arrange,
-                      );
+                      await loadProject(next.project, {
+                        ...next.options,
+                        force: true,
+                      });
                   }}
                 >
-                  Save & open
+                  {pendingLoad?.options.newDraft
+                    ? "Save & create"
+                    : "Save & open"}
                 </button>
                 <button
                   onClick={() => {
                     const next = pendingLoad;
                     if (next)
-                      loadProject(
-                        next.project,
-                        next.isSaved,
-                        true,
-                        next.arrange,
-                      );
+                      loadProject(next.project, {
+                        ...next.options,
+                        force: true,
+                      });
                   }}
                 >
-                  Discard & open
+                  {pendingLoad?.options.newDraft
+                    ? "Discard & create"
+                    : "Discard & open"}
                 </button>
                 <button
                   onClick={() => {
@@ -3385,61 +3500,44 @@ function Workbench({
                 </div>
               )}
             </>
+          ) : modal === "new-project" ? (
+            <NewProjectForm
+              templates={templates}
+              starterId={starterId}
+              onStarter={setStarterId}
+              onCreate={(starter, name) => {
+                void loadProject(
+                  createProject(starter, name, "project-" + uid()),
+                  { arrange: true, newDraft: true },
+                );
+              }}
+              onCancel={() => setModal(null)}
+            />
           ) : modal === "projects" ? (
-            <>
-              <p>
-                Every example is an editable graph. Mix components across
-                architectures.
-              </p>
-              <div className="project-grid">
-                {templates.map((t) => (
-                  <button
-                    key={t.id}
-                    onClick={() => loadProject(t, false, false, true)}
-                  >
-                    <span
-                      className={
-                        "project-template-icon " +
-                        (t.id === "combined" ? "mint" : "violet")
-                      }
-                    >
-                      {t.id.startsWith("needle")
-                        ? "N" + t.id.at(-1)
-                        : t.id === "looped"
-                          ? "↻"
-                          : t.id === "diffusion"
-                            ? "◇"
-                            : "⌘"}
-                    </span>
-                    <h3>{t.name}</h3>
-                    <p>{t.description}</p>
-                    <span>
-                      Open graph <ArrowUpRight size={13} />
-                    </span>
-                  </button>
-                ))}
-              </div>
-              {saved.length > 0 && (
-                <>
-                  <div className="section-label">Saved on this server</div>
-                  {saved.map((p) => (
-                    <div className="saved-project" key={p.id}>
-                      <button onClick={() => loadProject(p, true)}>
-                        <FileJson size={15} />
-                        {p.name}
-                      </button>
-                      <button
-                        title="Delete saved project"
-                        aria-label={"Delete " + p.name}
-                        onClick={() => deleteSavedProject(p)}
-                      >
-                        <Trash2 size={14} />
-                      </button>
-                    </div>
-                  ))}
-                </>
-              )}
-            </>
+            <ProjectBrowser
+              templates={templates}
+              saved={saved}
+              activeId={project.id}
+              draft={
+                dirty && !saved.some((p) => p.id === project.id)
+                  ? project
+                  : null
+              }
+              tab={projectTab}
+              onTab={setProjectTab}
+              onNew={startNewProject}
+              onOpen={(p) => {
+                void loadProject(p, { saved: true });
+              }}
+              onView={viewReference}
+              onDelete={(p) => {
+                void deleteSavedProject(p);
+              }}
+              onResume={() => {
+                setModal(null);
+                setMobilePanel(null);
+              }}
+            />
           ) : (
             <>
               <Field

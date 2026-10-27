@@ -15,6 +15,8 @@ export interface WorkspaceLocation {
   reference: string | null;
   referenceLocation: ReferenceLocation;
   ratio: number;
+  workspace: "projects" | "examples" | "new" | null;
+  starter: string | null;
 }
 const keys = [
   "model",
@@ -28,12 +30,15 @@ const keys = [
   "refBlock",
   "refNode",
   "ratio",
+  "workspace",
+  "starter",
 ];
 export function readWorkspaceLocation(search: string): WorkspaceLocation {
   const params = new URLSearchParams(search);
   const view = params.get("view"),
     panel = params.get("panel"),
     reference = params.get("reference");
+  const workspace = params.get("workspace");
   const ratio = Number(params.get("ratio") || 50);
   return {
     model: params.get("model") || null,
@@ -50,6 +55,13 @@ export function readWorkspaceLocation(search: string): WorkspaceLocation {
       node: params.get("refNode") || null,
     },
     ratio: Number.isFinite(ratio) ? Math.max(30, Math.min(70, ratio)) : 50,
+    workspace:
+      workspace === "projects" ||
+      workspace === "examples" ||
+      workspace === "new"
+        ? workspace
+        : null,
+    starter: workspace === "new" ? params.get("starter") : null,
   };
 }
 export function workspaceURL(href: string, state: WorkspaceLocation): string {
@@ -64,6 +76,8 @@ export function workspaceURL(href: string, state: WorkspaceLocation): string {
   if (state.tab !== "graph") set("view", state.tab);
   if (state.library !== "blocks") set("library", state.library);
   set("panel", state.panel);
+  set("workspace", state.workspace);
+  if (state.workspace === "new") set("starter", state.starter);
   if (state.split) {
     set("split", "1");
     set("reference", state.reference);

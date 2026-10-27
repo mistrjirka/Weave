@@ -112,8 +112,16 @@ test("switching architectures protects unsaved edits", async ({ page }) => {
   const width = page.getByRole("textbox", { name: "width", exact: true });
   await width.fill("256");
   await width.press("Enter");
-  await page.getByRole("button", { name: "Models", exact: true }).click();
-  await page.locator(".model-item").filter({ hasText: "Needle 1" }).click();
+  await page.getByRole("button", { name: "Projects", exact: true }).click();
+  await page
+    .getByRole("button", {
+      name: "Use as starting point: Needle 1",
+      exact: true,
+    })
+    .click();
+  await page
+    .getByRole("button", { name: "Create project", exact: true })
+    .click();
   await expect(
     page.getByRole("dialog", { name: "Unsaved changes" }),
   ).toBeVisible();
@@ -121,8 +129,16 @@ test("switching architectures protects unsaved edits", async ({ page }) => {
   await expect(page.locator(".project-title")).toContainText(
     "Composed language model",
   );
-  await page.locator(".model-item").filter({ hasText: "Needle 1" }).click();
-  await page.getByRole("button", { name: "Discard & open" }).click();
+  await page
+    .getByRole("button", {
+      name: "Use as starting point: Needle 1",
+      exact: true,
+    })
+    .click();
+  await page
+    .getByRole("button", { name: "Create project", exact: true })
+    .click();
+  await page.getByRole("button", { name: "Discard & create" }).click();
   await expect(page.locator(".project-title")).toContainText("Needle 1");
 });
 
@@ -144,9 +160,9 @@ test("mobile users can open models, add blocks and edit their properties", async
   ).toBeVisible();
   await page.getByRole("button", { name: "Close properties" }).click();
   await expect(page.locator(".inspector")).not.toBeVisible();
-  await page.getByRole("button", { name: "Models", exact: true }).click();
+  await page.getByRole("button", { name: "Projects", exact: true }).click();
   await expect(
-    page.locator(".model-item").filter({ hasText: "Needle 3" }),
+    page.getByRole("button", { name: "View reference Needle 3", exact: true }),
   ).toBeVisible();
   await page.screenshot({ path: "data/ux-audit/after-phone-library.png" });
   await page.getByRole("button", { name: "Close library" }).click();
@@ -164,12 +180,12 @@ test("library search clears when switching from blocks to models", async ({
     .getByRole("textbox", { name: "Search blocks" })
     .fill("nothingmatches");
   await expect(page.getByRole("status")).toContainText("No blocks match");
-  await page.getByRole("button", { name: "Models", exact: true }).click();
+  await page.getByRole("button", { name: "Projects", exact: true }).click();
   await expect(
-    page.getByRole("textbox", { name: "Search blocks" }),
+    page.getByRole("textbox", { name: "Search projects and examples" }),
   ).toHaveValue("");
   await expect(
-    page.locator(".model-item").filter({ hasText: "Needle 3" }),
+    page.getByRole("button", { name: "View reference Needle 3", exact: true }),
   ).toBeVisible();
 });
 

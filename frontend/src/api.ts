@@ -135,6 +135,10 @@ export const projectSchema: z.ZodType<Project> = z.object({
     .optional(),
   updated: z.string().optional(),
 });
+export const recoveryStatusSchema = z.object({
+  id: z.string(),
+  dirty: z.boolean(),
+});
 const issue = z.object({
   node: z.string().nullable().optional(),
   port: z.string().nullable().optional(),

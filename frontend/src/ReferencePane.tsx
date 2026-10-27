@@ -16,6 +16,7 @@ import { retainedPath } from "./ui";
 import type { NodeTypes } from "@xyflow/react";
 import {
   Box,
+  Copy,
   ChevronRight,
   LayoutGrid,
   LockKeyhole,
@@ -57,6 +58,7 @@ interface ReferenceProps {
   nodeTypes: NodeTypes;
   location: ReferenceLocation;
   onNavigate: Dispatch<SetStateAction<ReferenceLocation>>;
+  onUseExample: (project: Project) => void;
 }
 type ReferenceState =
   | { status: "loading"; choice: string }
@@ -73,6 +75,7 @@ export function ReferencePane({
   nodeTypes,
   location,
   onNavigate,
+  onUseExample,
 }: ReferenceProps) {
   const [state, setState] = useState<ReferenceState>({
     status: "loading",
@@ -176,6 +179,17 @@ export function ReferencePane({
               )}
           </select>
         </label>
+        {ready && templates.some((p) => p.id === ready.id) && (
+          <button
+            className="reference-use-example"
+            aria-label={`Use this example: ${ready.name}`}
+            title="Create project from this example"
+            onClick={() => onUseExample(ready)}
+          >
+            <Copy size={14} aria-hidden="true" />
+            <span>Use this example</span>
+          </button>
+        )}
         <button
           aria-label="Reload reference"
           title="Reload reference"

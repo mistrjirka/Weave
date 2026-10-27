@@ -45,7 +45,7 @@ For frontend development, run the API on port 8173 and `npm run dev` in another 
 - Shift-click computation nodes and press **Ctrl+G** to package them as a reusable block. Blocks currently expose multiple inputs and one output. Save a selected block to your local block library.
 - A custom Python block defines `CustomBlock(nn.Module)` and declared input/output shapes. Optional `input_shapes` exposes multiple ports; `input_dtypes` and `parameter_count` describe additional contracts. The server validates syntax and contracts without executing user source. User code runs only when you run its exported package.
 - Save persists projects on the server. Browser-local recovery preserves the current project. Project settings provide JSON download; Import restores a complete project.
-- On narrow screens, **Add blocks**, **Models**, and **Properties** open usable side panels. The zoom percentage button returns the graph to 100% for reading node details.
+- On narrow screens, **Add blocks**, **Projects**, and **Properties** open usable side panels. The zoom percentage button returns the graph to 100% for reading node details.
 - Invalid property edits show an inline error and leave the last applied value intact. Numeric overrides can be changed back to `$width`-style bindings. Undo preserves your current position inside nested graphs.
 - Switching models with unsaved changes offers Save & open, Discard & open, or Keep editing. Dialogs support Escape and keyboard focus navigation.
 
@@ -118,7 +118,7 @@ Architecture references: Cactus Compute Needle (`b4fc11b04f1852888d375c8c6dfbaca
 
 ## Editing shared computation and sparse attention
 
-Open **Models → Looped transformer** for three applications of one transformer module, with independently learned linear layers between them. Purple `θ` links indicate parameter identity, rather than a tensor connection. Open any application to edit its graph: the other members of its weight group receive the same definition. **Make this application independent** copies its definition into a separate parameter set. Ordinary Duplicate also creates independent parameters; **Add application with shared weights** creates another application of the same module.
+Choose **New project → Start from → Looped transformer** to create a project with three applications of one transformer module, with independently learned linear layers between them. Purple `θ` links indicate parameter identity, rather than a tensor connection. Open any application to edit its graph: the other members of its weight group receive the same definition. **Make this application independent** copies its definition into a separate parameter set. Ordinary Duplicate also creates independent parameters; **Add application with shared weights** creates another application of the same module.
 
 Select a tensor connection to **Insert independent layer** (linear, residual adapter, FFN, RMSNorm, or transformer). This splits the connection and preserves the existing weight groups. These are editable graph nodes, and can be deleted, rewired, nested, or saved in the block library. A compact Loop can be expanded into individual applications. Shared loops retain shared modules; independent loops retain separate modules. Expanded sampling steps retain their original step/total schedule, exposed in the inspector. Changing the number of sampling applications may require editing these schedules.
 
@@ -157,3 +157,12 @@ The application is MIT licensed; see [LICENSE](LICENSE). Third-party architectur
 ## Design assistance
 
 The validation bar reports tensor errors separately from **Design notes**. Notes also appear in the selected block's properties, with explanations, suggested checks, and source links. They cover extreme hidden bottlenecks, consecutive linear projections, output softmax and cross-entropy, unused learned branches, discrete sampling gradients, fixed zero scales, and empty custom attention rows. They never block export. See [the research, exact heuristics, exceptions, and correctness tests](DESIGN_ADVICE.md).
+
+
+## Creating, opening and studying networks
+
+Use **New project** in the top bar to name a network and start from a blank canvas or an example. Creation makes an editable local draft with its own ID; **Save** keeps it on this server. The current draft also appears in the project browser so you can continue editing it. Unsaved status survives local recovery after reload.
+
+**Your workspace** opens a browser with **Your projects** and **Reference architectures**. Saved projects appear first in the sidebar's **Projects** collection. **View reference** opens a read-only example beside your work; **Use as starting point** creates an independent editable copy. The reference pane also has **Use this example**. Viewing references does not replace your editing document.
+
+Browser tabs and creation starters survive reload and copying the URL: `?workspace=projects`, `?workspace=examples`, or `?workspace=new&starter=looped`. See the [workflow assessment and tested user journeys](PROJECT_WORKFLOW_REVIEW.md).

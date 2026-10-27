@@ -1,3 +1,4 @@
+import { openExample } from "./helpers";
 import {test,expect} from '@playwright/test';
 import type { Locator } from '@playwright/test';
 
@@ -38,9 +39,8 @@ test('edit properties and show an actionable nested shape mismatch',async({page}
 });
 
 test('reference graphs load, expand and export',async({page})=>{
-  await page.getByRole('button',{name:'Models',exact:true}).click();
   for(const name of ['Needle 1','Needle 2','Needle 3','Thimble']){
-    await page.locator('.model-item').filter({hasText:name}).click();
+    await openExample(page, name);
     await expect(page.locator('.project-title')).toContainText(name);
     await expect(page.getByRole('button',{name:'Shapes compatible'})).toBeVisible();
     await page.getByRole('button',{name:'References',exact:true}).click();
@@ -102,8 +102,7 @@ test('desktop and narrow viewport have no horizontal overflow',async({page})=>{
 });
 
 test('create, connect and validate a graph using editable ports',async({page})=>{
-  await page.getByRole('button',{name:'Models',exact:true}).click();
-  await page.locator('.model-item').filter({hasText:'Blank project'}).click();
+  await openExample(page, 'Blank project');
   await page.getByRole('button',{name:'Blocks',exact:true}).click();
   await page.locator('.library-item').filter({hasText:'Token IDs → learned vectors'}).click();
   await page.getByTitle('Fit graph').click();

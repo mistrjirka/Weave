@@ -1,3 +1,4 @@
+import { openExample } from "./helpers";
 import { test, expect } from "@playwright/test";
 import type { Project } from "../../frontend/src/types";
 
@@ -20,11 +21,7 @@ test("insert an independent layer between shared transformer applications", asyn
 }) => {
   const errors: string[] = [];
   page.on("pageerror", (e) => errors.push(e.message));
-  await page.getByRole("button", { name: "Models", exact: true }).click();
-  await page
-    .locator(".model-item")
-    .filter({ hasText: "Looped transformer" })
-    .click();
+  await openExample(page, "Looped transformer");
   await expect(page.locator(".weight-link-label")).toHaveCount(2);
   await expect(page.locator(".transformer-preview")).toHaveCount(3);
   await expect(page.locator(".adapter-preview")).toHaveCount(2);
@@ -90,11 +87,7 @@ test("insert an independent layer between shared transformer applications", asyn
 test("editing one shared body updates its applications and can be made independent", async ({
   page,
 }) => {
-  await page.getByRole("button", { name: "Models", exact: true }).click();
-  await page
-    .locator(".model-item")
-    .filter({ hasText: "Looped transformer" })
-    .click();
+  await openExample(page, "Looped transformer");
   await page.locator('.react-flow__node[data-id="transformer_1"]').dblclick();
   await page.locator('.react-flow__node[data-id="ffn"]').click();
   await page.getByRole("textbox", { name: "hidden", exact: true }).fill("512");
@@ -149,11 +142,7 @@ test("compact loops expand into editable applications with explicit weight shari
 test("sparse patterns are editable building blocks on the same canvas", async ({
   page,
 }) => {
-  await page.getByRole("button", { name: "Models", exact: true }).click();
-  await page
-    .locator(".model-item")
-    .filter({ hasText: "Sparse attention composition" })
-    .click();
+  await openExample(page, "Sparse attention composition");
   await page.getByRole("button", { name: "Open loop body" }).click();
   await expect(page.locator(".pattern-grid")).toHaveCount(2);
   await page.locator('.react-flow__node[data-id="local"]').click();
@@ -180,11 +169,7 @@ test("add a shared application without adding transformer parameters", async ({
   page,
   request,
 }) => {
-  await page.getByRole("button", { name: "Models", exact: true }).click();
-  await page
-    .locator(".model-item")
-    .filter({ hasText: "Looped transformer" })
-    .click();
+  await openExample(page, "Looped transformer");
   const before = await document(page);
   const original = await (
     await request.post("/api/validate", { data: before })
@@ -212,11 +197,7 @@ test("custom attention cells can be edited and malformed matrices cannot crash t
 }) => {
   const errors: string[] = [];
   page.on("pageerror", (e) => errors.push(e.message));
-  await page.getByRole("button", { name: "Models", exact: true }).click();
-  await page
-    .locator(".model-item")
-    .filter({ hasText: "Sparse attention composition" })
-    .click();
+  await openExample(page, "Sparse attention composition");
   await page.locator('.react-flow__node[data-id="ids"]').click();
   await page
     .getByRole("textbox", { name: "shape", exact: true })

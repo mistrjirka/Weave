@@ -53,3 +53,25 @@ test("mobile library drawer selection survives a reload location", () => {
     location,
   );
 });
+
+test("project browser and creation starter survive copied URLs without stale dialog state", () => {
+  for (const query of [
+    "?workspace=projects",
+    "?workspace=examples",
+    "?workspace=new&starter=needle2",
+  ]) {
+    const state = readWorkspaceLocation(query);
+    const url = workspaceURL("http://localhost/", state);
+    assert.deepEqual(readWorkspaceLocation(new URL(url).search), state);
+  }
+  const state = readWorkspaceLocation("?workspace=new&starter=needle2");
+  state.workspace = null;
+  const url = new URL(
+    workspaceURL("http://localhost/?workspace=new&starter=old", state),
+  );
+  assert.equal(url.search, "");
+  assert.equal(
+    readWorkspaceLocation("?workspace=bad&starter=needle2").workspace,
+    null,
+  );
+});
