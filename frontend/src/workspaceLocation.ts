@@ -1,0 +1,77 @@
+/** Shareable view state. Graph documents stay in saved projects/local recovery. */
+export type WorkspaceTab = "graph" | "code" | "sources";
+export interface ReferenceLocation {
+  blocks: string[];
+  node: string | null;
+}
+export interface WorkspaceLocation {
+  model: string | null;
+  blocks: string[];
+  node: string | null;
+  tab: WorkspaceTab;
+  library: "blocks" | "models";
+  panel: "library" | "properties" | null;
+  split: boolean;
+  reference: string | null;
+  referenceLocation: ReferenceLocation;
+  ratio: number;
+}
+const keys = [
+  "model",
+  "block",
+  "node",
+  "view",
+  "library",
+  "panel",
+  "split",
+  "reference",
+  "refBlock",
+  "refNode",
+  "ratio",
+];
+export function readWorkspaceLocation(search: string): WorkspaceLocation {
+  const params = new URLSearchParams(search);
+  const view = params.get("view"),
+    panel = params.get("panel"),
+    reference = params.get("reference");
+  const ratio = Number(params.get("ratio") || 50);
+  return {
+    model: params.get("model") || null,
+    blocks: params.getAll("block"),
+    node: params.get("node") || null,
+    tab: view === "code" || view === "sources" ? view : "graph",
+    library: params.get("library") === "models" ? "models" : "blocks",
+    panel: panel === "library" || panel === "properties" ? panel : null,
+    split: params.get("split") === "1",
+    reference:
+      reference && /^(example|saved):.+$/.test(reference) ? reference : null,
+    referenceLocation: {
+      blocks: params.getAll("refBlock"),
+      node: params.get("refNode") || null,
+    },
+    ratio: Number.isFinite(ratio) ? Math.max(30, Math.min(70, ratio)) : 50,
+  };
+}
+export function workspaceURL(href: string, state: WorkspaceLocation): string {
+  const url = new URL(href);
+  for (const key of keys) url.searchParams.delete(key);
+  const set = (key: string, value: string | null) => {
+    if (value) url.searchParams.set(key, value);
+  };
+  set("model", state.model);
+  for (const block of state.blocks) url.searchParams.append("block", block);
+  set("node", state.node);
+  if (state.tab !== "graph") set("view", state.tab);
+  if (state.library !== "blocks") set("library", state.library);
+  set("panel", state.panel);
+  if (state.split) {
+    set("split", "1");
+    set("reference", state.reference);
+    for (const block of state.referenceLocation.blocks)
+      url.searchParams.append("refBlock", block);
+    set("refNode", state.referenceLocation.node);
+    if (Math.abs(state.ratio - 50) > 0.05)
+      set("ratio", String(Number(state.ratio.toFixed(1))));
+  }
+  return url.toString();
+}

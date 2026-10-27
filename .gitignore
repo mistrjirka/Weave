@@ -1,0 +1,19 @@
+node_modules/
+.venv/
+dist/
+data/*
+!data/.gitkeep
+__pycache__/
+.pytest_cache/
+*.pyc
+test-results/
+playwright-report/
+
+# Local credentials and machine-specific state
+.env
+.env.*
+!.env.example
+*.sqlite
+*.sqlite3
+*.db
+*.log
