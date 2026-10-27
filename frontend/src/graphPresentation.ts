@@ -101,6 +101,11 @@ export function presentNodes(
         (e) =>
           e.node === prefix + n.id || e.node?.startsWith(prefix + n.id + "/"),
       ),
+      _portErrors: Object.fromEntries(
+        (report?.errors || [])
+          .filter((issue) => issue.node === prefix + n.id && issue.port)
+          .map((issue) => [issue.port, issue.message]),
+      ),
       _open: onOpen,
     },
   }));

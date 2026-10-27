@@ -22,4 +22,4 @@ def validate_mask(mask,q_shape,k_shape):
     shape=mask['shape']
     target=[q_shape[0],q_shape[1] if len(q_shape)==4 else 1,q_shape[-2],k_shape[-2]]
     if len(shape) not in (2,4) or shape[-2:]!=target[-2:]:raise ValueError(f'Attention mask {shape} must end in query/key dimensions {target[-2:]}.')
-    if len(shape)==4 and any(a!=1 and a!=b for a,b in zip(shape[:2],target[:2])):raise ValueError('Mask batch/head dimensions cannot broadcast to attention.')
+    if len(shape)==4 and any(a!=1 and a!=b for a,b in zip(shape[:2],target[:2])):raise ValueError(f'Mask batch/head dimensions {shape[:2]} cannot broadcast to attention {target[:2]}.')

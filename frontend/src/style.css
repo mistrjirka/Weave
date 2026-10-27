@@ -3934,6 +3934,81 @@ textarea:focus-visible {
 .is-split .parameters-total {
   display: none;
 }
+.validation-bar .advice-count {
+  color: #79520d;
+  white-space: nowrap;
+}
+.arch-node .react-flow__handle.port-error {
+  background: #a53c27;
+  border-color: #a53c27;
+  box-shadow: 0 0 0 3px #a53c2722;
+}
+.arch-node .port-error-label {
+  color: #a53c27;
+  font-weight: 700;
+}
+.checks-drawer h2 {
+  font-size: 13px;
+  margin: 18px 0 6px;
+}
+.checks-drawer > div:first-child,
+.checks-drawer > p {
+  color: #526747;
+}
+.design-advice {
+  border: 1px solid #e9dfc6;
+  border-radius: 8px;
+  background: #fffcf4;
+  padding: 12px;
+  margin: 10px 0;
+  color: #604b22;
+  overflow-wrap: anywhere;
+}
+.advice-heading {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.advice-heading svg {
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+.design-advice .advice-locate {
+  color: #765318;
+  font-size: 11px;
+  padding: 4px 0;
+  text-align: left;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+.design-advice p,
+.checks-drawer .design-advice p {
+  display: block;
+  font-size: 12px;
+  line-height: 1.65;
+  color: #604b22;
+  margin: 6px 0;
+}
+.design-advice .advice-suggestion {
+  border-top: 1px solid #e9dfc6;
+  padding-top: 8px;
+}
+.design-advice a {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: #705015;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+@media (max-width: 1100px) {
+  .validation-bar:has(.advice-count) > span {
+    display: none;
+  }
+}
 .reference-status {
   display: flex;
   justify-content: space-between;

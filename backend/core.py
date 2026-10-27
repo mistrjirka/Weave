@@ -6,8 +6,22 @@ import copy
 import re
 import math
 from .patterns import validate_pattern,validate_mask
+from .advice import design_advice
 
 VERSION = 1
+
+
+class ContractError(ValueError):
+    """A contract failure at a specific input port."""
+
+    def __init__(self, message, port):
+        super().__init__(message)
+        self.port = port
+
+
+def valid_dimension(value):
+    return (type(value) is int and value > 0 or
+            isinstance(value, str) and re.fullmatch(r'[A-Za-z_][A-Za-z_0-9]*(?:\+[1-9][0-9]*)*', value) is not None)
 PORTS = {
     'input': [], 'output': ['a'], 'embedding': ['a'], 'linear': ['a'],
     'norm': ['a'], 'silu': ['a'], 'sigmoid': ['a'], 'add': ['a', 'b'],
@@ -138,7 +152,10 @@ def validate_project(project):
                 required=[a for port,a in zip(port_names(n),args) if port not in optional_ports(n)]
                 for port, arg in zip(port_names(n), args):
                     if arg is None and port not in optional_ports(n):
-                        fail(n, f'Input {port} is unconnected or its shape could not be resolved.', port)
+                        connected = next((e for e in graph.get('edges', []) if e['target'] == n['id'] and (e.get('targetHandle') or 'a') == port), None)
+                        message = (f"Input {port} is connected to {connected['source']}, whose shape is unresolved. Fix the upstream error first."
+                                   if connected else f'Input {port} is unconnected. Connect a tensor to this required port.')
+                        fail(n, message, port)
                 x = args[0] if args else None
                 width = p.get('width', cfg.get('width', 128))
                 if kind == 'input':
@@ -236,14 +253,14 @@ def validate_project(project):
                 elif kind in ('add', 'multiply', 'subtract', 'gate', 'concat'):
                     y = args[1]
                     if x['dtype'] != y['dtype'] or len(x['shape']) != len(y['shape']):
-                        raise ValueError(f'Inputs have incompatible shape or dtype: {x} and {y}.')
+                        raise ContractError(f'Inputs have incompatible shape or dtype: {x} and {y}.', 'b')
                     if kind == 'concat':
                         if x['shape'][:-1] != y['shape'][:-1]:
-                            raise ValueError(f'Concatenation requires matching leading dimensions: {x["shape"]} and {y["shape"]}.')
+                            raise ContractError(f'Concatenation requires matching leading dimensions: {x["shape"]} and {y["shape"]}.', 'b')
                         out = {'shape': x['shape'][:-1] + [x['shape'][-1] + y['shape'][-1]], 'dtype': x['dtype']}
                     else:
                         if x != y:
-                            raise ValueError(f'Expected {x["shape"]}, received {y["shape"]} at input b.')
+                            raise ContractError(f'Expected {x["shape"]}, received {y["shape"]} at input b. Both inputs must have matching shape and dtype.', 'b')
                         out = x
                         if kind == 'gate': count = 1
                 elif kind == 'select':
@@ -311,13 +328,17 @@ def validate_project(project):
                         k,v=args[1:3]
                         if len(s)!=4 or len(k['shape'])!=4 or len(v['shape'])!=4 or s[:2]!=k['shape'][:2] or k['shape'][:3]!=v['shape'][:3] or s[-1]!=k['shape'][-1] or k['dtype']!='float32' or v['dtype']!='float32':raise ValueError('SDPA requires Q[B,H,T,D], K[B,H,S,D], V[B,H,S,Dv].')
                         out['shape'][-1]=v['shape'][-1]
-                        if args[3]:validate_mask(args[3],s,k['shape'])
+                        if args[3]:
+                            try: validate_mask(args[3],s,k['shape'])
+                            except ValueError as exc: raise ContractError(str(exc), 'd') from exc
                         if p.get('backend','dense') not in ('dense','flex','auto'):raise ValueError('Attention backend must be dense, flex, or auto.')
                     elif kind=='causal_conv':
                         taps=p.get('taps',3)
                         if len(s)!=3 or not isinstance(taps,int) or taps<1:raise ValueError('Causal convolution expects [B,T,D] and a positive tap count.')
                         count=taps*s[-1]
                     elif kind=='matmul':
+                        if args[1]['dtype'] != 'float32':
+                            raise ContractError('Matmul input b must be floating point, matching input a.', 'b')
                         y=args[1]['shape']
                         if len(s)<2 or len(y)<2 or s[:-2]!=y[:-2] or s[-1]!=y[-2]:raise ValueError(f'Matmul dimensions are incompatible: {s} × {y}.')
                         out['shape']=s[:-1]+[y[-1]]
@@ -361,12 +382,13 @@ def validate_project(project):
                             raise ValueError('Q/K head width must be a positive even integer; value width must be positive.')
                         if any(not isinstance(p.get(v,0),int) or p.get(v,0)<0 for v in ('window','conv_taps')):raise ValueError('Attention window and convolution taps must be non-negative integers.')
                         if kind == 'cross_attention' and (len(args[1]['shape']) != 3 or args[1]['shape'][0] != x['shape'][0] or args[1]['shape'][-1] != dim or args[1]['dtype'] != 'float32'):
-                            raise ValueError('Cross-attention memory must be [B,S,D] with the same batch and feature width.')
+                            raise ContractError(f'Cross-attention memory must be [B,S,D] with batch {x["shape"][0]} and width {dim}; received {args[1]}.', 'b')
                         mask=args[2] if kind=='cross_attention' else args[1]
                         if mask:
                             qshape=[x['shape'][0],heads,x['shape'][1],hd]
                             memory=args[1] if kind=='cross_attention' else x
-                            validate_mask(mask,qshape,[memory['shape'][0],heads,memory['shape'][1],hd])
+                            try: validate_mask(mask,qshape,[memory['shape'][0],heads,memory['shape'][1],hd])
+                            except ValueError as exc: raise ContractError(str(exc), 'c' if kind == 'cross_attention' else 'b') from exc
                         if p.get('backend','dense') not in ('dense','flex','auto'):raise ValueError('Attention backend must be dense, flex, or auto.')
                         count = dim * (heads * hd + kv * hd + kv * vd + heads * vd)
                         if p.get('qk_norm', False): count += 2 * hd
@@ -388,8 +410,8 @@ def validate_project(project):
                         count=3*(ba*ba+bb*bb)+5*size+8*(dim+size)
                     elif kind in ('mhc', 'engram'):
                         raise ValueError('This reference component requires its architecture-specific implementation before export.')
-                if out and (not out.get('shape') or any(v is None or isinstance(v, int) and v < 1 for v in out['shape'])):
-                    raise ValueError('Output contains unresolved or non-positive dimensions.')
+                if out and (not isinstance(out.get('shape'), list) or not out['shape'] or any(not valid_dimension(v) for v in out['shape'])):
+                    raise ValueError(f"Invalid or unresolved dimensions {out.get('shape')}. Use positive integers or symbols such as B, T, S; check $parameter bindings.")
                 if out and out['dtype'] not in ('float32','int64','bool','attention_pattern'):raise ValueError('Unsupported output dtype.')
                 share = d.get('share')
                 raw_counts[key]=count
@@ -402,7 +424,7 @@ def validate_project(project):
                     if share in shared: count = 0
                     else: shared[share] = signature
             except (ValueError, TypeError, KeyError, IndexError, SyntaxError) as exc:
-                fail(n, str(exc)); out = None
+                fail(n, str(exc), getattr(exc, 'port', None)); out = None
             local[n['id']] = out
             shapes[key] = out; counts[key] = count; total += count
         if not any(n['data']['kind']=='output' for n in graph['nodes']):
@@ -436,4 +458,8 @@ def validate_project(project):
                 counts[key]=count;result+=count
             return result
         total=allocation(project['graph'])
+    # Advice is independent of export validity, and only inspects resolved nodes.
+    # Skip structurally malformed graphs rather than hiding the original error.
+    if not any(e.get('node') is None for e in errors):
+        warnings.extend(design_advice(project, shapes, counts, resolve))
     return {'valid': not errors, 'errors': errors, 'warnings': warnings, 'shapes': shapes, 'counts': counts, 'parameters': total, 'outputs': outputs}

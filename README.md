@@ -153,3 +153,7 @@ The address bar tracks the current model, open blocks, selected node, Architectu
 Saving a network gives it a server project ID that links can reopen on the same server. Local recovery preserves unsaved edits in the current browser; a URL contains view state rather than a copy of those edits. Save the model before sharing edits with another browser. Reference views use snapshots: Reload reference fetches the latest saved version. No project data or tokenizer contents are embedded in the URL.
 
 The application is MIT licensed; see [LICENSE](LICENSE). Third-party architecture sources, libraries and fonts retain the licenses documented in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+## Design assistance
+
+The validation bar reports tensor errors separately from **Design notes**. Notes also appear in the selected block's properties, with explanations, suggested checks, and source links. They cover extreme hidden bottlenecks, consecutive linear projections, output softmax and cross-entropy, unused learned branches, discrete sampling gradients, fixed zero scales, and empty custom attention rows. They never block export. See [the research, exact heuristics, exceptions, and correctness tests](DESIGN_ADVICE.md).

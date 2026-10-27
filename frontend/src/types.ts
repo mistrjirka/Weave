@@ -51,7 +51,12 @@ export interface TensorContract {
 }
 export interface ValidationIssue {
   node?: string | null;
+  port?: string | null;
   message: string;
+  code?: string;
+  title?: string;
+  suggestion?: string;
+  source?: string;
 }
 export interface ValidationReport {
   valid: boolean;
@@ -109,6 +114,7 @@ export interface DisplayData extends NodeData {
   _shape?: TensorContract | null;
   _count?: number;
   _error?: boolean;
+  _portErrors?: Record<string, string>;
   _open: (id: string) => void;
 }
 export type DisplayNode = Node<DisplayData, "architecture">;

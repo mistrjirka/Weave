@@ -30,7 +30,7 @@ test('edit properties and show an actionable nested shape mismatch',async({page}
   await page.getByRole('textbox',{name:'width',exact:true}).fill('768');
   await page.getByRole('textbox',{name:'width',exact:true}).press('Enter');
   await expect(page.locator('.validation-bar')).toContainText('graph issues');
-  await page.locator('.validation-bar button').click();
+  await page.locator('.validation-bar button.invalid').click();
   await expect(page.locator('.checks-drawer')).toContainText('768');
   await expect(page.locator('.react-flow__node[data-id="fusion"] .arch-node')).toHaveClass(/has-error/);
   await page.getByTitle('Undo (Ctrl+Z)').click();

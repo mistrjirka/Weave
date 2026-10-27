@@ -137,7 +137,12 @@ export const projectSchema: z.ZodType<Project> = z.object({
 });
 const issue = z.object({
   node: z.string().nullable().optional(),
+  port: z.string().nullable().optional(),
   message: z.string(),
+  code: z.string().optional(),
+  title: z.string().optional(),
+  suggestion: z.string().optional(),
+  source: z.string().url().optional(),
 });
 const contract = z
   .object({ shape: z.array(dimension), dtype: z.string() })

@@ -84,6 +84,7 @@ import {
 } from "./graphPresentation";
 import { ReferencePane } from "./ReferencePane";
 import { SplitDivider } from "./SplitDivider";
+import { DesignAdvice } from "./DesignAdvice";
 import { readWorkspaceLocation, workspaceURL } from "./workspaceLocation";
 import type { ReferenceLocation } from "./workspaceLocation";
 import { catalog } from "./catalog";
@@ -527,14 +528,19 @@ function ArchitectureNode({ id, data, selected }: NodeProps<DisplayNode>) {
             position={Position.Left}
             id={port}
             title={
-              data._optional.includes(port)
-                ? `${port}: optional attention pattern / invariant`
-                : `Input ${port}`
+              data._portErrors?.[port]
+                ? `Input ${port}: ${data._portErrors[port]}`
+                : data._optional.includes(port)
+                  ? `${port}: optional attention pattern / invariant`
+                  : `Input ${port}`
             }
-            className={data._optional.includes(port) ? "optional-port" : ""}
+            className={`${data._optional.includes(port) ? "optional-port" : ""} ${data._portErrors?.[port] ? "port-error" : ""}`}
             style={{ top: 68 + i * 28 }}
           />
-          <span className="port-name" style={{ top: 60 + i * 28 }}>
+          <span
+            className={`port-name ${data._portErrors?.[port] ? "port-error-label" : ""}`}
+            style={{ top: 60 + i * 28 }}
+          >
             {port}
           </span>
         </React.Fragment>
@@ -2544,6 +2550,17 @@ function Workbench({
                     : "Checking graph…"}
                   <ChevronDown size={12} />
                 </button>
+                {!!report?.warnings.length && (
+                  <button
+                    className="advice-count"
+                    onClick={() => setChecksOpen(!checksOpen)}
+                    aria-expanded={checksOpen}
+                  >
+                    <Sparkles size={14} />
+                    {report.warnings.length} design note
+                    {report.warnings.length === 1 ? "" : "s"}
+                  </button>
+                )}
                 <span>
                   {graph.nodes.length} nodes <i>·</i> {graph.edges.length}{" "}
                   connections
@@ -2577,15 +2594,28 @@ function Workbench({
                     >
                       <CircleAlert size={15} />
                       <span>
-                        <b>{e.node || "Model"}</b>
+                        <b>
+                          {e.node || "Model"}
+                          {e.port ? ` · input ${e.port}` : ""}
+                        </b>
                         {e.message}
                       </span>
                       <ArrowUpRight size={14} />
                     </button>
                   ))}
-                  {report?.warnings.map((w: ValidationIssue, i: number) => (
-                    <p key={i}>{w.message}</p>
-                  ))}
+                  {!!report?.warnings.length && (
+                    <>
+                      <h2>Design notes</h2>
+                      <p>Suggestions to consider. These never block export.</p>
+                      {report.warnings.map((issue, i) => (
+                        <DesignAdvice
+                          key={`${issue.node}-${issue.code}-${i}`}
+                          issue={issue}
+                          onLocate={focusError}
+                        />
+                      ))}
+                    </>
+                  )}
                 </div>
               )}
             </section>
@@ -2917,6 +2947,15 @@ function Workbench({
                         <CircleAlert size={15} />
                         {e.message}
                       </div>
+                    ))}
+                  {report?.warnings
+                    .filter((issue) => issue.node === prefix + selected.id)
+                    .map((issue, i) => (
+                      <DesignAdvice
+                        key={`${issue.code}-${i}`}
+                        issue={issue}
+                        onLocate={focusError}
+                      />
                     ))}
                   <div className="node-actions">
                     <button onClick={duplicate}>
