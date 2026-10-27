@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   graphVariableScope,
   bindingValue,
+  previewParameters,
 } from "../frontend/src/graphVariables.ts";
 import { localizeLayerDefaults } from "../frontend/src/parameterScopes.ts";
 import { compilationInput } from "../frontend/src/compilationInput.ts";
@@ -99,4 +100,18 @@ test("compilation and clipboard preserve scoped variables and input metadata", (
     () => "fresh",
   );
   assert.deepEqual(pasted[0].data.tokenizer, info);
+});
+
+test("diagram bindings show resolved heads and do not treat a zero window as enabled", () => {
+  const params = {
+    heads: "$heads",
+    window: "$window",
+    shape: ["B", "T", "$width"],
+  };
+  const before = structuredClone(params);
+  assert.deepEqual(
+    previewParameters(params, { heads: 4, window: 0, width: 32 }),
+    { heads: 4, window: 0, shape: ["B", "T", 32] },
+  );
+  assert.deepEqual(params, before);
 });

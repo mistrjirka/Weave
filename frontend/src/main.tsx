@@ -19,6 +19,7 @@ import {
   applyEdgeChanges,
   addEdge,
   useReactFlow,
+  type FitViewOptions,
   Panel,
   useViewport,
   SelectionMode,
@@ -27,6 +28,7 @@ import {
   Activity,
   ArrowDownToLine,
   ArrowRight,
+  ArrowUp,
   ArrowUpRight,
   Box,
   Braces,
@@ -73,6 +75,22 @@ import {
   parseSelection,
   pasteSelection,
 } from "./graphClipboard";
+import {
+  attentionVariants,
+  attentionVariant,
+  isAttentionVariant,
+  transformerSettings,
+  transformerSettingKeys,
+  exposeTransformerSettings,
+  setTransformerSetting,
+  setAttentionVariant,
+} from "./transformerControls";
+import { ConnectionPicker } from "./ConnectionPicker";
+import type { ConnectionBlockChoice } from "./ConnectionPicker";
+import { WeightGroupPicker } from "./WeightGroupPicker";
+import { supportsWeightSharing, weightGroupChoices } from "./weightGroups";
+import { canvasFitPadding, canvasFitInsets } from "./canvasFitPadding";
+import { GraphVariableCard } from "./GraphVariableCard";
 import { GraphVariables } from "./GraphVariables";
 import { graphVariableScope, bindingValue } from "./graphVariables";
 import { localizeLayerDefaults } from "./parameterScopes";
@@ -96,6 +114,7 @@ import {
   presentNodes,
   presentEdges,
   clearGraphSelection,
+  nodePorts,
 } from "./graphPresentation";
 import { ReferencePane } from "./ReferencePane";
 import { ReferenceInspector, isGraphEditShortcut } from "./ReferenceInspector";
@@ -540,7 +559,7 @@ function Diagram({
 function ArchitectureNode({ id, data, selected }: NodeProps<DisplayNode>) {
   const kind = data.kind;
   const Icon = icons[kind] || Shapes;
-  const p = data.params || {};
+  const p = data._previewParams ?? data.params;
   const expanded = ["loop", "block"].includes(kind);
   const role = data._role || inferRole(data);
   const color = role === "denoising" ? "coral" : family(kind);
@@ -1060,6 +1079,15 @@ function Workbench({
     [showLabels, setShowLabels] = useState(false);
   const arrangeRequest = useRef(0);
   const editRevision = useRef(0);
+  const [connectionPicker, setConnectionPicker] = useState<{
+    projectId: string;
+    scope: string;
+    source: string;
+    sourceHandle: string;
+    position: { x: number; y: number };
+    bounds: { left: number; top: number; right: number; bottom: number };
+  } | null>(null);
+  useEffect(() => setConnectionPicker(null), [project.id, path, tab, modal]);
   const [selectedEdge, setSelectedEdge] = useState<string | null>(null);
   useEffect(() => {
     if (selection || selectedEdge)
@@ -1250,12 +1278,19 @@ function Workbench({
     pendingArrangement.current.delete(scope);
     void arrangeScope(path, false);
   }, [graph, path, report]);
+  // Keep the always-visible variables card clear of fitted nodes and ports.
+  function fitGraph(options: Omit<FitViewOptions, "padding"> = {}) {
+    return reactFlow.fitView({
+      ...options,
+      padding: canvasFitPadding(canvasRef.current),
+    });
+  }
   function fitCanvas() {
     if (
       window.innerWidth > 760 &&
       (!splitView || (canvasRef.current?.clientWidth ?? 0) >= 720)
     ) {
-      reactFlow.fitView({ padding: 0.16, duration: motion(250) });
+      fitGraph({ duration: motion(250) });
       return;
     }
     const current = graphAt(ref.current, viewPath.current);
@@ -1263,17 +1298,24 @@ function Workbench({
       current.nodes.find((n) => n.id === focusedNode.current) ||
       computationOrder(current)[0];
     if (first)
-      reactFlow.fitView({
+      fitGraph({
         nodes: [{ id: first.id }],
-        padding: splitView
-          ? { top: "16px", bottom: "76px", left: "24px", right: "24px" }
-          : 0.4,
-        minZoom: splitView ? 0.3 : 0.8,
+        minZoom: 0.3,
         maxZoom: 0.95,
         duration: motion(200),
       });
   }
+  const goUp = () => {
+    const container = path.at(-1);
+    if (!container) return;
+    setPath(path.slice(0, -1));
+    setSelection(container);
+    setSelectedEdge(null);
+    setMobilePanel(null);
+    setTimeout(() => fitCanvas(), 80);
+  };
   const open = (id: string) => {
+    setMobilePanel(null);
     setPath((p) => [...p, id]);
     setSelection(null);
     setSelectedEdge(null);
@@ -1287,10 +1329,11 @@ function Workbench({
         report,
         prefix,
         groups: sharedGroups,
+        variables: graphVariableScope(project, path).effective,
         selection,
         onOpen: open,
       }),
-    [graph, report, prefix, sharedGroups, selection],
+    [graph, report, prefix, sharedGroups, selection, project, path],
   );
   const displayEdges = useMemo<Edge[]>(
     () =>
@@ -1304,6 +1347,14 @@ function Workbench({
       : undefined;
   const inputTokenizer = tokenizerInput?.data.tokenizer;
   const variableScope = graphVariableScope(project, path);
+  const updateGraphVariables = (values: Record<string, number>) =>
+    change((p) => {
+      if (path.length) graphAt(p, path).variables = values;
+      else {
+        p.config = values;
+        delete p.graph.variables;
+      }
+    });
   const selectedTokenizer = selected
     ? (report?.tokenizers?.[prefix + selected.id] ?? selected.data.tokenizer)
     : undefined;
@@ -1313,6 +1364,7 @@ function Workbench({
     if (selectedTokenizer.mask_id != null)
       fieldVariables.mask_id = selectedTokenizer.mask_id;
   }
+  const transformer = selected ? transformerSettings(selected.data) : null;
   const selectedCount = graph.nodes.filter((node) => node.selected).length;
   const connection = graph.edges.find((e) => e.id === selectedEdge);
   const referenceDetails =
@@ -1396,9 +1448,13 @@ function Workbench({
       const count =
         pasteSequence.current.key === key ? pasteSequence.current.count + 1 : 0;
       pasteSequence.current = { key, count };
+      const inset = canvasFitInsets(canvasRef.current);
       const origin = reactFlow.screenToFlowPosition({
         x: bounds.x + bounds.width / 2,
-        y: bounds.y + bounds.height / 2,
+        y:
+          bounds.y +
+          inset.top +
+          Math.max(0, bounds.height - inset.top - inset.bottom) / 2,
       });
       const xs = source.nodes.map((node) => node.position.x);
       const ys = source.nodes.map((node) => node.position.y);
@@ -1474,6 +1530,7 @@ function Workbench({
   function addNode(
     entry: CatalogEntry,
     screenPosition?: { x: number; y: number },
+    source?: { id: string; handle: string },
   ) {
     const { kind, label, params: p } = entry;
     let body: Graph | undefined;
@@ -1519,31 +1576,95 @@ function Workbench({
     }
     if (entry.role === "transformer") body = transformerBody();
     if (entry.role === "adapter") body = adapterBody();
+    const data: NodeData = {
+      kind,
+      label,
+      params: copy(p),
+      ...(body ? { body } : {}),
+      ...(entry.role ? { role: entry.role } : {}),
+    };
+    if (entry.role === "transformer") exposeTransformerSettings(data);
+    addGraphNode(data, screenPosition, source);
+  }
+  function addGraphNode(
+    data: NodeData,
+    screenPosition?: { x: number; y: number },
+    source?: { id: string; handle: string },
+  ) {
     const id = uid();
     const position = reactFlow.screenToFlowPosition(
-      screenPosition || {
+      screenPosition ?? {
         x: window.innerWidth / 2 - 70,
         y: window.innerHeight / 2,
       },
     );
-    changeGraph((g) =>
-      g.nodes.push({
+    changeGraph((graph) => {
+      if (source && !graph.nodes.some((node) => node.id === source.id))
+        throw new Error("The source node is no longer available.");
+      clearGraphSelection(graph);
+      const node: GraphNode = {
         id,
         type: "architecture",
         position,
-        data: {
-          kind,
-          label,
-          params: copy(p),
-          ...(body ? { body } : {}),
-          ...(entry.role ? { role: entry.role } : {}),
-        },
-      }),
-    );
+        data: copy(data),
+        selected: true,
+      };
+      const port = nodePorts(node)[0];
+      if (source && !port)
+        throw new Error("Choose a block with an input port.");
+      graph.nodes.push(node);
+      if (source)
+        graph.edges.push({
+          id: uid(),
+          source: source.id,
+          sourceHandle: source.handle,
+          target: id,
+          targetHandle: port,
+          type: "smoothstep",
+        });
+    });
     setSelection(id);
+    setSelectedEdge(null);
     setMobilePanel(window.innerWidth <= 760 ? "properties" : null);
-    notify(label + " added · connect its ports");
+    notify(
+      data.label +
+        (source ? " added and connected" : " added · connect its ports"),
+    );
   }
+  const connectionChoices: ConnectionBlockChoice[] = [
+    ...catalog
+      .filter((entry) => entry.kind !== "input")
+      .map((entry) => ({
+        id: "catalog:" + entry.label,
+        source: "catalog" as const,
+        label: entry.label,
+        description: entry.description,
+        category: entry.category,
+        preset: entry,
+      })),
+    ...customBlocks
+      .filter(
+        (data) =>
+          nodePorts({
+            id: "preset",
+            type: "architecture",
+            position: { x: 0, y: 0 },
+            data,
+          }).length > 0,
+      )
+      .map((data, index) => ({
+        id: "saved:" + index,
+        source: "saved" as const,
+        label: data.label,
+        description: data.description ?? "Your reusable block",
+        category: "Your blocks",
+        preset: data,
+      })),
+  ];
+  const closeConnectionPicker = useCallback(() => {
+    setConnectionPicker(null);
+    canvasRef.current?.focus({ preventScroll: true });
+  }, []);
   async function arrangeScope(scope: string[], record = true) {
     const request = ++arrangeRequest.current,
       revision = editRevision.current,
@@ -1777,10 +1898,7 @@ function Workbench({
       setSelection(next.id);
     });
     notify("Shared application added. Both instances use the same parameters.");
-    setTimeout(
-      () => reactFlow.fitView({ padding: 0.12, duration: motion(250) }),
-      100,
-    );
+    setTimeout(() => fitGraph({ duration: motion(250) }), 100);
   }
   async function unrollSelected() {
     if (!selected) return;
@@ -1797,10 +1915,7 @@ function Workbench({
       notify(
         "Loop expanded into editable applications. Dashed links identify shared weights.",
       );
-      setTimeout(
-        () => reactFlow.fitView({ padding: 0.12, duration: motion(250) }),
-        100,
-      );
+      setTimeout(() => fitGraph({ duration: motion(250) }), 100);
     } catch (e) {
       notify(String(e));
     }
@@ -1822,10 +1937,7 @@ function Workbench({
     notify(
       "Independent learned layer inserted. Shared transformer weights remain tied.",
     );
-    setTimeout(
-      () => reactFlow.fitView({ padding: 0.12, duration: motion(250) }),
-      100,
-    );
+    setTimeout(() => fitGraph({ duration: motion(250) }), 100);
   }
 
   function groupSelection() {
@@ -2042,9 +2154,8 @@ function Workbench({
     setTab("graph");
     setTimeout(
       () =>
-        reactFlow.fitView({
+        fitGraph({
           nodes: [{ id }],
-          padding: 0.8,
           duration: motion(250),
         }),
       100,
@@ -2221,20 +2332,7 @@ function Workbench({
                     <button
                       className="library-item"
                       key={i}
-                      onClick={() => {
-                        changeGraph((g) =>
-                          g.nodes.push({
-                            id: uid(),
-                            type: "architecture",
-                            position: reactFlow.screenToFlowPosition({
-                              x: window.innerWidth / 2,
-                              y: window.innerHeight / 2,
-                            }),
-                            data: copy(b),
-                          }),
-                        );
-                        notify("Saved block added");
-                      }}
+                      onClick={() => addGraphNode(b)}
                     >
                       <span className="library-icon violet">
                         <Box size={15} />
@@ -2476,18 +2574,28 @@ function Workbench({
               )}
               <div className="canvas-toolbar">
                 <div className="breadcrumbs">
+                  {path.length > 0 && (
+                    <button
+                      className="graph-up-button"
+                      aria-label="Up one level"
+                      title="Return to the enclosing graph"
+                      onClick={goUp}
+                    >
+                      <ArrowUp size={15} />
+                      <span>Up</span>
+                    </button>
+                  )}
+
                   <button
+                    title="Top level model graph"
                     onClick={() => {
                       setPath([]);
                       setSelection(null);
-                      setTimeout(
-                        () => reactFlow.fitView({ padding: 0.15 }),
-                        80,
-                      );
+                      setTimeout(() => fitGraph(), 80);
                     }}
                   >
                     <Box size={14} />
-                    Model
+                    {path.length ? "Model" : "Model root"}
                   </button>
                   {crumbs.map((c, i) => (
                     <React.Fragment key={i}>
@@ -2496,10 +2604,7 @@ function Workbench({
                         onClick={() => {
                           setPath(path.slice(0, i + 1));
                           setSelection(null);
-                          setTimeout(
-                            () => reactFlow.fitView({ padding: 0.15 }),
-                            80,
-                          );
+                          setTimeout(() => fitGraph(), 80);
                         }}
                       >
                         {c}
@@ -2565,8 +2670,7 @@ function Workbench({
                     aria-label="Fit graph"
                     title="Fit graph"
                     onClick={() =>
-                      reactFlow.fitView({
-                        padding: 0.15,
+                      fitGraph({
                         duration: motion(250),
                       })
                     }
@@ -2663,6 +2767,54 @@ function Workbench({
                           );
                         })
                       }
+                      onConnectEnd={(event, state) => {
+                        if (
+                          state.isValid ||
+                          state.toNode ||
+                          state.fromHandle?.type !== "source" ||
+                          !state.fromNode ||
+                          (state.fromHandle.id && state.fromHandle.id !== "out")
+                        )
+                          return;
+                        const point =
+                          "changedTouches" in event
+                            ? event.changedTouches[0]
+                            : event;
+                        const bounds =
+                          canvasRef.current?.getBoundingClientRect();
+                        if (
+                          !point ||
+                          !bounds ||
+                          point.clientX < bounds.left ||
+                          point.clientX > bounds.right ||
+                          point.clientY < bounds.top ||
+                          point.clientY > bounds.bottom
+                        )
+                          return;
+                        const target = document.elementFromPoint(
+                          point.clientX,
+                          point.clientY,
+                        );
+                        if (
+                          target?.closest(
+                            ".react-flow__controls,.react-flow__panel,.react-flow__minimap,button,input",
+                          )
+                        )
+                          return;
+                        setConnectionPicker({
+                          projectId: project.id,
+                          scope: path.join("/"),
+                          source: state.fromNode.id,
+                          sourceHandle: state.fromHandle.id ?? "out",
+                          position: { x: point.clientX, y: point.clientY },
+                          bounds: {
+                            left: bounds.left,
+                            top: bounds.top,
+                            right: bounds.right,
+                            bottom: bounds.bottom,
+                          },
+                        });
+                      }}
                       onNodeClick={(_, n) => {
                         const nodes = graphAt(
                           ref.current,
@@ -2714,7 +2866,9 @@ function Workbench({
                         return false;
                       }}
                       fitView={window.innerWidth > 760 && !splitView}
-                      fitViewOptions={{ padding: 0.15 }}
+                      fitViewOptions={{
+                        padding: canvasFitPadding(canvasRef.current),
+                      }}
                       minZoom={0.04}
                       maxZoom={1.7}
                       deleteKeyCode={["Backspace", "Delete"]}
@@ -2732,7 +2886,12 @@ function Workbench({
                         size={1}
                         color="var(--graph-dots, #ced6cc)"
                       />
-                      <Controls showInteractive={false} />
+                      <Controls
+                        showInteractive={false}
+                        fitViewOptions={{
+                          padding: canvasFitPadding(canvasRef.current),
+                        }}
+                      />
                       <MiniMap
                         nodeColor={(n) =>
                           ({
@@ -2749,12 +2908,25 @@ function Workbench({
                         pannable
                         zoomable
                       />
+                      <Panel
+                        position="top-left"
+                        className="variables-canvas-panel"
+                      >
+                        <GraphVariableCard
+                          values={variableScope.own}
+                          inherited={variableScope.inherited}
+                          nested={path.length > 0}
+                          onChange={updateGraphVariables}
+                          onOpen={() => setModal("variables")}
+                        />
+                      </Panel>
                       <Panel position="bottom-center">
                         <GraphNavigator
                           graph={graph}
                           selection={selection}
                           onFocus={setSelection}
                           compact={splitView}
+                          fitPadding={() => canvasFitPadding(canvasRef.current)}
                         />
                       </Panel>
                     </ReactFlow>
@@ -3105,38 +3277,16 @@ function Workbench({
                       Expand into editable applications <GitBranch size={15} />
                     </button>
                   )}
-                  {![
-                    "input",
-                    "output",
-                    "attention_pattern",
-                    "pattern_union",
-                    "pattern_intersection",
-                    "reference",
-                  ].includes(selected.data.kind) && (
+                  {supportsWeightSharing(selected.data) && (
                     <button className="inspect-open" onClick={duplicateShared}>
                       Add application with shared weights <Copy size={15} />
                     </button>
                   )}
-                  {selected.data.share && (
-                    <p className="inspector-description">
-                      {sharedGroups.get(selected.data.share)?.label}:{" "}
-                      {sharedGroups.get(selected.data.share)?.members.length}{" "}
-                      applications share parameters. Editing internals updates
-                      every application.{" "}
-                      <button
-                        className="save-library"
-                        onClick={() => updateNode(makeIndependent)}
-                      >
-                        Make this application independent
-                      </button>
-                    </p>
-                  )}
                   <button
                     className="save-library"
                     onClick={() =>
-                      reactFlow.fitView({
+                      fitGraph({
                         nodes: [{ id: selected.id }],
-                        padding: 0.6,
                         duration: motion(250),
                       })
                     }
@@ -3213,6 +3363,38 @@ function Workbench({
                         </p>
                       </section>
                     )}
+                  {transformer && (
+                    <label className="property-field">
+                      <span>Attention type</span>
+                      <select
+                        aria-label="Attention type"
+                        value={attentionVariant(selected.data, fieldVariables)}
+                        onChange={(event) => {
+                          if (isAttentionVariant(event.target.value)) {
+                            const variant = event.target.value;
+                            updateNode((node) =>
+                              setAttentionVariant(
+                                node.data,
+                                variant,
+                                fieldVariables,
+                                uid,
+                              ),
+                            );
+                          }
+                        }}
+                      >
+                        {attentionVariants.map((variant) => (
+                          <option key={variant.id} value={variant.id}>
+                            {variant.label}
+                          </option>
+                        ))}
+                      </select>
+                      <small className="field-help">
+                        Changes the editable attention graph inside this
+                        container. Other layers are preserved.
+                      </small>
+                    </label>
+                  )}
                   <div className="section-label">Configuration</div>
                   {selected.data.kind === "attention_pattern" &&
                     selected.data.params.pattern === "custom" &&
@@ -3226,7 +3408,7 @@ function Workbench({
                         }
                       />
                     )}
-                  {Object.entries(selected.data.params || {})
+                  {Object.entries(transformer ?? selected.data.params ?? {})
                     .filter(
                       ([k]) =>
                         k !== "source" &&
@@ -3242,6 +3424,13 @@ function Workbench({
                           value={v ?? null}
                           onChange={(next) =>
                             updateNode((n) => {
+                              if (
+                                transformer &&
+                                transformerSettingKeys.has(k)
+                              ) {
+                                setTransformerSetting(n.data, k, next);
+                                return;
+                              }
                               n.data.params = parametersSchema.parse({
                                 ...n.data.params,
                                 [k]: next,
@@ -3318,20 +3507,27 @@ function Workbench({
                       ))}
                     </>
                   )}
-                  <Field
-                    name="weight group"
-                    value={selected.data.share || ""}
-                    onChange={(value: string) =>
-                      updateNode((n) => {
-                        if (value.trim()) n.data.share = value.trim();
-                        else makeIndependent(n);
-                      })
-                    }
-                  />
-                  <p className="field-help">
-                    Use the same group to reuse a module definition and its
-                    parameters. Matching a group adopts its existing definition.
-                  </p>
+                  {supportsWeightSharing(selected.data) && (
+                    <WeightGroupPicker
+                      value={selected.data.share ?? ""}
+                      choices={weightGroupChoices(
+                        allNodes(project),
+                        selected.data,
+                      )}
+                      onChange={(group) =>
+                        updateNode((node) => {
+                          if (group) node.data.share = group;
+                          else makeIndependent(node);
+                        })
+                      }
+                      onCreate={() =>
+                        updateNode((node) => {
+                          makeIndependent(node);
+                          node.data.share = "weights_" + uid();
+                        })
+                      }
+                    />
+                  )}
                   {selected.data.kind === "custom" && (
                     <Field
                       name="source"
@@ -3542,6 +3738,33 @@ function Workbench({
           }
         }}
       />
+      {connectionPicker &&
+        connectionPicker.projectId === project.id &&
+        connectionPicker.scope === path.join("/") &&
+        tab === "graph" &&
+        !modal && (
+          <ConnectionPicker
+            position={connectionPicker.position}
+            bounds={connectionPicker.bounds}
+            choices={connectionChoices}
+            sourceLabel={
+              graph.nodes.find((node) => node.id === connectionPicker.source)
+                ?.data.label ?? "Output"
+            }
+            onClose={closeConnectionPicker}
+            onChoose={(choice) => {
+              const source = {
+                id: connectionPicker.source,
+                handle: connectionPicker.sourceHandle,
+              };
+              if (choice.source === "catalog")
+                addNode(choice.preset, connectionPicker.position, source);
+              else
+                addGraphNode(choice.preset, connectionPicker.position, source);
+              setConnectionPicker(null);
+            }}
+          />
+        )}
       {modal && (
         <Dialog
           key={modal}
@@ -3651,15 +3874,7 @@ function Workbench({
               values={variableScope.own}
               inherited={variableScope.inherited}
               nested={path.length > 0}
-              onChange={(values) =>
-                change((p) => {
-                  if (path.length) graphAt(p, path).variables = values;
-                  else {
-                    p.config = values;
-                    delete p.graph.variables;
-                  }
-                })
-              }
+              onChange={updateGraphVariables}
             />
           ) : modal === "tokenizer" ? (
             <>

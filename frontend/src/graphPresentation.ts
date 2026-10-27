@@ -2,12 +2,14 @@
 import type { Edge } from "@xyflow/react";
 import type {
   DisplayNode,
+  Parameters,
   Graph,
   GraphNode,
   NodeLocation,
   Project,
   ValidationReport,
 } from "./types";
+import { previewParameters } from "./graphVariables";
 import { allNodes, inferRole } from "./graph";
 
 /** Clear React Flow's stored multi-selection as well as the inspector focus. */
@@ -92,7 +94,10 @@ interface ViewOptions {
 }
 export function presentNodes(
   graph: Graph,
-  options: ViewOptions & { onOpen: (id: string) => void },
+  options: ViewOptions & {
+    onOpen: (id: string) => void;
+    variables?: Parameters;
+  },
 ): DisplayNode[] {
   const { report, prefix, groups, selection, onOpen } = options;
   return graph.nodes.map((n) => ({
@@ -100,6 +105,7 @@ export function presentNodes(
     data: {
       ...n.data,
       _focused: n.id === selection,
+      _previewParams: previewParameters(n.data.params, options.variables ?? {}),
       _ports: nodePorts(n),
       _optional: optionalPorts(n),
       _role: inferRole(n.data),

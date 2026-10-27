@@ -2,6 +2,15 @@ import { patternDefinitions, patternDefaults } from "./patterns";
 import type { CatalogEntry } from "./types";
 export const catalog: CatalogEntry[] = [
   {
+    kind: "loop",
+    label: "Looped transformer",
+    description:
+      "Premade recurrent transformer · edit attention and heads on this container",
+    category: "Composition",
+    params: { iterations: 4, shared: true, heads: 8, ffn_width: 256 },
+    role: "transformer",
+  },
+  {
     kind: "block",
     label: "Transformer layer",
     description: "Editable attention, residual paths and FFN",

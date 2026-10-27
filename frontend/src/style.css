@@ -593,7 +593,7 @@ small {
   border-radius: 6px;
   overflow: hidden;
   bottom: 21px;
-  left: 12px !important;
+  width: max-content;
 }
 .react-flow__controls-button {
   border: 0 !important;
@@ -3403,6 +3403,7 @@ textarea:focus-visible {
 }
 .flow-wrap .react-flow__controls {
   bottom: 21px;
+  left: 12px;
 }
 .flow-wrap .react-flow__minimap {
   bottom: 12px;
@@ -4514,5 +4515,207 @@ textarea:focus-visible {
   }
   .variable-add button {
     grid-column: 1 / -1;
+  }
+}
+
+.breadcrumbs .graph-up-button {
+  flex-shrink: 0;
+  gap: 5px;
+  margin-right: 6px;
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  color: var(--theme-green-text, #3c603f);
+  background: var(--theme-raised, #fff);
+}
+.weight-group-picker {
+  margin: 18px 0;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+.connection-picker {
+  position: fixed;
+  z-index: 1100;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--theme-raised, #fff);
+  color: var(--theme-green-text, #263b30);
+  box-shadow: 0 14px 42px #0003;
+}
+.connection-picker-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding: 14px 14px 10px;
+  gap: 8px;
+}
+.connection-picker-heading > div {
+  min-width: 0;
+}
+.connection-picker-heading strong,
+.connection-picker-heading small {
+  display: block;
+  overflow-wrap: anywhere;
+}
+.connection-picker-heading small {
+  margin-top: 4px;
+  font-size: 11px;
+}
+.connection-picker-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 12px 10px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--theme-base, #f7f9f5);
+}
+.connection-picker-search input {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  outline: none;
+}
+.connection-picker-search:focus-within {
+  outline: 2px solid var(--theme-green-line, #4d7739);
+  outline-offset: 1px;
+}
+.connection-picker-results {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 0 6px;
+}
+.connection-picker-results > button {
+  display: flex;
+  width: 100%;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 8px;
+  border-radius: 5px;
+  text-align: left;
+}
+.connection-picker-results > button[aria-selected="true"] {
+  background: var(--theme-green-surface, #e9f1e1);
+}
+.connection-picker-results > button > span {
+  min-width: 0;
+}
+.connection-picker-results strong,
+.connection-picker-results small {
+  display: block;
+  overflow-wrap: anywhere;
+}
+.connection-picker-results small {
+  font-size: 10px;
+  margin-top: 3px;
+}
+.connection-picker-results > button > small {
+  flex: 0 0 72px;
+  text-align: right;
+}
+.connection-picker-results > p {
+  padding: 0 8px;
+}
+.connection-picker-hint {
+  padding: 10px 14px;
+  margin: 0;
+  border-top: 1px solid var(--line);
+  font-size: 10px;
+}
+
+.react-flow__panel.top.left.variables-canvas-panel {
+  margin: 12px;
+  pointer-events: auto;
+  z-index: 8;
+}
+.graph-variable-card {
+  width: 284px;
+  max-width: calc(100vw - 48px);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--theme-raised, #fff);
+  color: var(--theme-green-text, #263b30);
+  box-shadow: 0 4px 15px #00000012;
+  font-size: 11px;
+}
+.variable-card-heading {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 7px 8px;
+  cursor: grab;
+  touch-action: none;
+}
+.variable-card-heading > strong {
+  flex: 1;
+}
+.variable-card-heading button {
+  min-height: 24px;
+  width: 24px;
+}
+.variable-card-body {
+  padding: 0 10px 10px;
+  max-height: min(390px, 45vh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.graph-variables.compact table {
+  margin: 0 0 6px;
+}
+.graph-variables.compact td,
+.graph-variables.compact th {
+  padding: 4px;
+  vertical-align: middle;
+}
+.graph-variables.compact td:last-child,
+.graph-variables.compact th:last-child {
+  width: 30px;
+}
+.graph-variables.compact thead th:last-child {
+  font-size: 0;
+}
+.graph-variables.compact input {
+  padding: 4px 6px;
+  font-size: 11px;
+}
+.graph-variables.compact button {
+  min-height: 24px;
+}
+.graph-variables.compact .variable-add {
+  grid-template-columns: minmax(0, 1fr) 70px;
+  margin: 8px 0;
+  gap: 6px;
+}
+.graph-variables.compact .variable-add button {
+  grid-column: 1 / -1;
+}
+@media (max-width: 760px) {
+  .graph-variable-card {
+    width: 224px;
+  }
+  .variable-card-body {
+    max-height: 180px;
+  }
+}
+
+/* Keep phone navigation tools outside the focused node's reading area. */
+@media (max-width: 760px) {
+  .flow-wrap .react-flow__minimap {
+    display: none;
+  }
+  .flow-wrap .react-flow__controls,
+  .is-split .flow-wrap .react-flow__controls {
+    top: 0;
+    right: 0;
+    bottom: auto;
+    left: auto;
   }
 }

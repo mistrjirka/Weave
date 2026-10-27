@@ -1,3 +1,4 @@
+import { sameWeightType } from "./weightGroups";
 import dagre from "@dagrejs/dagre";
 import { newId } from "./ui";
 import type {
@@ -72,8 +73,14 @@ export function synchronizeDefinitions(before: Project, next: Project) {
       JSON.stringify(semantic(old.data)) !== JSON.stringify(semantic(node.data))
     )
       updates.set(key, node.data);
-    else if (old?.data.share !== key && !updates.has(key))
-      updates.set(key, existing.get(key) || node.data);
+    else if (old?.data.share !== key) {
+      const definition = existing.get(key) ?? updates.get(key);
+      if (definition && !sameWeightType(node.data, definition))
+        throw new Error(
+          "Weight groups can only be joined by the same node type and block interface.",
+        );
+      if (!updates.has(key)) updates.set(key, definition ?? node.data);
+    }
   }
   if (!updates.size) return;
   function apply(g: Graph, ancestors = new Set<string>()) {

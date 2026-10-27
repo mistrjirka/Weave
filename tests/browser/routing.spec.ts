@@ -261,7 +261,9 @@ for (const { mobile, theme } of [
         for (const node of graph.nodes.filter((n) => n.data.body)) {
           await openNode(page, node, mobile);
           await visit([...path, node.id]);
-          await page.locator(".breadcrumbs button").nth(path.length).click();
+          await page
+            .getByRole("button", { name: "Up one level", exact: true })
+            .click();
         }
       }
       await visit([]);
@@ -283,6 +285,9 @@ test("phone navigation stays readable and its controls do not cover the focused 
   await expect(
     page.getByRole("button", { name: "Next node", exact: true }),
   ).toBeVisible();
+  await expect
+    .poll(async () => (await currentGraph(page, [])).layout?.engine)
+    .toBe("elk");
   await page.getByRole("button", { name: "Next node", exact: true }).click();
   await page.getByRole("button", { name: "Next node", exact: true }).click();
   await expect(page.locator(".node-nav-current")).toHaveAttribute(
@@ -298,15 +303,46 @@ test("phone navigation stays readable and its controls do not cover the focused 
         ),
       ),
     )
-    .toBeGreaterThanOrEqual(80);
+    .toBeGreaterThanOrEqual(70);
   const node = page.locator('.react-flow__node[data-id="denoise"]');
-  const box = await node.boundingBox(),
-    nav = await page.locator(".mobile-node-nav").boundingBox();
-  expect(box && nav && box.y + box.height < nav.y).toBe(true);
-  for (const selector of [".react-flow__controls", ".react-flow__minimap"]) {
-    const control = await page.locator(selector).boundingBox();
-    expect(control && nav && control.y + control.height < nav.y).toBe(true);
-  }
+  const nav = await page.locator(".mobile-node-nav").boundingBox();
+  await expect
+    .poll(async () => {
+      const box = await node.boundingBox();
+      const variables = await page
+        .getByRole("complementary", { name: "Canvas variables", exact: true })
+        .boundingBox();
+      return (
+        !!box &&
+        !!nav &&
+        !!variables &&
+        box.y + box.height < nav.y &&
+        variables.y + variables.height < box.y
+      );
+    })
+    .toBe(true);
+  await page
+    .getByRole("button", { name: "Minimize canvas variables", exact: true })
+    .click();
+  await page.getByRole("button", { name: /^Focus current node:/ }).click();
+  await expect
+    .poll(async () =>
+      Number(
+        (await page.getByLabel("Zoom to 100 percent").innerText()).replace(
+          "%",
+          "",
+        ),
+      ),
+    )
+    .toBeGreaterThanOrEqual(80);
+
+  await expect(page.locator(".react-flow__minimap")).toBeHidden();
+  const control = await page.locator(".react-flow__controls").boundingBox();
+  const focused = await node.boundingBox();
+  expect(control && nav && control.y + control.height < nav.y).toBe(true);
+  expect(control && focused && control.y + control.height < focused.y).toBe(
+    true,
+  );
   await node.getByRole("button", { name: "Open loop body" }).click();
   await expect(page.locator(".breadcrumbs")).toContainText(
     "Iterative denoising",

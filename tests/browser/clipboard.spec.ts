@@ -306,8 +306,9 @@ test("touch swipes still pan on a phone instead of starting a selection box", as
     const box = await page.locator(".flow-wrap").boundingBox();
     if (!box) throw new Error("Canvas is not visible");
     const session = await context.newCDPSession(page);
-    const x = box.x + 25,
-      y = box.y + 25;
+    // Start below the variables card, clear of the phone zoom controls.
+    const x = box.x + 20,
+      y = box.y + box.height * 0.6;
     await session.send("Input.dispatchTouchEvent", {
       type: "touchStart",
       touchPoints: [{ x, y }],

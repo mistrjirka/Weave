@@ -108,14 +108,16 @@ test("editing and reference browsing have independent documents, shortcuts and v
     .getByRole("button", { name: "Close inspector selection", exact: true })
     .click();
   const node = right.locator('.react-flow__node[data-id="attn"]');
-  const position = await node.getAttribute("style"),
+  const position = await node.evaluate((element) => element.style.transform),
     box = await node.boundingBox();
   if (!box) throw new Error("Missing reference node");
   await page.mouse.move(box.x + box.width / 2, box.y + 20);
   await page.mouse.down();
   await page.mouse.move(box.x + box.width / 2 + 45, box.y + 55, { steps: 6 });
   await page.mouse.up();
-  expect(await node.getAttribute("style")).toBe(position);
+  expect(await node.evaluate((element) => element.style.transform)).toBe(
+    position,
+  );
   await right.getByRole("button", { name: "Close reference pane" }).click();
   await expect(right).toHaveCount(0);
   await expect(

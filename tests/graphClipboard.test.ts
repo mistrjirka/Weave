@@ -112,3 +112,44 @@ test("copying a head alone removes its external embedding tie and supports focus
   );
   assert.equal(result[0].data.params.tie, undefined);
 });
+
+test("reference copies capture external dimensions while retaining local variables and input vocabulary", () => {
+  const block = node("block", "block");
+  block.data.params.heads = 4;
+  const input = node("x", "input");
+  input.data.params = { shape: ["B", "T", "$width"], dtype: "float32" };
+  const attention = node("a", "attention");
+  attention.data.params = {
+    heads: "$heads",
+    kv_heads: "$kv",
+    window: "$window",
+  };
+  const head = node("head", "head");
+  head.data.params = { out: "$vocab" };
+  block.data.body = {
+    nodes: [input, attention, head],
+    edges: [],
+    variables: { window: 16 },
+  };
+  const graph = { nodes: [block], edges: [] };
+  const before = structuredClone(graph);
+  const copied = parseSelection(
+    serializeSelection(graph, null, {
+      width: 448,
+      heads: 8,
+      kv: 2,
+      window: 0,
+      vocab: 1024,
+    })!,
+  )!;
+  const body = copied.nodes[0].data.body!;
+  assert.deepEqual(body.nodes[0].data.params.shape, ["B", "T", 448]);
+  assert.deepEqual(body.nodes[1].data.params, {
+    heads: "$heads",
+    kv_heads: 2,
+    window: "$window",
+  });
+  assert.equal(body.nodes[2].data.params.out, "$vocab");
+  assert.deepEqual(body.variables, { window: 16 });
+  assert.deepEqual(graph, before);
+});

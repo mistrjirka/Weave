@@ -1,4 +1,4 @@
-import type { Parameters, Project } from "./types";
+import type { JsonValue, Parameters, Project } from "./types";
 
 /** Effective values at the current graph, including enclosing block parameters. */
 export function graphVariableScope(project: Project, path: string[]) {
@@ -38,4 +38,27 @@ export function bindingValue(
     return Math.sqrt(variables.width);
   const resolved = variables[value.slice(1)];
   return typeof resolved === "number" ? resolved : undefined;
+}
+
+/** Resolve numeric bindings for diagrams without changing the editable document. */
+export function previewParameters(
+  params: Parameters,
+  variables: Parameters,
+): Parameters {
+  function resolve(value: JsonValue): JsonValue {
+    if (typeof value === "string" && value.startsWith("$"))
+      return bindingValue(value, variables) ?? value;
+    if (Array.isArray(value)) return value.map(resolve);
+    if (value && typeof value === "object")
+      return Object.fromEntries(
+        Object.entries(value).map(([key, item]) => [key, resolve(item)]),
+      );
+    return value;
+  }
+  return Object.fromEntries(
+    Object.entries(params).map(([key, value]) => [
+      key,
+      value === undefined ? null : resolve(value),
+    ]),
+  );
 }

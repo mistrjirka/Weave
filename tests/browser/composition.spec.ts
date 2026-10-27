@@ -108,9 +108,7 @@ test("editing one shared body updates its applications and can be made independe
     ).toBe(512);
   await page.getByRole("button", { name: "Model", exact: true }).click();
   await page.locator('.react-flow__node[data-id="transformer_2"]').click();
-  await page
-    .getByRole("button", { name: "Make this application independent" })
-    .click();
+  await page.getByRole("combobox", { name: "Weight group", exact: true }).selectOption("");
   await expect(page.locator(".weight-link-label")).toHaveCount(1);
   p = await document(page);
   expect(

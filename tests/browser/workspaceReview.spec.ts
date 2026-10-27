@@ -190,11 +190,8 @@ test("transformer settings are local by default and survive selection and reload
     .toBe("elk");
   await page.locator('.react-flow__node[data-id="transformer_2"]').click();
   await page
-    .getByRole("button", {
-      name: "Make this application independent",
-      exact: true,
-    })
-    .click();
+    .getByRole("combobox", { name: "Weight group", exact: true })
+    .selectOption("");
   const heads = page.getByRole("textbox", { name: "heads", exact: true });
   await expect(heads).toHaveValue("8");
   await heads.fill("2");

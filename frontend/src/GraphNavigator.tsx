@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { useReactFlow } from "@xyflow/react";
+import { useReactFlow, type FitViewOptions } from "@xyflow/react";
 import { ArrowLeft, ArrowRight, ScanSearch } from "lucide-react";
 import type { Graph } from "./types";
 import { computationOrder } from "./graph";
@@ -10,8 +10,10 @@ export function GraphNavigator({
   selection,
   onFocus,
   compact = false,
+  fitPadding,
 }: {
   compact?: boolean;
+  fitPadding?: () => NonNullable<FitViewOptions["padding"]>;
   graph: Graph;
   selection: string | null;
   onFocus: (id: string) => void;
@@ -30,10 +32,12 @@ export function GraphNavigator({
     onFocus(node.id);
     flow.fitView({
       nodes: [{ id: node.id }],
-      padding: compact
-        ? { top: "16px", bottom: "76px", left: "24px", right: "24px" }
-        : 0.4,
-      minZoom: compact ? 0.3 : 0.8,
+      padding:
+        fitPadding?.() ??
+        (compact
+          ? { top: "16px", bottom: "76px", left: "24px", right: "24px" }
+          : 0.4),
+      minZoom: compact || fitPadding ? 0.3 : 0.8,
       maxZoom: 0.95,
       duration: window.matchMedia("(prefers-reduced-motion: reduce)").matches
         ? 0

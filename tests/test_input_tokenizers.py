@@ -341,3 +341,15 @@ def test_rewrite_apis_respect_graph_scoped_variables():
     assert response.status_code == 200, response.text
     split = [n for n in response.json()["nodes"] if n["data"]["kind"] == "split_heads"]
     assert any(n["data"]["params"]["heads"] == 4 for n in split)
+
+
+def test_weight_groups_reject_different_node_kinds():
+    graph = {'nodes': [
+        node('x', 'input', 'Features', 0, 0, {'dtype': 'float32', 'shape': ['B', 'T', 8]}),
+        node('linear', 'linear', 'Linear', 300, 0, {'out': 8}, share='weights'),
+        node('norm', 'norm', 'Norm', 600, 0, {}, share='weights'),
+        node('out', 'output', 'Output', 900, 0)],
+        'edges': [edge('x', 'linear'), edge('linear', 'norm'), edge('norm', 'out')]}
+    report = validate_project({'version': 1, 'config': {'width': 8, 'vocab': 16}, 'graph': graph})
+    assert not report['valid']
+    assert any(error['node'] == 'norm' and 'choose a group for norm' in error['message'] for error in report['errors'])

@@ -55,11 +55,13 @@ export function GraphVariables({
   values,
   inherited,
   nested,
+  compact = false,
   onChange,
 }: {
   values: Record<string, number>;
   inherited: Record<string, number>;
   nested: boolean;
+  compact?: boolean;
   onChange: (values: Record<string, number>) => void;
 }) {
   const [name, setName] = useState("");
@@ -90,14 +92,21 @@ export function GraphVariables({
   const inheritedEntries = Object.entries(inherited).filter(
     ([name]) => !Object.hasOwn(values, name),
   );
+  const tableValues = compact ? { ...inherited, ...values } : values;
+  const [adding, setAdding] = useState(!compact);
   return (
-    <section className="graph-variables" aria-label="Graph variables table">
-      <p>
-        Write <code>$name</code> in a block field to use a variable, or enter a
-        number for an independent value.
-        {nested &&
-          " Values defined here apply inside this graph and override inherited values."}
-      </p>
+    <section
+      className={"graph-variables" + (compact ? " compact" : "")}
+      aria-label="Graph variables table"
+    >
+      {!compact && (
+        <p>
+          Write <code>$name</code> in a block field to use a variable, or enter
+          a number for an independent value.
+          {nested &&
+            " Values defined here apply inside this graph and override inherited values."}
+        </p>
+      )}
       <table>
         <thead>
           <tr>
@@ -107,9 +116,16 @@ export function GraphVariables({
           </tr>
         </thead>
         <tbody>
-          {Object.entries(values).map(([name, value]) => (
+          {Object.entries(tableValues).map(([name, value]) => (
             <tr key={name}>
-              <th scope="row">
+              <th
+                scope="row"
+                title={
+                  Object.hasOwn(values, name)
+                    ? undefined
+                    : "Inherited · edit to override in this graph"
+                }
+              >
                 <code>${name}</code>
               </th>
               <td>
@@ -122,6 +138,7 @@ export function GraphVariables({
               </td>
               <td>
                 <button
+                  disabled={!Object.hasOwn(values, name)}
                   aria-label={`Delete $${name}`}
                   title={`Delete $${name}`}
                   onClick={() => {
@@ -137,38 +154,46 @@ export function GraphVariables({
           ))}
         </tbody>
       </table>
-      {!Object.keys(values).length && (
+      {!Object.keys(tableValues).length && (
         <p className="field-help">No variables defined in this graph.</p>
       )}
-      <form className="variable-add" onSubmit={add}>
-        <label>
-          <span>Name</span>
-          <input
-            aria-label="New variable name"
-            placeholder="hidden_width"
-            value={name}
-            onChange={(event) => setName(event.target.value)}
-          />
-        </label>
-        <label>
-          <span>Value</span>
-          <input
-            aria-label="New variable value"
-            inputMode="decimal"
-            value={value}
-            onChange={(event) => setValue(event.target.value)}
-          />
-        </label>
-        <button className="primary" type="submit">
-          <Plus size={14} /> Add
+      {compact && !adding && (
+        <button className="small-button" onClick={() => setAdding(true)}>
+          <Plus size={13} />
+          Add variable
         </button>
-      </form>
+      )}
+      {adding && (
+        <form className="variable-add" onSubmit={add}>
+          <label>
+            <span>Name</span>
+            <input
+              aria-label="New variable name"
+              placeholder="hidden_width"
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+            />
+          </label>
+          <label>
+            <span>Value</span>
+            <input
+              aria-label="New variable value"
+              inputMode="decimal"
+              value={value}
+              onChange={(event) => setValue(event.target.value)}
+            />
+          </label>
+          <button className="primary" type="submit">
+            <Plus size={14} /> Add
+          </button>
+        </form>
+      )}
       {error && (
         <p className="field-error" role="alert">
           {error}
         </p>
       )}
-      {!!inheritedEntries.length && (
+      {!compact && !!inheritedEntries.length && (
         <details>
           <summary>
             Inherited variables and block parameters ({inheritedEntries.length})
@@ -195,12 +220,14 @@ export function GraphVariables({
           </table>
         </details>
       )}
-      <p className="field-help">
-        Only fields linked with <code>$name</code> follow these values. Removing
-        a variable leaves its bindings visible as graph errors. Token inputs
-        supply <code>$vocab</code> and, when available, <code>$mask_id</code>{" "}
-        from their tokenizer.
-      </p>
+      {!compact && (
+        <p className="field-help">
+          Only fields linked with <code>$name</code> follow these values.
+          Removing a variable leaves its bindings visible as graph errors. Token
+          inputs supply <code>$vocab</code> and, when available,{" "}
+          <code>$mask_id</code> from their tokenizer.
+        </p>
+      )}
     </section>
   );
 }

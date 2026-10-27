@@ -110,6 +110,7 @@ export interface NodeLocation {
   path: string;
 }
 export interface DisplayData extends NodeData {
+  _previewParams?: Parameters;
   _ports: string[];
   _optional: string[];
   _role: string;

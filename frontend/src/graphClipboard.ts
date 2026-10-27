@@ -1,5 +1,5 @@
 import { graphSchema } from "./api.ts";
-import type { Graph, GraphNode } from "./types";
+import type { Graph, GraphNode, JsonValue, Parameters } from "./types";
 
 export const graphClipboardType = "application/x-weave-graph";
 const format = "weave.graph-selection";
@@ -53,6 +53,7 @@ function documentGraph(graph: Graph): Graph {
 export function serializeSelection(
   graph: Graph,
   focus: string | null,
+  variables?: Parameters,
 ): string | null {
   const nodes = graph.nodes.filter((node) => node.selected);
   if (!nodes.length && focus) {
@@ -67,7 +68,54 @@ export function serializeSelection(
       (edge) => ids.has(edge.source) && ids.has(edge.target),
     ),
   });
+  if (variables) captureExternalBindings(selection, variables);
   return JSON.stringify({ format, version: 1, graph: selection });
+}
+
+/** A reference copy carries external dimensions with it, while keeping nested
+ * block variables editable and vocabulary bindings owned by the receiving input.
+ */
+function captureExternalBindings(
+  graph: Graph,
+  variables: Parameters,
+  local = new Set<string>(),
+) {
+  const inputBindings = new Set(["vocab", "mask_id"]);
+  function resolve(value: JsonValue): JsonValue {
+    if (typeof value === "string" && value.startsWith("$")) {
+      const name = value.slice(1);
+      if (local.has(name) || inputBindings.has(name)) return value;
+      if (name === "sqrt_width")
+        return !local.has("width") && typeof variables.width === "number"
+          ? Math.sqrt(variables.width)
+          : value;
+      return variables[name] ?? value;
+    }
+    if (Array.isArray(value)) return value.map(resolve);
+    if (value && typeof value === "object")
+      return Object.fromEntries(
+        Object.entries(value).map(([key, item]) => [key, resolve(item)]),
+      );
+    return value;
+  }
+  for (const node of graph.nodes) {
+    node.data.params = Object.fromEntries(
+      Object.entries(node.data.params).map(([key, value]) => [
+        key,
+        value === undefined ? null : resolve(value),
+      ]),
+    );
+    if (node.data.body)
+      captureExternalBindings(
+        node.data.body,
+        variables,
+        new Set([
+          ...local,
+          ...Object.keys(node.data.params),
+          ...Object.keys(node.data.body.variables ?? {}),
+        ]),
+      );
+  }
 }
 
 function validScope(graph: Graph): boolean {

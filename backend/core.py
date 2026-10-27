@@ -451,6 +451,8 @@ def validate_project(project):
                     config_key={k:cfg.get(k) for k in ('width','heads','ffn_width','vocab','mask_id')}
                     feature_dim=None if kind=='embedding' else (x['shape'][-1] if x else None)
                     signature = (definition_signature(n,cfg), config_key, feature_dim)
+                    if share in shared and shared[share][0]['kind'] != kind:
+                        raise ValueError(f'Weight group {share} belongs to {shared[share][0]["kind"]} nodes; choose a group for {kind} nodes.')
                     if share in shared and shared[share] != signature:
                         raise ValueError('Shared module instances must have identical operation, parameters, and output shape.')
                     if share in shared: count = 0

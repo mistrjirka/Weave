@@ -9,13 +9,16 @@ import {
   applyNodeChanges,
   useReactFlow,
   useViewport,
+  SelectionMode,
+  type FitViewOptions,
 } from "@xyflow/react";
 import type { Dispatch, SetStateAction } from "react";
 import type { ReferenceLocation } from "./workspaceLocation";
-import { retainedPath } from "./ui";
+import { retainedPath, copyText } from "./ui";
 import type { NodeTypes } from "@xyflow/react";
 import {
   Box,
+  ArrowUp,
   Copy,
   ChevronRight,
   LayoutGrid,
@@ -35,6 +38,7 @@ import type { JsonValue, Project, ValidationReport } from "./types";
 import { arrangeExample, computationOrder } from "./graph";
 import {
   graphScope,
+  clearGraphSelection,
   parameterGroups,
   presentEdges,
   presentNodes,
@@ -46,6 +50,8 @@ import { edgeTypes, RoutingProvider } from "./edges";
 import { GraphNavigator } from "./GraphNavigator";
 import { isGraphEditShortcut } from "./ReferenceInspector";
 import type { ReferenceInspection } from "./ReferenceInspector";
+import { graphVariableScope } from "./graphVariables";
+import { graphClipboardType, serializeSelection } from "./graphClipboard";
 import { localizeLayerDefaults } from "./parameterScopes";
 
 interface SavedReference {
@@ -237,6 +243,14 @@ export function ReferencePane({
     </section>
   );
 }
+function referenceFitPadding(): NonNullable<FitViewOptions["padding"]> {
+  return {
+    top: "16px",
+    bottom: "76px",
+    left: "24px",
+    right: window.innerWidth <= 760 ? "68px" : "24px",
+  };
+}
 function ReferenceZoom() {
   const { zoom } = useViewport();
   const flow = useReactFlow();
@@ -308,8 +322,8 @@ function ReferenceCanvas({
   });
   const [project, setProject] = useState(initial.project);
   const path = useMemo(
-    () => retainedPath(project, location.blocks),
-    [project, location.blocks],
+    () => retainedPath(document, location.blocks),
+    [document, location.blocks],
   );
   const selection = location.node;
   const setPath = useCallback(
@@ -381,10 +395,11 @@ function ReferenceCanvas({
         report,
         prefix,
         groups,
+        variables: graphVariableScope(project, path).effective,
         selection,
         onOpen: open,
-      }).map((node) => ({ ...node, selected: node.id === selection })),
-    [graph, report, prefix, groups, selection, open],
+      }),
+    [graph, report, prefix, groups, selection, open, project, path],
   );
   const edges = useMemo(
     () => presentEdges(graph, { report, prefix, groups, selection }),
@@ -402,7 +417,7 @@ function ReferenceCanvas({
     if (node)
       void flow.fitView({
         nodes: [{ id: node.id }],
-        padding: { top: "16px", bottom: "76px", left: "24px", right: "24px" },
+        padding: referenceFitPadding(),
         minZoom: 0.3,
         maxZoom: 0.95,
       });
@@ -494,6 +509,61 @@ function ReferenceCanvas({
       return node?.data.label || id;
     });
   }, [project, path]);
+  // Selection is view state only; the reference computation stays read-only.
+  const scopeKey = path.join("/");
+  useEffect(() => {
+    setProject((previous) => {
+      const graph = graphScope(previous, currentPath.current);
+      const chosen = graph.nodes.filter((node) => node.selected);
+      if (
+        selection === null
+          ? !chosen.length
+          : chosen.some((node) => node.id === selection)
+      )
+        return previous;
+      const next = structuredClone(previous);
+      clearGraphSelection(next.graph);
+      const node = graphScope(next, currentPath.current).nodes.find(
+        (node) => node.id === selection,
+      );
+      if (node) node.selected = true;
+      return next;
+    });
+  }, [selection, scopeKey]);
+  const [copyNotice, setCopyNotice] = useState("");
+  useEffect(() => {
+    if (!copyNotice) return;
+    const timer = setTimeout(() => setCopyNotice(""), 3000);
+    return () => clearTimeout(timer);
+  }, [copyNotice]);
+  const referenceClipboard = () =>
+    serializeSelection(
+      graphScope(current.current, currentPath.current),
+      currentSelection.current,
+      scopeVariables(current.current, currentPath.current),
+    );
+  useEffect(() => {
+    const onCopy = (event: ClipboardEvent) => {
+      const target = event.target;
+      if (
+        event.defaultPrevented ||
+        !event.clipboardData ||
+        !(target instanceof Element) ||
+        !target.closest("[data-reference-pane]") ||
+        target.closest("input,textarea,select,[contenteditable]") ||
+        !(window.getSelection()?.isCollapsed ?? true)
+      )
+        return;
+      const text = referenceClipboard();
+      if (!text) return;
+      event.clipboardData.setData(graphClipboardType, text);
+      event.clipboardData.setData("text/plain", text);
+      event.preventDefault();
+      setCopyNotice("Copied · paste into your graph");
+    };
+    window.addEventListener("copy", onCopy);
+    return () => window.removeEventListener("copy", onCopy);
+  }, []);
   const selected = graph.nodes.find((n) => n.id === selection);
   useEffect(() => {
     const variables = scopeVariables(project, path);
@@ -544,13 +614,31 @@ function ReferenceCanvas({
     <>
       <div className="canvas-toolbar reference-toolbar">
         <div className="breadcrumbs" aria-label="Reference block path">
+          {path.length > 0 && (
+            <button
+              className="graph-up-button"
+              aria-label="Up one level"
+              title="Return to the enclosing reference graph"
+              onClick={() =>
+                onNavigate({
+                  blocks: path.slice(0, -1),
+                  node: path.at(-1) ?? null,
+                })
+              }
+            >
+              <ArrowUp size={15} />
+              <span>Up</span>
+            </button>
+          )}
           <button
+            title="Top level reference graph"
             onClick={() => {
               setPath([]);
               setSelection(null);
             }}
           >
-            <Box size={13} aria-hidden="true" /> Model
+            <Box size={13} aria-hidden="true" />{" "}
+            {path.length ? "Model" : "Model root"}
           </button>
           {breadcrumbs.map((label, index) => (
             <span key={path.slice(0, index + 1).join("/")}>
@@ -567,6 +655,23 @@ function ReferenceCanvas({
           ))}
         </div>
         <div className="graph-actions">
+          <button
+            aria-label="Copy reference selection"
+            title="Copy selected reference blocks (Ctrl/Cmd+C)"
+            disabled={!selection && !graph.nodes.some((node) => node.selected)}
+            onClick={async () => {
+              const text = referenceClipboard();
+              if (!text) return;
+              try {
+                await copyText(text);
+                setCopyNotice("Copied · paste into your graph");
+              } catch {
+                setCopyNotice("Copy failed · try Ctrl/Cmd+C");
+              }
+            }}
+          >
+            <Copy size={15} aria-hidden="true" />
+          </button>
           <button
             aria-label="Auto arrange reference"
             title="Arrange reference view"
@@ -587,7 +692,9 @@ function ReferenceCanvas({
           <button
             aria-label="Fit reference graph"
             title="Fit reference graph"
-            onClick={() => void flow.fitView({ padding: 0.15 })}
+            onClick={() =>
+              void flow.fitView({ padding: referenceFitPadding() })
+            }
           >
             <Maximize2 size={15} aria-hidden="true" />
           </button>
@@ -612,25 +719,42 @@ function ReferenceCanvas({
             nodeTypes={nodeTypes}
             edgeTypes={edgeTypes}
             onNodesChange={(changes) => {
-              const dimensions = changes.filter(
-                (change) => change.type === "dimensions",
+              const viewChanges = changes.filter(
+                (change) =>
+                  change.type === "dimensions" || change.type === "select",
               );
-              if (dimensions.length)
-                setProject((previous) => {
-                  const next = structuredClone(previous),
-                    target = graphScope(next, path);
-                  target.nodes = applyNodeChanges(dimensions, target.nodes);
-                  return next;
-                });
+              if (!viewChanges.length) return;
+              const next = structuredClone(current.current);
+              const target = graphScope(next, currentPath.current);
+              target.nodes = applyNodeChanges(viewChanges, target.nodes);
+              current.current = next;
+              setProject(next);
+              if (viewChanges.some((change) => change.type === "select")) {
+                const selected = target.nodes.filter((node) => node.selected);
+                const previous = currentSelection.current;
+                const focused = selected.some((node) => node.id === previous)
+                  ? previous
+                  : (selected.at(-1)?.id ?? null);
+                if (focused !== previous) setSelection(focused);
+              }
             }}
             nodesDraggable={false}
             nodesConnectable={false}
             edgesReconnectable={false}
             deleteKeyCode={null}
-            selectionKeyCode={null}
-            multiSelectionKeyCode={null}
+            selectionKeyCode="Shift"
+            multiSelectionKeyCode={["Control", "Meta", "Shift"]}
+            selectionOnDrag
+            selectionMode={SelectionMode.Partial}
+            panOnDrag={[1, 2]}
+            panActivationKeyCode="Space"
             onNodeClick={(_, node) => {
-              setSelection(node.id);
+              if (
+                graphScope(current.current, currentPath.current).nodes.some(
+                  (item) => item.id === node.id && item.selected,
+                )
+              )
+                setSelection(node.id);
               onActivate();
             }}
             onNodeDoubleClick={(_, node) => {
@@ -647,7 +771,10 @@ function ReferenceCanvas({
               size={1}
               color="var(--graph-dots, #ced6cc)"
             />
-            <Controls showInteractive={false} />
+            <Controls
+              showInteractive={false}
+              fitViewOptions={{ padding: referenceFitPadding() }}
+            />
             <Panel position="bottom-center">
               <GraphNavigator
                 graph={graph}
@@ -656,6 +783,7 @@ function ReferenceCanvas({
                   setSelection(id);
                 }}
                 compact
+                fitPadding={referenceFitPadding}
               />
             </Panel>
           </ReactFlow>
@@ -665,7 +793,9 @@ function ReferenceCanvas({
         <span>
           {graph.nodes.length} nodes · {graph.edges.length} connections
         </span>
-        <span>Read-only</span>
+        <span role={copyNotice ? "status" : undefined}>
+          {copyNotice || "Read-only · select and copy"}
+        </span>
       </div>
     </>
   );
