@@ -22,7 +22,7 @@ Locations below refer to the previous interface at commit `175acfd`:
 | Intention | Action | Result |
 | --- | --- | --- |
 | Build a new network | **New project** → name → **Blank canvas** → **Create project** | A uniquely identified editable draft. The form explains how to start with input, blocks, and output. |
-| Adapt an example | **Use as starting point** → name → **Create project** | An independent copy retaining the graph and source references. |
+| Adapt an example | **Create copy** → name → **Create project** | An independent copy retaining the graph and source references. |
 | Study an architecture | **View reference** | A read-only example beside the current editable graph, preserving unsaved work and history. |
 | Adapt a viewed reference | **Use this example** | Creation form preselected to that example. |
 | Resume saved work | **Your workspace** → **Your projects** → select a project | Opens the saved document, protecting current unsaved edits first. Selecting the current project returns to editing without reloading its saved snapshot. |
@@ -30,7 +30,7 @@ Locations below refer to the previous interface at commit `175acfd`:
 | Persist a draft | **Save** | Stores it on the server using the same personal project ID. |
 | Create while edits are unsaved | **Save & create**, **Discard & create**, or **Keep editing** | Explicit choice; a failed save leaves the old document and pending action intact. |
 
-The sidebar puts personal work before reference cards. The full browser separates
+The sidebar puts personal work before compact reference shortcuts. The full browser separates
 **Your projects** and **Reference architectures**, with search, localized save
 dates, useful empty states, and explicit viewing/copying actions.
 
@@ -65,3 +65,21 @@ URL restoration, inline errors, empty collections and accessibility at 1600px,
 390px and 320px. Existing editor tests use the same creation form to open editable
 examples. Routing walkthroughs still cover every example scope on desktop and
 phone. URL unit tests cover workspace tabs and starters.
+
+## Dark-mode and clutter follow-up
+
+Review of commit `efc78dd`, followed by fixes:
+
+- `frontend/src/style.css:3856` — Split divider reused the canvas background; added a contrasting track, border and larger grip.
+- `frontend/src/main.tsx:2151` — Settings-shaped footer icon was decorative; replaced static engine copy with an actual Project settings button.
+- `frontend/src/main.tsx:3164` — Unselected inspector presented global variables as architecture settings; removed architecture variables from project settings, materialized legacy head/FFN defaults on their owning blocks, and retained parameter/validation summaries.
+- `frontend/src/main.tsx:3197` — Tokenizer selection duplicated the toolbar control; removed the inspector copy.
+- `frontend/src/ProjectBrowser.tsx:29` — Compact references repeated descriptions and two actions in a narrow column; use single reference rows and keep copy/details in the browser.
+- `frontend/src/main.tsx:1197` and `frontend/src/ReferencePane.tsx:350` — Split view always focused one node, even at 4K; wide panes now fit the graph.
+- `frontend/src/main.tsx:2508` — Canvas caption repeated the header and occupied graph space; retain one semantic project heading in the header.
+
+These locations refer to the reviewed commit. Follow-up checks include 4K and scaled-desktop viewport sizes, narrow phones, both themes, accessible labels, dialog contrast and independent block overrides. This remains a code/browser review rather than a user study.
+
+The follow-up also adds a neutral **Black** palette alongside **Forest**, and a single property inspector shared by the active editing/reference selection. Reference values are read-only; selecting either pane clears the other pane's visual selection. Regression checks cover keyboard safety, URL restoration, and the phone Properties drawer.
+
+Project settings contains metadata only. Head count and FFN width are explicit block parameters, initialized from legacy defaults when loading older documents. Their internal `$heads`/`$ffn_width` bindings resolve within that block. Input/tokenizer dimensions remain compatible with the existing project format. An API regression compares generated PyTorch source, inferred shapes and parameter counts for every original/localized example.

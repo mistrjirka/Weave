@@ -6,7 +6,7 @@ export const catalog: CatalogEntry[] = [
     label: "Transformer layer",
     description: "Editable attention, residual paths and FFN",
     category: "Composition",
-    params: { heads: "$heads", ffn_width: "$ffn_width" },
+    params: { heads: 8, ffn_width: 256 },
     role: "transformer",
   },
   {
@@ -53,7 +53,7 @@ export const catalog: CatalogEntry[] = [
     description: "MHA, GQA, MQA · editable heads",
     category: "Neural layers",
     params: {
-      heads: "$heads",
+      heads: 8,
       kv_heads: 2,
       causal: true,
       rope: true,
@@ -68,14 +68,14 @@ export const catalog: CatalogEntry[] = [
     label: "Cross attention",
     description: "Queries attend to a second stream",
     category: "Neural layers",
-    params: { heads: "$heads", kv_heads: 2, causal: false, rope: false },
+    params: { heads: 8, kv_heads: 2, causal: false, rope: false },
   },
   {
     kind: "ffn",
     label: "SwiGLU feed-forward",
     description: "Gated feature transformation",
     category: "Neural layers",
-    params: { hidden: "$ffn_width" },
+    params: { hidden: 256 },
   },
   {
     kind: "norm",
@@ -271,7 +271,7 @@ export const catalog: CatalogEntry[] = [
     label: "Split heads",
     description: "[B,T,D] → [B,H,T,D/H]",
     category: "Attention internals",
-    params: { heads: "$heads" },
+    params: { heads: 8 },
   },
   {
     kind: "merge_heads",

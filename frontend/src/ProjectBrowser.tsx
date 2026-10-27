@@ -37,14 +37,24 @@ export function ReferenceCard({
   onUse: () => void;
   compact?: boolean;
 }) {
-  const Heading = compact ? "h4" : "h3";
+  if (compact)
+    return (
+      <button
+        className="reference-row"
+        onClick={onView}
+        aria-label={`View reference ${project.name}`}
+        title={project.description}
+      >
+        <BookOpen size={15} aria-hidden="true" />
+        <span>{project.name}</span>
+        <ArrowUpRight size={13} aria-hidden="true" />
+      </button>
+    );
   return (
-    <article
-      className={`example-project-card ${compact ? "compact-reference-card" : ""}`}
-    >
+    <article className="example-project-card">
       <div className="example-card-heading">
         <BookOpen size={18} aria-hidden="true" />
-        <Heading>{project.name}</Heading>
+        <h3>{project.name}</h3>
         <span>Example</span>
       </div>
       <p>{project.description}</p>
@@ -56,12 +66,9 @@ export function ReferenceCard({
         >
           View reference <ArrowUpRight size={14} aria-hidden="true" />
         </button>
-        <button
-          onClick={onUse}
-          aria-label={`Use as starting point: ${project.name}`}
-        >
+        <button onClick={onUse} aria-label={`Create copy of ${project.name}`}>
           <Copy size={14} aria-hidden="true" />
-          Use as starting point
+          Create copy
         </button>
       </div>
     </article>

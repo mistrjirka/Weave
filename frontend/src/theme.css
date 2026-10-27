@@ -3,27 +3,29 @@
 :root {
   color-scheme: light;
 }
-html[data-theme="dark"] {
+html:is([data-theme="dark"], [data-theme="black"]) {
   color-scheme: dark;
-  --theme-base: #141f19;
-  --theme-raised: #1c2a22;
-  --theme-deep: #0e1912;
-  --theme-text: #e1eae2;
-  --theme-muted: #b4c5b6;
+  --theme-base: #101a15;
+  --theme-raised: #24352b;
+  --theme-deep: #132219;
+  --theme-sidebar: #294333;
+  --theme-input: #17271d;
+  --theme-text: #edf3ed;
+  --theme-muted: #bdcebf;
   --theme-on-strong: #f1f7ed;
   --theme-overlay-highlight: #ffffff;
 
   --theme-neutral-surface: #25352b;
   --theme-neutral-strong: #35463b;
   --theme-neutral-visual: #9bae9d;
-  --theme-neutral-border: #475e4e;
+  --theme-neutral-border: #59725f;
 
   --theme-green-surface: #22372a;
-  --theme-green-strong: #35563d;
+  --theme-green-strong: #3d6247;
   --theme-green-visual: #9ac39c;
-  --theme-green-text: #c7dfba;
+  --theme-green-text: #deecd6;
   --theme-green-accent: #a4d49f;
-  --theme-green-border: #4d7055;
+  --theme-green-border: #63826b;
   --theme-green-line: #82ad7c;
 
   --theme-violet-surface: #30263e;
@@ -62,7 +64,33 @@ html[data-theme="dark"] {
   --graph-minimap-mask: #0e1912b3;
 }
 
-html[data-theme="dark"] .react-flow {
+/* Neutral dark surfaces keep diagram families colored without tinting the workspace. */
+html[data-theme="black"] {
+  --theme-base: #111113;
+  --theme-raised: #242427;
+  --theme-deep: #161619;
+  --theme-sidebar: #1a1a1d;
+  --theme-input: #151518;
+  --theme-text: #f1f1f3;
+  --theme-muted: #c0c0c8;
+  --theme-on-strong: #f5f5f7;
+  --theme-neutral-surface: #303034;
+  --theme-neutral-strong: #3b3b40;
+  --theme-neutral-visual: #aeb1ba;
+  --theme-neutral-border: #62626b;
+  --theme-green-surface: #2b2b30;
+  --theme-green-strong: #41414a;
+  --theme-green-visual: #b6cbb0;
+  --theme-green-text: #e6e6eb;
+  --theme-green-accent: #c6dcb6;
+  --theme-green-border: #62626b;
+  --theme-green-line: #9baba0;
+  --graph-dots: #39393f;
+  --graph-edge: #b7bbc6;
+  --graph-minimap-mask: #0a0a0ab3;
+}
+
+html:is([data-theme="dark"], [data-theme="black"]) .react-flow {
   --xy-minimap-background-color: var(--theme-deep);
   --xy-connectionline-stroke: var(--graph-edge);
   --xy-edge-label-color: var(--theme-text);
@@ -74,13 +102,17 @@ html[data-theme="dark"] .react-flow {
   --xy-controls-button-background-color-hover: var(--theme-green-surface);
   --xy-controls-button-border-color: var(--theme-neutral-border);
 }
-html[data-theme="dark"] .legend .coral {
-  background: var(--theme-coral-visual);
-}
-html[data-theme="dark"] input::placeholder,
-html[data-theme="dark"] textarea::placeholder {
+html:is([data-theme="dark"], [data-theme="black"]) input::placeholder,
+html:is([data-theme="dark"], [data-theme="black"]) textarea::placeholder {
   color: var(--theme-muted);
   opacity: 1;
+}
+html:is([data-theme="dark"], [data-theme="black"])
+  .property-field
+  :is(input, select, textarea),
+html:is([data-theme="dark"], [data-theme="black"]) .library-search,
+html:is([data-theme="dark"], [data-theme="black"]) .project-browser-search {
+  background: var(--theme-input);
 }
 .code-view pre:focus-visible,
 .references-view pre:focus-visible {

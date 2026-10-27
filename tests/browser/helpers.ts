@@ -1,6 +1,24 @@
 import { expect } from "@playwright/test";
 import type { Page } from "@playwright/test";
 
+/** Produce a real unsaved metadata edit without changing a network's architecture. */
+export async function editProjectDescription(page: Page, value: string) {
+  await page.locator(".project-title").click();
+  const settings = page.getByRole("dialog", {
+    name: "Project settings",
+    exact: true,
+  });
+  const field = settings.getByRole("textbox", {
+    name: "Description",
+    exact: true,
+  });
+  await field.fill(value);
+  await field.press("Enter");
+  await settings
+    .getByRole("button", { name: "Close dialog", exact: true })
+    .click();
+}
+
 /** Create an editable example fixture through the actual project workflow. */
 export async function openExample(page: Page, name: string) {
   await page

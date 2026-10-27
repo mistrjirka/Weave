@@ -10,6 +10,15 @@ import type {
 } from "./types";
 import { allNodes, inferRole } from "./graph";
 
+/** Clear React Flow's stored multi-selection as well as the inspector focus. */
+export function clearGraphSelection(graph: Graph) {
+  for (const node of graph.nodes) {
+    if (node.selected) node.selected = false;
+    if (node.data.body) clearGraphSelection(node.data.body);
+  }
+  for (const edge of graph.edges) if (edge.selected) edge.selected = false;
+}
+
 const ports: Record<string, string[]> = {
   input: [],
   output: ["a"],

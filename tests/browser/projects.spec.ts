@@ -1,6 +1,7 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
+import { editProjectDescription } from "./helpers";
 import { projectSchema, projectsSchema } from "../../frontend/src/api";
 
 async function currentProject(page: Page) {
@@ -94,9 +95,7 @@ test("create, recover, save and reopen a named blank project", async ({
 test("viewing a reference preserves unsaved work and offers an explicit editable copy", async ({
   page,
 }) => {
-  const width = page.getByRole("textbox", { name: "width", exact: true });
-  await width.fill("64");
-  await width.press("Enter");
+  await editProjectDescription(page, "Edited draft description");
   const before = await currentProject(page);
   const browser = await openBrowser(page);
   await browser
@@ -144,7 +143,7 @@ test("using an example creates an independent named draft, retaining its source 
     .click();
   await browser
     .getByRole("button", {
-      name: "Use as starting point: Needle 1",
+      name: "Create copy of Needle 1",
       exact: true,
     })
     .click();
@@ -173,9 +172,7 @@ test("a failed save never discards work, and Save & create keeps the old project
 }) => {
   let savedId = "";
   try {
-    const width = page.getByRole("textbox", { name: "width", exact: true });
-    await width.fill("64");
-    await width.press("Enter");
+    await editProjectDescription(page, "Edited draft description");
     const form = await newForm(page, "Second network");
     await form
       .getByRole("button", { name: "Create project", exact: true })
@@ -203,7 +200,9 @@ test("a failed save never discards work, and Save & create keeps the old project
       "Save failed for workflow test",
     );
     await expect(guard).toBeVisible();
-    expect((await currentProject(page)).config.width).toBe(64);
+    expect((await currentProject(page)).description).toBe(
+      "Edited draft description",
+    );
     await page.unroute("**/api/projects/*");
     const savedRequest = page.waitForRequest(
       (request) =>
@@ -217,7 +216,7 @@ test("a failed save never discards work, and Save & create keeps the old project
     const old = projectSchema.parse(
       await (await page.request.get("/api/projects/" + savedId)).json(),
     );
-    expect(old.config.width).toBe(64);
+    expect(old.description).toBe("Edited draft description");
     expect((await currentProject(page)).id).not.toBe(savedId);
   } finally {
     if (savedId) await page.request.delete("/api/projects/" + savedId);
@@ -250,7 +249,7 @@ test("browser tabs, new-project starter, keyboard navigation and form errors hav
   await expect(browser.locator(".example-project-card")).toHaveCount(1);
   await browser
     .getByRole("button", {
-      name: "Use as starting point: Needle 3",
+      name: "Create copy of Needle 3",
       exact: true,
     })
     .click();

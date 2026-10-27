@@ -10,7 +10,8 @@
         let preference = "system";
         try {
           const saved = localStorage.getItem("weave.theme");
-          if (saved === "light" || saved === "dark") preference = saved;
+          if (saved === "light" || saved === "dark" || saved === "black")
+            preference = saved;
         } catch {}
         const theme =
           preference === "system"
@@ -21,10 +22,13 @@
         const root = document.documentElement;
         root.dataset.themePreference = preference;
         root.dataset.theme = theme;
-        root.style.colorScheme = theme;
+        root.style.colorScheme = theme === "light" ? "light" : "dark";
         document
           .querySelector('meta[name="theme-color"]')
-          .setAttribute("content", theme === "dark" ? "#101b15" : "#f7f9f5");
+          .setAttribute(
+            "content",
+            { light: "#f7f9f5", dark: "#101a15", black: "#111113" }[theme],
+          );
       })();
     </script>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />

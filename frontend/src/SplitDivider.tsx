@@ -26,6 +26,7 @@ export function SplitDivider({
       className="split-divider"
       role="separator"
       aria-label="Resize graph panes"
+      title="Drag to resize · Arrow keys to adjust · Double-click to center"
       aria-orientation="vertical"
       aria-valuemin={30}
       aria-valuemax={70}
@@ -67,7 +68,7 @@ export function SplitDivider({
         }
       }}
     >
-      <span />
+      <span aria-hidden="true" />
     </div>
   );
 }

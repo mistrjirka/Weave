@@ -66,6 +66,7 @@ import "./style.css";
 import "./theme.css";
 import { ThemePicker } from "./ThemePicker";
 import { compilationInput } from "./compilationInput";
+import { localizeLayerDefaults } from "./parameterScopes";
 import { newId, copyText, retainedPath, Dialog } from "./ui";
 import { visiblePatternField, changePattern } from "./patterns";
 import {
@@ -85,8 +86,11 @@ import {
   parameterGroups,
   presentNodes,
   presentEdges,
+  clearGraphSelection,
 } from "./graphPresentation";
 import { ReferencePane } from "./ReferencePane";
+import { ReferenceInspector, isGraphEditShortcut } from "./ReferenceInspector";
+import type { ReferenceInspection } from "./ReferenceInspector";
 import { SplitDivider } from "./SplitDivider";
 import { DesignAdvice } from "./DesignAdvice";
 import {
@@ -826,7 +830,7 @@ function Bootstrap() {
     let active = true;
     Promise.all([api("/templates"), api("/projects")])
       .then(async ([ts, ps]) => {
-        const templates = projectsSchema.parse(ts),
+        const templates = projectsSchema.parse(ts).map(localizeLayerDefaults),
           saved = savedProjectsSchema.parse(ps);
         const location = readWorkspaceLocation(window.location.search);
         let initial = templates[0];
@@ -855,7 +859,13 @@ function Bootstrap() {
           arrange = !!template;
         }
         if (active)
-          setState({ status: "ready", templates, saved, initial, arrange });
+          setState({
+            status: "ready",
+            templates,
+            saved,
+            initial: localizeLayerDefaults(initial),
+            arrange,
+          });
       })
       .catch((e) => {
         if (active) setState({ status: "error", message: String(e) });
@@ -917,7 +927,11 @@ function Workbench({
   const [path, setPath] = useState<string[]>(() =>
       retainedPath(initial, initialLocation.blocks),
     ),
-    [selection, setSelection] = useState<string | null>(initialLocation.node),
+    [selection, setSelection] = useState<string | null>(
+      initialLocation.split && initialLocation.referenceLocation.node
+        ? null
+        : initialLocation.node,
+    ),
     [tab, setTab] = useState(initialLocation.tab),
     [left, setLeft] = useState(initialLocation.library),
     [search, setSearch] = useState(""),
@@ -970,6 +984,8 @@ function Workbench({
   const [referenceLocation, setReferenceLocation] = useState<ReferenceLocation>(
     initialLocation.referenceLocation,
   );
+  const [referenceInspection, setReferenceInspection] =
+    useState<ReferenceInspection | null>(null);
   const splitButton = useRef<HTMLButtonElement>(null);
   const comparisonStyle: React.CSSProperties & {
     "--editable-pane-size": string;
@@ -1024,6 +1040,12 @@ function Workbench({
   const arrangeRequest = useRef(0);
   const editRevision = useRef(0);
   const [selectedEdge, setSelectedEdge] = useState<string | null>(null);
+  useEffect(() => {
+    if (selection || selectedEdge)
+      setReferenceLocation((previous) =>
+        previous.node ? { ...previous, node: null } : previous,
+      );
+  }, [selection, selectedEdge]);
   const [insertKind, setInsertKind] = useState<InsertionKind>("linear");
   const [pendingLoad, setPendingLoad] = useState<{
     project: Project | SavedProject;
@@ -1177,6 +1199,17 @@ function Workbench({
     },
     [],
   );
+  const navigateReference = useCallback<
+    React.Dispatch<React.SetStateAction<ReferenceLocation>>
+  >(
+    (next) => {
+      setSelection(null);
+      setSelectedEdge(null);
+      change((project) => clearGraphSelection(project.graph), false, false);
+      setReferenceLocation(next);
+    },
+    [change],
+  );
   const changeGraph = (
     fn: (g: Graph) => void,
     record = true,
@@ -1195,7 +1228,10 @@ function Workbench({
     void arrangeScope(path, false);
   }, [graph, path, report]);
   function fitCanvas() {
-    if (window.innerWidth > 760 && !splitView) {
+    if (
+      window.innerWidth > 760 &&
+      (!splitView || (canvasRef.current?.clientWidth ?? 0) >= 720)
+    ) {
       reactFlow.fitView({ padding: 0.16, duration: motion(250) });
       return;
     }
@@ -1240,6 +1276,17 @@ function Workbench({
   );
   const selected = graph.nodes.find((n: GraphNode) => n.id === selection);
   const connection = graph.edges.find((e) => e.id === selectedEdge);
+  const referenceDetails =
+    splitView &&
+    !selected &&
+    !connection &&
+    referenceInspection?.id === referenceLocation.node &&
+    referenceInspection?.scope ===
+      (referenceLocation.blocks.length
+        ? referenceLocation.blocks.join("/") + "/"
+        : "")
+      ? referenceInspection
+      : null;
   const connectionShape = connection
     ? report?.shapes[prefix + connection.source]
     : null;
@@ -1493,9 +1540,10 @@ function Workbench({
       return false;
     }
     try {
-      const next = options.saved
+      const loaded = options.saved
         ? projectSchema.parse(await api("/projects/" + p.id))
         : projectSchema.parse(p);
+      const next = localizeLayerDefaults(loaded);
       pendingArrangement.current = new Set(
         options.arrange ? arrangeExample(next) : [],
       );
@@ -2124,9 +2172,6 @@ function Workbench({
               </div>
               <div className="library-group">
                 <h3>Reference architectures</h3>
-                <p className="collection-description">
-                  View beside your work, or create your own copy.
-                </p>
                 {templates
                   .filter(
                     (t) =>
@@ -2144,16 +2189,28 @@ function Workbench({
                       onUse={() => startNewProject(t.id)}
                     />
                   ))}
+                <button
+                  className="browse-projects"
+                  onClick={() => {
+                    setProjectTab("examples");
+                    setModal("projects");
+                  }}
+                >
+                  Browse all examples{" "}
+                  <ArrowUpRight size={14} aria-hidden="true" />
+                </button>
               </div>
             </>
           )}
         </div>
         <div className="sidebar-bottom">
-          <span className="online-dot" />
-          <span>
-            Local graph engine<small>PyTorch export ready</small>
-          </span>
-          <Settings2 size={16} />
+          <button
+            aria-label="Open project settings"
+            onClick={() => setModal("settings")}
+          >
+            <Settings2 size={16} aria-hidden="true" />
+            Project settings
+          </button>
         </div>
       </aside>
       <main className="main-workspace" id="workspace" tabIndex={-1}>
@@ -2163,17 +2220,18 @@ function Workbench({
               <GitBranch size={18} />
             </span>
             <div>
-              <button
-                className="project-title"
-                title="Rename and configure project"
-                aria-label={`Project settings: ${project.name}`}
-                onClick={() => setModal("settings")}
-              >
-                {project.name}
-                <Pencil size={12} aria-hidden="true" />
-              </button>
+              <h1 className="project-title-heading">
+                <button
+                  className="project-title"
+                  title="Rename and configure project"
+                  aria-label={`Project settings: ${project.name}`}
+                  onClick={() => setModal("settings")}
+                >
+                  {project.name}
+                  <Pencil size={12} aria-hidden="true" />
+                </button>
+              </h1>
               <span className="project-meta">
-                NEURAL GRAPH STUDIO <span> / </span>{" "}
                 {saved.some((p) => p.id === project.id)
                   ? dirty
                     ? "Unsaved changes"
@@ -2248,12 +2306,12 @@ function Workbench({
             </button>
             <button
               className={tab === "sources" ? "active" : ""}
-              aria-label="References"
+              aria-label="Sources"
               aria-current={tab === "sources" ? "page" : undefined}
               onClick={() => setTab("sources")}
             >
               <ExternalLink size={14} />
-              References
+              Sources
             </button>
           </div>
           <div className="view-actions">
@@ -2508,21 +2566,6 @@ function Workbench({
                         pannable
                         zoomable
                       />
-                      <Panel position="top-left">
-                        <div className="canvas-caption">
-                          <span className="eyebrow">
-                            {path.length
-                              ? "INSIDE THE BLOCK"
-                              : "MODEL OVERVIEW"}
-                          </span>
-                          <h1>{path.length ? crumbs.at(-1) : project.name}</h1>
-                          <p>
-                            {path.length
-                              ? "Editable computation · changes flow through to the model"
-                              : project.description}
-                          </p>
-                        </div>
-                      </Panel>
                       <Panel position="bottom-center">
                         <GraphNavigator
                           graph={graph}
@@ -2530,28 +2573,6 @@ function Workbench({
                           onFocus={setSelection}
                           compact={splitView}
                         />
-                        <div className="legend">
-                          <span>
-                            <i className="mint" />
-                            Representation
-                          </span>
-                          <span>
-                            <i className="violet" />
-                            Neural layers
-                          </span>
-                          <span>
-                            <i className="amber" />
-                            Memory
-                          </span>
-                          <span>
-                            <i className="blue" />
-                            Composition
-                          </span>
-                          <span>
-                            <i className="coral" />
-                            Sampling
-                          </span>
-                        </div>
                       </Panel>
                     </ReactFlow>
                   </RoutingProvider>
@@ -2750,7 +2771,11 @@ function Workbench({
                     setReferenceLocation({ blocks: [], node: null });
                   }}
                   location={referenceLocation}
-                  onNavigate={setReferenceLocation}
+                  onNavigate={navigateReference}
+                  onInspect={setReferenceInspection}
+                  onActivate={() => {
+                    if (window.innerWidth <= 760) setMobilePanel("properties");
+                  }}
                   onUseExample={(p) => startNewProject(p.id)}
                   nodeTypes={nodeTypes}
                   onClose={closeSplitView}
@@ -2763,15 +2788,24 @@ function Workbench({
               "inspector " + (mobilePanel === "properties" ? "is-open" : "")
             }
             aria-label="Property inspector"
+            data-reference-pane={referenceDetails ? "true" : undefined}
+            onKeyDownCapture={(event) => {
+              if (referenceDetails && isGraphEditShortcut(event)) {
+                event.preventDefault();
+                event.stopPropagation();
+              }
+            }}
           >
             <div className="inspector-heading">
               <span>
                 <Settings2 size={15} />
-                {selected
-                  ? "Block properties"
-                  : connection
-                    ? "Connection properties"
-                    : "Model properties"}
+                {referenceDetails
+                  ? "Reference properties"
+                  : selected
+                    ? "Block properties"
+                    : connection
+                      ? "Connection properties"
+                      : "Graph overview"}
               </span>
               <button
                 className="drawer-close"
@@ -2780,18 +2814,26 @@ function Workbench({
               >
                 <X size={20} />
               </button>
-              {selected && (
+              {(selected || referenceDetails) && (
                 <button
                   aria-label="Close inspector selection"
                   title="Close inspector selection"
-                  onClick={() => setSelection(null)}
+                  onClick={() => {
+                    setSelection(null);
+                    setReferenceLocation((previous) => ({
+                      ...previous,
+                      node: null,
+                    }));
+                  }}
                 >
                   <X size={14} />
                 </button>
               )}
             </div>
             <div className="inspector-scroll">
-              {selected ? (
+              {referenceDetails ? (
+                <ReferenceInspector inspection={referenceDetails} />
+              ) : selected ? (
                 <>
                   <div
                     className={
@@ -2905,23 +2947,6 @@ function Workbench({
                     <Maximize2 size={13} /> Zoom to this node
                   </button>
                   <div className="section-label">Configuration</div>
-                  {selected.data.body && (
-                    <button
-                      className="save-library"
-                      onClick={() =>
-                        updateNode((n) => {
-                          n.data.params = {
-                            ...n.data.params,
-                            heads: "$heads",
-                            ffn_width: "$ffn_width",
-                          };
-                        })
-                      }
-                    >
-                      <Settings2 size={13} />
-                      Expose attention & FFN settings
-                    </button>
-                  )}
                   {selected.data.kind === "attention_pattern" &&
                     selected.data.params.pattern === "custom" &&
                     selected.data.params.matrix && (
@@ -3164,86 +3189,21 @@ function Workbench({
                 </div>
               ) : (
                 <>
-                  <div className="model-summary-icon">
-                    <Workflow size={28} />
-                  </div>
-                  <span className="eyebrow">COMPOSABLE ARCHITECTURE</span>
-                  <h2>{project.name}</h2>
+                  <h2>Select a block</h2>
                   <p className="inspector-description">
-                    Select a node to inspect properties, or a connection to
-                    insert a layer. Open a block to edit the computation inside.
+                    Click a block to edit its settings. Click a connection to
+                    insert a layer.
                   </p>
-                  <div className="section-label">Model configuration</div>
-                  {Object.entries(project.config).map(([k, v]) => (
-                    <Field
-                      key={k}
-                      name={k}
-                      value={v}
-                      onChange={(next) =>
-                        change((p) => {
-                          p.config[k] = next;
-                        })
-                      }
-                    />
-                  ))}
-                  <div className="binding-note">
-                    <GitBranch size={14} />
-                    <span>
-                      Values such as <code>$width</code> link block properties
-                      to this configuration.
-                    </span>
-                  </div>
-                  <div className="section-label">Tokenizer</div>
-                  <button
-                    className="tokenizer-card"
-                    onClick={() => setModal("tokenizer")}
-                  >
-                    <Database size={20} />
-                    <span>
-                      {project.tokenizer?.repo ||
-                        project.tokenizer?.class ||
-                        "Choose a tokenizer"}
-                      <small>
-                        {project.tokenizer
-                          ? "Vocabulary detected automatically"
-                          : "Hugging Face or local files"}
-                      </small>
-                    </span>
-                    <ChevronRight size={15} />
-                  </button>
-                  <div className="section-label">Architecture at a glance</div>
+                  <div className="section-label">Whole graph</div>
                   <div className="stat-row">
                     <span>Trainable parameters</span>
                     <b>{format(report?.parameters || 0)}</b>
-                  </div>
-                  <div className="stat-row">
-                    <span>Precision</span>
-                    <b>float32</b>
                   </div>
                   <div className="stat-row">
                     <span>Graph validation</span>
                     <b className={report?.valid ? "valid" : "invalid"}>
                       {report?.valid ? "Compatible" : "Needs attention"}
                     </b>
-                  </div>
-                  <div className="inspector-tip">
-                    <span className="tip-icon">
-                      <Box size={17} />
-                    </span>
-                    <h4>Build at any depth</h4>
-                    <p>
-                      Layers, memory, loops, and sampling all share one canvas.
-                      Combine them, then package your own blocks.
-                    </p>
-                    <button
-                      onClick={() => {
-                        setProjectTab("examples");
-                        setModal("projects");
-                      }}
-                    >
-                      Explore architectures
-                      <ArrowRight size={13} />
-                    </button>
                   </div>
                 </>
               )}

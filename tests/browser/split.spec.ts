@@ -90,7 +90,7 @@ test("editing and reference browsing have independent documents, shortcuts and v
   await focus(right, "attn");
   await right.locator('.react-flow__node[data-id="attn"]').click();
   await expect(
-    right.getByRole("complementary", { name: "Reference properties" }),
+    page.getByRole("region", { name: "Reference properties" }),
   ).toContainText("heads");
   await page.keyboard.press("Delete");
   await page.keyboard.press("Control+z");
@@ -104,8 +104,8 @@ test("editing and reference browsing have independent documents, shortcuts and v
   expect(
     await left.locator(".react-flow__viewport").getAttribute("style"),
   ).toBe(viewport);
-  await right
-    .getByRole("button", { name: "Close reference properties" })
+  await page
+    .getByRole("button", { name: "Close inspector selection", exact: true })
     .click();
   const node = right.locator('.react-flow__node[data-id="attn"]');
   const position = await node.getAttribute("style"),

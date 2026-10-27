@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
+import { editProjectDescription } from "./helpers";
 
 test.beforeEach(async ({ page }) => {
   await page.goto("/");
@@ -109,13 +110,14 @@ test("dialogs close on Escape, trap keyboard focus and return focus to the opene
 });
 
 test("switching architectures protects unsaved edits", async ({ page }) => {
-  const width = page.getByRole("textbox", { name: "width", exact: true });
-  await width.fill("256");
-  await width.press("Enter");
+  await editProjectDescription(page, "Edited draft description");
   await page.getByRole("button", { name: "Projects", exact: true }).click();
   await page
+    .getByRole("button", { name: "Browse all examples", exact: true })
+    .click();
+  await page
     .getByRole("button", {
-      name: "Use as starting point: Needle 1",
+      name: "Create copy of Needle 1",
       exact: true,
     })
     .click();
@@ -130,8 +132,11 @@ test("switching architectures protects unsaved edits", async ({ page }) => {
     "Composed language model",
   );
   await page
+    .getByRole("button", { name: "Browse all examples", exact: true })
+    .click();
+  await page
     .getByRole("button", {
-      name: "Use as starting point: Needle 1",
+      name: "Create copy of Needle 1",
       exact: true,
     })
     .click();

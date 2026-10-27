@@ -147,20 +147,23 @@ function scopes(project: Project) {
   return result;
 }
 
-for (const { mobile, dark } of [
-  { mobile: false, dark: false },
-  { mobile: true, dark: false },
-  { mobile: false, dark: true },
-  { mobile: true, dark: true },
+for (const { mobile, theme } of [
+  { mobile: false, theme: "light" },
+  { mobile: true, theme: "light" },
+  { mobile: false, theme: "dark" },
+  { mobile: true, theme: "dark" },
+  { mobile: false, theme: "black" },
+  { mobile: true, theme: "black" },
 ])
-  test(`every example and nested graph has unobstructed arrows on ${mobile ? "phone" : "desktop"}${dark ? " in dark theme" : ""}`, async ({
+  test(`every example and nested graph has unobstructed arrows on ${mobile ? "phone" : "desktop"}${theme === "light" ? "" : ` in ${theme} theme`}`, async ({
     page,
     request,
   }) => {
     test.setTimeout(300000);
-    if (dark)
-      await page.addInitScript(() =>
-        localStorage.setItem("weave.theme", "dark"),
+    if (theme !== "light")
+      await page.addInitScript(
+        (value) => localStorage.setItem("weave.theme", value),
+        theme,
       );
     await page.setViewportSize(
       mobile ? { width: 390, height: 844 } : { width: 1600, height: 1000 },
@@ -192,10 +195,10 @@ for (const { mobile, dark } of [
           page.getByRole("button", { name: "Auto arrange", exact: true }),
         ).toBeEnabled();
         const graph = await currentGraph(page, path);
-        if (dark) {
+        if (theme !== "light") {
           await expect(page.locator("html")).toHaveAttribute(
             "data-theme",
-            "dark",
+            theme,
           );
           const brightCards = await page.locator(".arch-node").evaluateAll(
             (cards) =>
@@ -240,7 +243,7 @@ for (const { mobile, dark } of [
           });
         if (!path.length)
           await page.screenshot({
-            path: `data/routing-audit/elk-${template.id}-${mobile ? "phone" : "desktop"}${dark ? "-dark" : ""}.png`,
+            path: `data/routing-audit/elk-${template.id}-${mobile ? "phone" : "desktop"}${theme === "light" ? "" : `-${theme}`}.png`,
           });
         count++;
         for (const node of graph.nodes.filter((n) => n.data.body)) {

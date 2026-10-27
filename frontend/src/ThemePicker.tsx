@@ -8,7 +8,7 @@ import {
 } from "./theme";
 import type { ThemePreference } from "./theme";
 
-const icons = { system: Monitor, light: Sun, dark: Moon };
+const icons = { system: Monitor, light: Sun, dark: Moon, black: Moon };
 
 export function ThemePicker() {
   const [preference, setPreference] = useState<ThemePreference>(() =>
@@ -53,7 +53,8 @@ export function ThemePicker() {
       >
         <option value="system">System</option>
         <option value="light">Light</option>
-        <option value="dark">Dark</option>
+        <option value="dark">Forest</option>
+        <option value="black">Black</option>
       </select>
     </label>
   );

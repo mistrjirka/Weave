@@ -44,6 +44,9 @@ import { layoutSignature } from "./layout-core";
 import { measureLabels } from "./labels";
 import { edgeTypes, RoutingProvider } from "./edges";
 import { GraphNavigator } from "./GraphNavigator";
+import { isGraphEditShortcut } from "./ReferenceInspector";
+import type { ReferenceInspection } from "./ReferenceInspector";
+import { localizeLayerDefaults } from "./parameterScopes";
 
 interface SavedReference {
   id: string;
@@ -59,6 +62,8 @@ interface ReferenceProps {
   location: ReferenceLocation;
   onNavigate: Dispatch<SetStateAction<ReferenceLocation>>;
   onUseExample: (project: Project) => void;
+  onInspect: (inspection: ReferenceInspection | null) => void;
+  onActivate: () => void;
 }
 type ReferenceState =
   | { status: "loading"; choice: string }
@@ -76,6 +81,8 @@ export function ReferencePane({
   location,
   onNavigate,
   onUseExample,
+  onInspect,
+  onActivate,
 }: ReferenceProps) {
   const [state, setState] = useState<ReferenceState>({
     status: "loading",
@@ -103,7 +110,7 @@ export function ReferencePane({
           setState({
             status: "ready",
             choice,
-            project: structuredClone(document),
+            project: localizeLayerDefaults(document),
           });
       } catch (error) {
         if (!controller.signal.aborted)
@@ -135,11 +142,7 @@ export function ReferencePane({
           event.target.closest("input,select,textarea")
         )
           return;
-        if (
-          ["Delete", "Backspace"].includes(event.key) ||
-          ((event.ctrlKey || event.metaKey) &&
-            ["z", "g", "s"].includes(event.key.toLowerCase()))
-        ) {
+        if (isGraphEditShortcut(event)) {
           event.preventDefault();
           event.stopPropagation();
         }
@@ -212,6 +215,8 @@ export function ReferencePane({
             nodeTypes={nodeTypes}
             location={location}
             onNavigate={onNavigate}
+            onInspect={onInspect}
+            onActivate={onActivate}
           />
         </ReactFlowProvider>
       ) : (
@@ -245,25 +250,51 @@ function ReferenceZoom() {
     </button>
   );
 }
-function propertyValue(value: JsonValue | undefined, project: Project) {
+function propertyValue(
+  value: JsonValue | undefined,
+  variables: Record<string, JsonValue | undefined>,
+) {
   if (
     typeof value === "string" &&
     value.startsWith("$") &&
-    value.slice(1) in project.config
+    value.slice(1) in variables
   )
-    return `${value} → ${project.config[value.slice(1)]}`;
+    return `${value} → ${variables[value.slice(1)]}`;
   return typeof value === "string" ? value : JSON.stringify(value);
+}
+function scopeVariables(project: Project, path: string[]) {
+  let graph = project.graph;
+  let variables: Record<string, JsonValue | undefined> = { ...project.config };
+  for (const id of path) {
+    const node = graph.nodes.find((node) => node.id === id);
+    if (!node?.data.body) break;
+    const overrides = Object.fromEntries(
+      Object.entries(node.data.params).map(([key, value]) => [
+        key,
+        typeof value === "string" && value.startsWith("$")
+          ? variables[value.slice(1)]
+          : value,
+      ]),
+    );
+    variables = { ...variables, ...overrides };
+    graph = node.data.body;
+  }
+  return variables;
 }
 function ReferenceCanvas({
   document,
   nodeTypes,
   location,
   onNavigate,
+  onInspect,
+  onActivate,
 }: {
   document: Project;
   nodeTypes: NodeTypes;
   location: ReferenceLocation;
   onNavigate: Dispatch<SetStateAction<ReferenceLocation>>;
+  onInspect: (inspection: ReferenceInspection | null) => void;
+  onActivate: () => void;
 }) {
   const [initial] = useState(() => {
     const project = structuredClone(document);
@@ -288,7 +319,6 @@ function ReferenceCanvas({
     (node: string | null) => onNavigate((previous) => ({ ...previous, node })),
     [onNavigate],
   );
-  const [inspect, setInspect] = useState(!!location.node);
   useEffect(() => {
     if (path.length !== location.blocks.length)
       onNavigate((previous) => ({ ...previous, blocks: path, node: null }));
@@ -332,15 +362,23 @@ function ReferenceCanvas({
   }, [document]);
   const graph = graphScope(project, path);
   const prefix = path.length ? path.join("/") + "/" : "";
-  const open = useCallback((id: string) => {
-    setPath((previous) => [...previous, id]);
-    setSelection(null);
-    setInspect(false);
-  }, []);
+  const open = useCallback(
+    (id: string) => {
+      setPath((previous) => [...previous, id]);
+      setSelection(null);
+    },
+    [setPath, setSelection],
+  );
   const groups = useMemo(() => parameterGroups(project), [project]);
   const nodes = useMemo(
     () =>
-      presentNodes(graph, { report, prefix, groups, selection, onOpen: open }),
+      presentNodes(graph, {
+        report,
+        prefix,
+        groups,
+        selection,
+        onOpen: open,
+      }).map((node) => ({ ...node, selected: node.id === selection })),
     [graph, report, prefix, groups, selection, open],
   );
   const edges = useMemo(
@@ -348,6 +386,10 @@ function ReferenceCanvas({
     [graph, report, prefix, groups, selection],
   );
   const focus = useCallback(() => {
+    if (window.innerWidth > 760 && (host.current?.clientWidth ?? 0) >= 720) {
+      void flow.fitView({ padding: 0.16 });
+      return;
+    }
     const graph = graphScope(current.current, currentPath.current);
     const node =
       graph.nodes.find((n) => n.id === currentSelection.current) ||
@@ -448,6 +490,31 @@ function ReferenceCanvas({
     });
   }, [project, path]);
   const selected = graph.nodes.find((n) => n.id === selection);
+  useEffect(() => {
+    const variables = scopeVariables(project, path);
+    onInspect(
+      selected
+        ? {
+            id: selected.id,
+            scope: prefix,
+            label: selected.data.label,
+            kind: selected.data.kind,
+            projectName: project.name,
+            description: selected.data.description,
+            properties: Object.entries(selected.data.params).map(
+              ([name, value]) => ({
+                name,
+                value: propertyValue(value, variables) ?? "",
+              }),
+            ),
+            shape: report?.shapes[prefix + selected.id] ?? null,
+            parameters: report?.counts[prefix + selected.id] ?? 0,
+            share: selected.data.share,
+          }
+        : null,
+    );
+  }, [selected, prefix, project, path, report, onInspect]);
+  useEffect(() => () => onInspect(null), [onInspect]);
   return (
     <>
       <div className="canvas-toolbar reference-toolbar">
@@ -456,7 +523,6 @@ function ReferenceCanvas({
             onClick={() => {
               setPath([]);
               setSelection(null);
-              setInspect(false);
             }}
           >
             <Box size={13} aria-hidden="true" /> Model
@@ -468,7 +534,6 @@ function ReferenceCanvas({
                 onClick={() => {
                   setPath(path.slice(0, index + 1));
                   setSelection(null);
-                  setInspect(false);
                 }}
               >
                 {label}
@@ -541,12 +606,12 @@ function ReferenceCanvas({
             multiSelectionKeyCode={null}
             onNodeClick={(_, node) => {
               setSelection(node.id);
-              setInspect(true);
+              onActivate();
             }}
             onNodeDoubleClick={(_, node) => {
               if (node.data.body) open(node.id);
             }}
-            onPaneClick={() => setInspect(false)}
+            onPaneClick={() => setSelection(null)}
             minZoom={0.04}
             maxZoom={1.7}
             proOptions={{ hideAttribution: true }}
@@ -564,45 +629,12 @@ function ReferenceCanvas({
                 selection={selection}
                 onFocus={(id) => {
                   setSelection(id);
-                  setInspect(false);
                 }}
                 compact
               />
             </Panel>
           </ReactFlow>
         </RoutingProvider>
-        {inspect && selected && (
-          <aside
-            className="reference-inspection"
-            aria-label="Reference properties"
-          >
-            <header>
-              <strong>{selected.data.label}</strong>
-              <button
-                aria-label="Close reference properties"
-                onClick={() => setInspect(false)}
-              >
-                <X size={14} aria-hidden="true" />
-              </button>
-            </header>
-            <p>
-              {report?.shapes[prefix + selected.id]?.shape
-                .map(String)
-                .join(" × ") || selected.data.kind}
-            </p>
-            <dl>
-              {Object.entries(selected.data.params).map(([key, value]) => (
-                <div key={key}>
-                  <dt>{key.replaceAll("_", " ")}</dt>
-                  <dd>{propertyValue(value, project)}</dd>
-                </div>
-              ))}
-            </dl>
-            {!Object.keys(selected.data.params).length && (
-              <p>No configurable parameters.</p>
-            )}
-          </aside>
-        )}
       </div>
       <div className="reference-status">
         <span>

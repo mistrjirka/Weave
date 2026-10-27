@@ -57,6 +57,12 @@ test("theme choices persist without changing the network or its URL", async ({
   await ready(page);
   await expect(picker(page)).toHaveValue("dark");
   await expect(root(page)).toHaveCSS("color-scheme", "dark");
+  await picker(page).selectOption("black");
+  await page.emulateMedia({ colorScheme: "light" });
+  await page.reload();
+  await ready(page);
+  await expect(picker(page)).toHaveValue("black");
+  await expect(root(page)).toHaveCSS("color-scheme", "dark");
   await picker(page).selectOption("light");
   await page.reload();
   await ready(page);
@@ -93,12 +99,15 @@ test("theme changes synchronize across open tabs", async ({
   await picker(page).selectOption("dark");
   await expect(root(other)).toHaveAttribute("data-theme", "dark");
   await expect(picker(other)).toHaveValue("dark");
+  await picker(other).selectOption("black");
+  await expect(root(page)).toHaveAttribute("data-theme", "black");
+  await expect(picker(page)).toHaveValue("black");
   await picker(other).selectOption("light");
   await expect(root(page)).toHaveAttribute("data-theme", "light");
   await expect(picker(page)).toHaveValue("light");
 });
 
-for (const theme of ["light", "dark"]) {
+for (const theme of ["light", "dark", "black"]) {
   test(`saved ${theme} theme is applied before the app bundle runs`, async ({
     page,
   }) => {
@@ -114,7 +123,11 @@ for (const theme of ["light", "dark"]) {
     await expect(root(page)).toHaveAttribute("data-theme", theme);
     await expect(root(page)).toHaveCSS(
       "background-color",
-      theme === "dark" ? "rgb(20, 31, 25)" : "rgb(247, 249, 245)",
+      {
+        light: "rgb(247, 249, 245)",
+        dark: "rgb(16, 26, 21)",
+        black: "rgb(17, 17, 19)",
+      }[theme],
     );
     await expect(page.locator(".app-shell")).toHaveCount(0);
   });
@@ -145,12 +158,18 @@ test("blocked local storage still allows a session theme choice", async ({
   expect(errors).toEqual([]);
 });
 
-for (const width of [1600, 390, 320]) {
-  test(`dark editor, nested diagrams, reference pane and dialogs are readable at ${width}px`, async ({
+for (const { width, theme } of ["dark", "black"].flatMap((theme) =>
+  [1600, 390, 320].map((width) => ({ width, theme })),
+)) {
+  test(`${theme} editor, nested diagrams, reference pane and dialogs are readable at ${width}px`, async ({
     page,
   }) => {
     test.setTimeout(60000);
     await page.setViewportSize({ width, height: 1000 });
+    if (theme === "black")
+      await page.addInitScript(() =>
+        localStorage.setItem("weave.theme", "black"),
+      );
     await page.emulateMedia({ colorScheme: "dark" });
     await page.goto("/");
     await ready(page);
@@ -160,7 +179,7 @@ for (const width of [1600, 390, 320]) {
         () => document.documentElement.scrollWidth <= innerWidth,
       ),
     ).toBe(true);
-    await page.screenshot({ path: `data/dark-editor-${width}.png` });
+    await page.screenshot({ path: `data/${theme}-editor-${width}.png` });
     await page
       .getByRole("button", { name: "1 design note", exact: true })
       .click();
@@ -171,7 +190,7 @@ for (const width of [1600, 390, 320]) {
       .click();
     await page.getByRole("button", { name: "Open block", exact: true }).click();
     await audit(page);
-    await page.screenshot({ path: `data/dark-diagrams-${width}.png` });
+    await page.screenshot({ path: `data/${theme}-diagrams-${width}.png` });
     await page.getByRole("button", { name: "Split view", exact: true }).click();
     await expect(
       page
@@ -179,7 +198,7 @@ for (const width of [1600, 390, 320]) {
         .locator(".react-flow__node"),
     ).not.toHaveCount(0);
     await audit(page);
-    await page.screenshot({ path: `data/dark-split-${width}.png` });
+    await page.screenshot({ path: `data/${theme}-split-${width}.png` });
     await page.goto("/?workspace=examples");
     const browser = page.getByRole("dialog", {
       name: "Projects & examples",
@@ -187,7 +206,7 @@ for (const width of [1600, 390, 320]) {
     });
     await expect(browser).toBeVisible();
     await audit(page, '[role="dialog"]');
-    await page.screenshot({ path: `data/dark-projects-${width}.png` });
+    await page.screenshot({ path: `data/${theme}-projects-${width}.png` });
     await browser
       .getByRole("button", { name: "New project", exact: true })
       .click();
@@ -208,10 +227,15 @@ for (const width of [1600, 390, 320]) {
     await expect(page.locator(".code-view")).toContainText("nn.Module");
     await audit(page, ".code-view");
     if (width < 600) {
-      const code = page.getByRole("region", { name: "Generated PyTorch code", exact: true });
+      const code = page.getByRole("region", {
+        name: "Generated PyTorch code",
+        exact: true,
+      });
       await code.focus();
       await page.keyboard.press("ArrowRight");
-      await expect.poll(() => code.evaluate((element) => element.scrollLeft)).toBeGreaterThan(0);
+      await expect
+        .poll(() => code.evaluate((element) => element.scrollLeft))
+        .toBeGreaterThan(0);
     }
   });
 }

@@ -43,7 +43,7 @@ test('reference graphs load, expand and export',async({page})=>{
     await openExample(page, name);
     await expect(page.locator('.project-title')).toContainText(name);
     await expect(page.getByRole('button',{name:'Shapes compatible'})).toBeVisible();
-    await page.getByRole('button',{name:'References',exact:true}).click();
+    await page.getByRole('button',{name:'Sources',exact:true}).click();
     await expect(page.locator('.references-view article')).not.toHaveCount(0);
     await page.getByRole('button',{name:'Architecture',exact:true}).click();
   }

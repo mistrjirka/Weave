@@ -144,7 +144,7 @@ Auto arrange now runs ELK Layered in a browser worker using measured cards, fixe
 
 Use **Split view** above the canvas to edit your network on the left while browsing an example architecture or a saved network on the right. The reference has independent block navigation, zoom, label visibility, temporary arrangement and read-only property inspection. Reference interactions do not change your working document or undo history. Resize the desktop panes with the divider, or focus it and use Left/Right arrow keys; Enter restores equal widths. On phones the panes stack in a scrollable area.
 
-The address bar tracks the current model, open blocks, selected node, Architecture/PyTorch code/References tab, library/drawer, split state, reference model and block, and pane proportions. Copy the address to reopen that view. For example:
+The address bar tracks the current model, open blocks, selected node, Architecture/PyTorch code/Sources tab, library/drawer, split state, reference model and block, and pane proportions. Copy the address to reopen that view. For example:
 
 ```text
 /?model=transformer&block=stack&split=1&reference=example%3Aneedle1&refBlock=decoder
@@ -163,14 +163,28 @@ The validation bar reports tensor errors separately from **Design notes**. Notes
 
 Use **New project** in the top bar to name a network and start from a blank canvas or an example. Creation makes an editable local draft with its own ID; **Save** keeps it on this server. The current draft also appears in the project browser so you can continue editing it. Unsaved status survives local recovery after reload.
 
-**Your workspace** opens a browser with **Your projects** and **Reference architectures**. Saved projects appear first in the sidebar's **Projects** collection. **View reference** opens a read-only example beside your work; **Use as starting point** creates an independent editable copy. The reference pane also has **Use this example**. Viewing references does not replace your editing document.
+**Your workspace** opens a browser with **Your projects** and **Reference architectures**. Saved projects appear first in the sidebar's **Projects** collection. Reference shortcuts are single rows; **Browse all examples** opens descriptions and copy actions. **View reference** opens a read-only example beside your work; **Create copy** creates an independent editable copy. The reference pane also has **Use this example**. Viewing references does not replace your editing document.
 
 Browser tabs and creation starters survive reload and copying the URL: `?workspace=projects`, `?workspace=examples`, or `?workspace=new&starter=looped`. See the [workflow assessment and tested user journeys](PROJECT_WORKFLOW_REVIEW.md).
 
 ## Color themes
 
-Choose **System**, **Light**, or **Dark** with the theme selector beside Split view. On phones it appears as a monitor, sun, or moon icon. System follows your operating-system preference; an explicit choice persists in this browser, survives reload, and synchronizes between open tabs. Theme selection does not change the graph or its shareable URL.
+Choose **System**, **Light**, **Forest**, or **Black** with the theme selector beside Split view. On phones it appears as a monitor, sun, or moon icon. System follows your operating-system preference (Forest when dark); an explicit choice persists in this browser, survives reload, and synchronizes between open tabs. Theme selection does not change the graph or its shareable URL.
 
-The dark palette covers node diagrams, loops, attention patterns, graph labels, properties, validation notes, generated code, project dialogs, and the reference pane. `frontend/src/theme.css` defines the shared palette; existing light colors remain the component fallbacks. Theme initialization runs before the app loads to avoid a light flash. Browser tests cover system changes, stored preferences, unavailable storage, desktop/phone contrast, and every example scope in both themes.
+The dark palette covers node diagrams, loops, attention patterns, graph labels, properties, validation notes, generated code, project dialogs, and the reference pane. `frontend/src/theme.css` defines the shared palette; existing light colors remain the component fallbacks. Theme initialization runs before the app loads to avoid a light flash. Browser tests cover system changes, stored preferences, unavailable storage, desktop/phone contrast, and example-scope walkthroughs in each palette.
 
 Code generation tracks the computational graph separately from its layout. Moving or measuring nodes, arranging nested graphs, and changing themes do not restart an in-flight compile; graph and parameter edits still regenerate code and shape diagnostics.
+
+## Workspace clarity
+
+The unselected inspector is a graph overview: trainable parameter count and shape-validation status. Select a block to edit that block, or a connection to insert a layer. Tokenizer selection has one entry point in the toolbar. **Sources** contains the current model's citations; **Reference architectures** is the example library.
+
+**Project settings** (project title or sidebar footer) contains the name, description and project download. Architecture settings belong to blocks: transformer containers expose their own head count and FFN width; individual attention/FFN layers remain editable inside them. Existing files are loaded with legacy head/FFN defaults materialized onto the owning blocks, preserving their computation. Shared-weight applications still share their definition until made independent. New library layers start with concrete local defaults.
+
+Dark mode separates the lighter forest-green library, raised panels, dark canvas and inset fields. The split divider has a full-height border and visible grip. Wide comparison panes open with the complete graph fitted; narrow panes retain node-by-node navigation, with **Fit graph** available for an overview. The top-level project name stays in the header rather than covering the canvas.
+
+`tests/browser/workspaceReview.spec.ts` checks 3840×2160, 1920×1080 and 1280×1080 layouts, keyboard resizing, overview fitting, compact references, settings accessibility and independent transformer settings. Existing phone and all-example routing checks cover the smaller layouts and nested architectures. A migration regression verifies identical generated PyTorch source, inferred shapes, and parameter counts for every example before/after its defaults become block-local.
+
+**Black** is the neutral dark option: black/charcoal workspace surfaces with colored computation diagrams. **Forest** retains the green dark palette. Both use the same remembered preference and pre-paint initialization.
+
+Split view has one active property selection. Selecting a reference block clears the editable highlight and displays its settings, output contract and parameter count in the right-hand inspector, labeled **Reference · read-only**. Selecting an editable block switches back to editing. Reference selection survives copied URLs and reloads; on phones a direct reference click opens the Properties drawer. The floating reference inspector has been removed.
