@@ -576,6 +576,13 @@ small {
   min-height: 0;
   position: relative;
 }
+.flow-wrap:focus {
+  outline: none;
+}
+.flow-wrap:focus-visible {
+  outline: 2px solid var(--theme-green-line, #4d7739);
+  outline-offset: -2px;
+}
 .react-flow__panel.top.left {
   margin: 26px 28px;
   pointer-events: none;

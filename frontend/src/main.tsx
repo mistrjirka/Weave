@@ -21,6 +21,7 @@ import {
   useReactFlow,
   Panel,
   useViewport,
+  SelectionMode,
 } from "@xyflow/react";
 import {
   Activity,
@@ -66,6 +67,12 @@ import "./style.css";
 import "./theme.css";
 import { ThemePicker } from "./ThemePicker";
 import { compilationInput } from "./compilationInput";
+import {
+  graphClipboardType,
+  serializeSelection,
+  parseSelection,
+  pasteSelection,
+} from "./graphClipboard";
 import { localizeLayerDefaults } from "./parameterScopes";
 import { newId, copyText, retainedPath, Dialog } from "./ui";
 import { visiblePatternField, changePattern } from "./patterns";
@@ -1078,6 +1085,7 @@ function Workbench({
   );
   const reactFlow = useReactFlow();
   const canvasRef = useRef<HTMLDivElement>(null);
+  const pasteSequence = useRef({ key: "", count: 0 });
   const fileRef = useRef<HTMLInputElement>(null),
     tokenFiles = useRef<HTMLInputElement>(null);
   const ref = useRef<Project>(project);
@@ -1277,6 +1285,7 @@ function Workbench({
     [graph, report, prefix, sharedGroups, selection],
   );
   const selected = graph.nodes.find((n: GraphNode) => n.id === selection);
+  const selectedCount = graph.nodes.filter((node) => node.selected).length;
   const connection = graph.edges.find((e) => e.id === selectedEdge);
   const referenceDetails =
     splitView &&
@@ -1319,6 +1328,79 @@ function Workbench({
     setSelection(null);
     setDirty(true);
   };
+  useEffect(() => {
+    // Clipboard events work on LAN HTTP too, without Clipboard API permissions.
+    const ownsClipboard = (event: ClipboardEvent) => {
+      const target = event.target;
+      return (
+        !modal &&
+        tab === "graph" &&
+        target instanceof Element &&
+        !target.closest(
+          "input,textarea,select,[contenteditable],[data-reference-pane]",
+        ) &&
+        (canvasRef.current?.contains(target) || target === document.body) &&
+        (window.getSelection()?.isCollapsed ?? true)
+      );
+    };
+    const onCopy = (event: ClipboardEvent) => {
+      if (!ownsClipboard(event) || !event.clipboardData) return;
+      const text = serializeSelection(
+        graphAt(ref.current, viewPath.current),
+        focusedNode.current,
+      );
+      if (!text) return;
+      event.clipboardData.setData(graphClipboardType, text);
+      event.clipboardData.setData("text/plain", text);
+      event.preventDefault();
+      notify("Selected nodes copied");
+    };
+    const onPaste = (event: ClipboardEvent) => {
+      if (!ownsClipboard(event) || !event.clipboardData) return;
+      const text =
+        event.clipboardData.getData(graphClipboardType) ||
+        event.clipboardData.getData("text/plain");
+      const source = parseSelection(text);
+      const bounds = canvasRef.current?.getBoundingClientRect();
+      if (!source || !bounds) return;
+      event.preventDefault();
+      const key = `${project.id}/${path.join("/")}/${text}`;
+      const count =
+        pasteSequence.current.key === key ? pasteSequence.current.count + 1 : 0;
+      pasteSequence.current = { key, count };
+      const origin = reactFlow.screenToFlowPosition({
+        x: bounds.x + bounds.width / 2,
+        y: bounds.y + bounds.height / 2,
+      });
+      const xs = source.nodes.map((node) => node.position.x);
+      const ys = source.nodes.map((node) => node.position.y);
+      // Center the copied group in the current viewport, retaining its arrangement.
+      const anchor = {
+        x:
+          origin.x -
+          (Math.max(...xs) - Math.min(...xs) + 280) / 2 +
+          (count % 6) * 40,
+        y:
+          origin.y -
+          (Math.max(...ys) - Math.min(...ys) + 240) / 2 +
+          (count % 6) * 40,
+      };
+      changeGraph((graph) => {
+        const nodes = pasteSelection(graph, source, anchor, uid);
+        setSelection(nodes[0].id);
+      });
+      setSelectedEdge(null);
+      notify(
+        `${source.nodes.length} ${source.nodes.length === 1 ? "node" : "nodes"} pasted`,
+      );
+    };
+    window.addEventListener("copy", onCopy);
+    window.addEventListener("paste", onPaste);
+    return () => {
+      window.removeEventListener("copy", onCopy);
+      window.removeEventListener("paste", onPaste);
+    };
+  }, [modal, tab, path, project]);
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (
@@ -1629,23 +1711,27 @@ function Workbench({
   function removeSelected() {
     if (!selection) return;
     changeGraph((g) => {
-      g.nodes = g.nodes.filter((n: GraphNode) => n.id !== selection);
-      g.edges = g.edges.filter(
-        (e) => e.source !== selection && e.target !== selection,
+      const ids = new Set(
+        g.nodes.filter((node) => node.selected).map((node) => node.id),
       );
+      if (!ids.size) ids.add(selection);
+      g.nodes = g.nodes.filter((node) => !ids.has(node.id));
+      g.edges = g.edges.filter((e) => !ids.has(e.source) && !ids.has(e.target));
     });
     setSelection(null);
   }
   function duplicate() {
-    if (!selected) return;
+    const text = serializeSelection(graph, selection);
+    const source = text ? parseSelection(text) : null;
+    if (!source) return;
+    const anchor = {
+      x: Math.min(...source.nodes.map((node) => node.position.x)) + 45,
+      y: Math.min(...source.nodes.map((node) => node.position.y)) + 65,
+    };
     changeGraph((g) => {
-      const n = copy(selected);
-      n.id = uid();
-      n.position = { x: n.position.x + 45, y: n.position.y + 65 };
-      n.data.label += " copy";
-      makeIndependent(n);
-      n.selected = false;
-      g.nodes.push(n);
+      const nodes = pasteSelection(g, source, anchor, uid);
+      for (const node of nodes) node.data.label += " copy";
+      setSelection(nodes[0].id);
     });
   }
   function duplicateShared() {
@@ -1722,7 +1808,9 @@ function Workbench({
     );
     if (!ids.size && selection) ids.add(selection);
     if (!ids.size) {
-      notify("Select nodes with Shift + click, then create a block");
+      notify(
+        "Ctrl/Cmd-click nodes or drag a selection box, then create a block",
+      );
       return;
     }
     const outgoing = graph.edges.filter(
@@ -2453,6 +2541,17 @@ function Workbench({
                 <div
                   ref={canvasRef}
                   className="flow-wrap"
+                  tabIndex={0}
+                  aria-label="Editable graph. Drag to select nodes; Ctrl or Command-click to extend selection. Copy and paste with Ctrl or Command C and V. Hold Space to pan."
+                  onPointerDownCapture={(event) => {
+                    if (
+                      event.target instanceof Element &&
+                      !event.target.closest(
+                        "input,textarea,select,[contenteditable],button",
+                      )
+                    )
+                      event.currentTarget.focus({ preventScroll: true });
+                  }}
                   onDragOver={(e) => {
                     e.preventDefault();
                     e.dataTransfer.dropEffect = "copy";
@@ -2480,6 +2579,19 @@ function Workbench({
                         changeGraph(
                           (g) => {
                             g.nodes = applyNodeChanges(changes, g.nodes);
+                            if (
+                              changes.some((change) => change.type === "select")
+                            ) {
+                              const nodes = g.nodes.filter(
+                                (node) => node.selected,
+                              );
+                              setSelection((current) =>
+                                nodes.some((node) => node.id === current)
+                                  ? current
+                                  : (nodes.at(-1)?.id ?? null),
+                              );
+                              if (nodes.length) setSelectedEdge(null);
+                            }
                           },
                           changes.some((c) => c.type === "remove"),
                           changes.some((c) =>
@@ -2513,7 +2625,15 @@ function Workbench({
                         })
                       }
                       onNodeClick={(_, n) => {
-                        setSelection(n.id);
+                        const nodes = graphAt(
+                          ref.current,
+                          viewPath.current,
+                        ).nodes.filter((node) => node.selected);
+                        setSelection(
+                          nodes.some((node) => node.id === n.id)
+                            ? n.id
+                            : (nodes.at(-1)?.id ?? null),
+                        );
                         setSelectedEdge(null);
                         if (window.innerWidth <= 760)
                           setMobilePanel("properties");
@@ -2536,13 +2656,35 @@ function Workbench({
                         setHistory((h) => [...h.slice(-39), copy(project)]);
                         setFuture([]);
                       }}
+                      onBeforeDelete={async ({ nodes, edges }) => {
+                        const nodeIds = new Set(nodes.map((node) => node.id));
+                        const edgeIds = new Set(edges.map((edge) => edge.id));
+                        changeGraph((graph) => {
+                          graph.nodes = graph.nodes.filter(
+                            (node) => !nodeIds.has(node.id),
+                          );
+                          graph.edges = graph.edges.filter(
+                            (edge) =>
+                              !edgeIds.has(edge.id) &&
+                              !nodeIds.has(edge.source) &&
+                              !nodeIds.has(edge.target),
+                          );
+                        });
+                        setSelection(null);
+                        setSelectedEdge(null);
+                        return false;
+                      }}
                       fitView={window.innerWidth > 760 && !splitView}
                       fitViewOptions={{ padding: 0.15 }}
                       minZoom={0.04}
                       maxZoom={1.7}
                       deleteKeyCode={["Backspace", "Delete"]}
                       selectionKeyCode="Shift"
-                      multiSelectionKeyCode="Shift"
+                      multiSelectionKeyCode={["Control", "Meta", "Shift"]}
+                      selectionOnDrag
+                      selectionMode={SelectionMode.Partial}
+                      panOnDrag={[1, 2]}
+                      panActivationKeyCode="Space"
                       proOptions={{ hideAttribution: true }}
                     >
                       <Background
@@ -2804,7 +2946,9 @@ function Workbench({
                 {referenceDetails
                   ? "Reference properties"
                   : selected
-                    ? "Block properties"
+                    ? selectedCount > 1
+                      ? `${selectedCount} blocks selected`
+                      : "Block properties"
                     : connection
                       ? "Connection properties"
                       : "Graph overview"}
@@ -2822,6 +2966,11 @@ function Workbench({
                   title="Close inspector selection"
                   onClick={() => {
                     setSelection(null);
+                    change(
+                      (project) => clearGraphSelection(project.graph),
+                      false,
+                      false,
+                    );
                     setReferenceLocation((previous) => ({
                       ...previous,
                       node: null,
@@ -2837,6 +2986,13 @@ function Workbench({
                 <ReferenceInspector inspection={referenceDetails} />
               ) : selected ? (
                 <>
+                  {selectedCount > 1 && (
+                    <p className="inspector-description">
+                      Copy, duplicate and delete apply to all {selectedCount}{" "}
+                      selected blocks. Properties below edit{" "}
+                      {selected.data.label}.
+                    </p>
+                  )}
                   <div
                     className={
                       "selected-block-icon " + family(selected.data.kind)
@@ -3107,11 +3263,11 @@ function Workbench({
                   <div className="node-actions">
                     <button onClick={duplicate}>
                       <Copy size={14} />
-                      Duplicate
+                      {selectedCount > 1 ? "Duplicate selected" : "Duplicate"}
                     </button>
                     <button className="danger" onClick={removeSelected}>
                       <Trash2 size={14} />
-                      Delete
+                      {selectedCount > 1 ? "Delete selected" : "Delete"}
                     </button>
                   </div>
                   {selected.data.body && (
