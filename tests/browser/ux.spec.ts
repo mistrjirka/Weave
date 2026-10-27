@@ -1,6 +1,10 @@
 import { test, expect } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
-import { editProjectDescription } from "./helpers";
+import {
+  editProjectDescription,
+  openInputTokenizer,
+  selectTokenInput,
+} from "./helpers";
 
 test.beforeEach(async ({ page }) => {
   await page.goto("/");
@@ -87,6 +91,7 @@ test("property edits show errors and numeric overrides can become bindings again
 test("dialogs close on Escape, trap keyboard focus and return focus to the opener", async ({
   page,
 }) => {
+  await selectTokenInput(page);
   const opener = page.locator(".tokenizer-chip");
   await opener.click();
   const dialog = page.getByRole("dialog");
@@ -260,6 +265,6 @@ test("main workbench and tokenizer dialog pass automated accessibility checks", 
   const builder = () =>
     new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21aa"]);
   expect((await builder().analyze()).violations).toEqual([]);
-  await page.locator(".tokenizer-chip").click();
+  await openInputTokenizer(page);
   expect((await builder().analyze()).violations).toEqual([]);
 });

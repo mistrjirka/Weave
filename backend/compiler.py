@@ -8,7 +8,8 @@ from pathlib import Path
 import zipfile
 from functools import lru_cache
 import black
-from .core import params, validate_project
+from .core import params, validate_project, ordered
+from .tokenizer_bindings import bind_input_tokenizers, input_tokenizers
 from .codegen import SourceGenerator
 
 
@@ -34,6 +35,9 @@ def compile_project(project):
     report = validate_project(project)
     if not report["valid"]:
         raise ValueError(report)
+    document = project
+    project, _, _ = bind_input_tokenizers(project, ordered)
+    project["config"] = {**project["config"], **project["graph"].get("variables", {})}
     cfg = project["config"]
     source, files = SourceGenerator(project, report).generate()
     source = black.format_str(source, mode=black.Mode(line_length=88))
@@ -43,7 +47,7 @@ def compile_project(project):
         files[filename] = support_source(
             filename, Path(__file__).with_name(filename).stat().st_mtime_ns
         )
-    files["project.json"] = json.dumps(project, indent=2)
+    files["project.json"] = json.dumps(document, indent=2)
     files["requirements.txt"] = (
         "torch>=2.5\ntransformers>=4.48,<5\nsentencepiece>=0.2\n"
     )
@@ -97,16 +101,45 @@ def compile_project(project):
         + ')\nprint(output.shape if hasattr(output, "shape") else [v.shape for v in output])\n',
         mode=black.Mode(line_length=88),
     )
-    tokenizer = project.get("tokenizer", {}) or {}
-    files["load_tokenizer.py"] = (
-        'from transformers import AutoTokenizer\nfrom pathlib import Path\n\ndef load_tokenizer():\n    local = Path(__file__).parent / "tokenizer"\n    return AutoTokenizer.from_pretrained(str(local) if local.exists() else '
-        + repr(tokenizer.get("repo") or tokenizer.get("source") or "TOKENIZER_PATH")
-        + ", trust_remote_code=False)\n"
+    configured = input_tokenizers(document)
+    if not configured and document.get("tokenizer"):
+        configured = {
+            node["id"]: document["tokenizer"]
+            for node in document["graph"]["nodes"]
+            if node["data"]["kind"] == "input"
+            and node["data"].get("params", {}).get("dtype", "int64") == "int64"
+        }
+    files["tokenizers.json"] = json.dumps(configured, indent=2)
+    files["load_tokenizer.py"] = black.format_str(
+        '''from transformers import AutoTokenizer
+from pathlib import Path
+import json
+
+
+def load_tokenizer(input_node=None):
+    """Load the tokenizer for an input node path, e.g. source or target."""
+    root = Path(__file__).parent
+    configured = json.loads((root / "tokenizers.json").read_text())
+    if input_node is None:
+        if not configured:
+            raise ValueError("No tokenizer is configured on a token input.")
+        if len({info["id"] for info in configured.values()}) > 1:
+            raise ValueError("Choose an input node: " + ", ".join(configured))
+        input_node = next(iter(configured))
+    info = configured[input_node]
+    local = root / "tokenizers" / info["id"]
+    legacy = root / "tokenizer"
+    source = local if local.is_dir() else legacy if legacy.is_dir() else info.get("repo")
+    if not source:
+        raise ValueError("Tokenizer files are unavailable for input " + input_node)
+    return AutoTokenizer.from_pretrained(str(source), trust_remote_code=False)
+''',
+        mode=black.Mode(line_length=88),
     )
     files["README.md"] = (
         "# "
         + project.get("name", "Exported graph")
-        + "\n\nRandomly initialized PyTorch architecture. Install requirements, then run `python example.py`.\n\n`model.py` contains named layers, direct tensor operations, and explicit loops. Specialized PyTorch layers live in `runtime.py`; named tensor helpers live in `export_helpers.py`, and attention-mask support lives in `sparse_runtime.py`. Keep these files together.\n\nDifferentiable blocks support standard PyTorch autograd. The example uses `torch.no_grad()` for inference. Training requires your own data, loss and optimizer; sampling/token-selection outputs are discrete.\n\nTokenizer files, when selected, are included in `tokenizer/`. A declared custom Python shape contract is not a runtime proof.\n\n## Source references\n"
+        + "\n\nRandomly initialized PyTorch architecture. Install requirements, then run `python example.py`.\n\n`model.py` contains named layers, direct tensor operations, and explicit loops. Specialized PyTorch layers live in `runtime.py`; named tensor helpers live in `export_helpers.py`, and attention-mask support lives in `sparse_runtime.py`. Keep these files together.\n\nDifferentiable blocks support standard PyTorch autograd. The example uses `torch.no_grad()` for inference. Training requires your own data, loss and optimizer; sampling/token-selection outputs are discrete.\n\nTokenizer files selected on input nodes are included in `tokenizers/<id>/`; `tokenizers.json` maps input node paths to their tokenizer. Use `load_tokenizer(input_node='source')` when inputs use different tokenizers. A declared custom Python shape contract is not a runtime proof.\n\n## Source references\n"
         + json.dumps(project.get("references", []), indent=2)
         + "\n"
     )
@@ -117,12 +150,22 @@ def compile_project(project):
     return files
 
 
-def export_zip(project, tokenizer_dir=None):
+def export_zip(project, tokenizer_dir=None, tokenizer_dirs=None):
     files = compile_project(project)
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
         for path, content in files.items():
             archive.writestr(path, content)
+        for token_id, directory in (tokenizer_dirs or {}).items():
+            for path in Path(directory).rglob("*"):
+                if path.is_file():
+                    archive.write(
+                        path,
+                        "tokenizers/"
+                        + token_id
+                        + "/"
+                        + str(path.relative_to(directory)),
+                    )
         if tokenizer_dir and Path(tokenizer_dir).is_dir():
             for path in Path(tokenizer_dir).rglob("*"):
                 if path.is_file():

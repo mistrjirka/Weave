@@ -49,6 +49,7 @@ export const parametersSchema: z.ZodType<Parameters> = z
   .catchall(jsonValue);
 export const graphSchema: z.ZodType<Graph> = z.lazy(() =>
   z.object({
+    variables: z.record(z.string(), z.number()).optional(),
     layout: z
       .object({
         engine: z.literal("elk"),
@@ -80,6 +81,7 @@ export const graphSchema: z.ZodType<Graph> = z.lazy(() =>
               iteration: z
                 .object({ index: z.number(), total: z.number() })
                 .optional(),
+              tokenizer: tokenizerSchema.nullable().optional(),
             })
             .passthrough(),
         })
@@ -159,6 +161,7 @@ export const reportSchema: z.ZodType<ValidationReport> = z.object({
   counts: z.record(z.string(), z.number()),
   parameters: z.number(),
   outputs: z.array(contract.nullable()),
+  tokenizers: z.record(z.string(), tokenizerSchema).optional(),
 });
 export const codeSchema = z.object({
   report: reportSchema,

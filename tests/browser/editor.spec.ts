@@ -1,4 +1,4 @@
-import { openExample } from "./helpers";
+import { openExample, openInputTokenizer } from "./helpers";
 import {test,expect} from '@playwright/test';
 import type { Locator } from '@playwright/test';
 
@@ -70,7 +70,7 @@ test('save, reload and import a project',async({page})=>{
 
 test('tokenizer upload detects capacity, updates dimensions and previews token IDs',async({page})=>{
   test.setTimeout(60000);
-  await page.locator('.tokenizer-chip').click();
+  await openInputTokenizer(page);
   const bundle={version:'1.0',truncation:null,padding:null,added_tokens:[{id:3,content:'[MASK]',single_word:false,lstrip:false,rstrip:false,normalized:false,special:true}],normalizer:null,pre_tokenizer:{type:'Whitespace'},post_processor:null,decoder:null,model:{type:'WordLevel',vocab:{'[UNK]':0,'hello':1,'world':2,'[MASK]':3},unk_token:'[UNK]'}};
   await page.locator('input[type=file]').last().setInputFiles({name:'tokenizer.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(bundle))});
   await expect(page.locator('.tokenizer-result')).toContainText('Embedding capacity',{timeout:45000});

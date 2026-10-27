@@ -46,3 +46,24 @@ export async function openExample(page: Page, name: string) {
   await expect(page.locator(".project-title")).toHaveText(name);
   await expect(page.getByRole("dialog")).toHaveCount(0);
 }
+
+/** Tokenizers belong to the external token input, opened through its inspector. */
+export async function selectTokenInput(page: Page, id = "ids") {
+  const backdrop = page.getByRole("button", {
+    name: "Close side panel",
+    exact: true,
+  });
+  if (await backdrop.isVisible()) await backdrop.click();
+  const node = page.locator(`.flow-wrap .react-flow__node[data-id="${id}"]`);
+  if (await node.isVisible()) await node.click();
+  else throw new Error("Token input must be visible");
+  if ((page.viewportSize()?.width ?? 1600) <= 760) {
+    await expect(
+      page.getByRole("complementary", { name: "Property inspector" }),
+    ).toHaveClass(/is-open/);
+  }
+}
+export async function openInputTokenizer(page: Page, id = "ids") {
+  await selectTokenInput(page, id);
+  await page.locator(".input-tokenizer-settings .tokenizer-chip").click();
+}

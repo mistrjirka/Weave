@@ -11,7 +11,8 @@
     "format:check": "prettier --check frontend/src tsconfig.json vite.config.ts",
     "typecheck": "tsc --noEmit",
     "test:routing": "node --test tests/routing.test.ts tests/labels.test.ts tests/layout.test.ts tests/workspaceLocation.test.ts",
-    "test:clipboard": "node --test tests/graphClipboard.test.ts"
+    "test:clipboard": "node --test tests/graphClipboard.test.ts",
+    "test:variables": "node --test tests/graphVariables.test.ts"
   },
   "dependencies": {
     "@dagrejs/dagre": "^1.1.5",

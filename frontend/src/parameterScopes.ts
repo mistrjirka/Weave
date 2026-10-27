@@ -41,7 +41,20 @@ function resolve(
  */
 export function localizeLayerDefaults(project: Project): Project {
   const next = structuredClone(project);
+  if (next.tokenizer) {
+    for (const node of next.graph.nodes)
+      if (
+        node.data.kind === "input" &&
+        (node.data.params.dtype ?? "int64") === "int64" &&
+        (node.data.params.shape ?? ["B", "T"]).length === 2 &&
+        !node.data.tokenizer
+      )
+        node.data.tokenizer = structuredClone(next.tokenizer);
+  }
+  delete next.tokenizer;
   function visit(graph: Graph, inherited: Parameters, local: Set<string>) {
+    inherited = { ...inherited, ...graph.variables };
+    local = new Set([...local, ...Object.keys(graph.variables ?? {})]);
     for (const node of graph.nodes) {
       const params = Object.fromEntries(
         Object.entries(node.data.params).map(([key, value]) => [

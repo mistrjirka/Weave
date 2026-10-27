@@ -38,9 +38,11 @@ export interface NodeData extends Record<string, unknown> {
   role?: string;
   description?: string;
   iteration?: { index: number; total: number };
+  tokenizer?: TokenizerInfo | null;
 }
 export type GraphNode = Node<NodeData, "architecture">;
 export interface Graph {
+  variables?: Record<string, number>;
   layout?: import("./layout-core").GraphLayout;
   nodes: GraphNode[];
   edges: Edge[];
@@ -66,6 +68,7 @@ export interface ValidationReport {
   counts: Record<string, number>;
   parameters: number;
   outputs: (TensorContract | null)[];
+  tokenizers?: Record<string, TokenizerInfo>;
 }
 export interface TokenizerInfo {
   mask_id?: number | null;
@@ -112,6 +115,7 @@ export interface DisplayData extends NodeData {
   _role: string;
   _groupLabel?: string;
   _shape?: TensorContract | null;
+  _tokenizer?: TokenizerInfo;
   _count?: number;
   _error?: boolean;
   _portErrors?: Record<string, string>;

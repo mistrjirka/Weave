@@ -243,6 +243,7 @@ function ReferenceZoom() {
   return (
     <button
       aria-label={`Reference zoom to 100 percent · current ${Math.round(zoom * 100)}%`}
+      className="zoom-readout"
       title="Reference zoom to 100%"
       onClick={() => flow.zoomTo(1)}
     >
@@ -264,7 +265,10 @@ function propertyValue(
 }
 function scopeVariables(project: Project, path: string[]) {
   let graph = project.graph;
-  let variables: Record<string, JsonValue | undefined> = { ...project.config };
+  let variables: Record<string, JsonValue | undefined> = {
+    ...project.config,
+    ...graph.variables,
+  };
   for (const id of path) {
     const node = graph.nodes.find((node) => node.id === id);
     if (!node?.data.body) break;
@@ -278,6 +282,7 @@ function scopeVariables(project: Project, path: string[]) {
     );
     variables = { ...variables, ...overrides };
     graph = node.data.body;
+    variables = { ...variables, ...graph.variables };
   }
   return variables;
 }
@@ -492,6 +497,13 @@ function ReferenceCanvas({
   const selected = graph.nodes.find((n) => n.id === selection);
   useEffect(() => {
     const variables = scopeVariables(project, path);
+    const tokenizer = selected
+      ? (report?.tokenizers?.[prefix + selected.id] ?? selected.data.tokenizer)
+      : undefined;
+    if (tokenizer) {
+      variables.vocab = tokenizer.capacity;
+      if (tokenizer.mask_id != null) variables.mask_id = tokenizer.mask_id;
+    }
     onInspect(
       selected
         ? {
@@ -501,12 +513,25 @@ function ReferenceCanvas({
             kind: selected.data.kind,
             projectName: project.name,
             description: selected.data.description,
-            properties: Object.entries(selected.data.params).map(
-              ([name, value]) => ({
+            properties: [
+              ...Object.entries(selected.data.params).map(([name, value]) => ({
                 name,
                 value: propertyValue(value, variables) ?? "",
-              }),
-            ),
+              })),
+              ...(selected.data.kind === "input" && tokenizer
+                ? [
+                    {
+                      name: "Tokenizer",
+                      value:
+                        tokenizer.repo || tokenizer.class || "Local tokenizer",
+                    },
+                    {
+                      name: "Vocabulary capacity",
+                      value: String(tokenizer.capacity),
+                    },
+                  ]
+                : []),
+            ],
             shape: report?.shapes[prefix + selected.id] ?? null,
             parameters: report?.counts[prefix + selected.id] ?? 0,
             share: selected.data.share,

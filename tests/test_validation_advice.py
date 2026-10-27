@@ -57,9 +57,10 @@ def test_bad_dimensions_point_to_origin_and_distinguish_downstream_errors(dimens
     report = validate_project(project)
     assert not report["valid"]
     origin = next(e for e in report["errors"] if e["node"] == "x")
-    assert (
-        "dimensions" in origin["message"] and "parameter bindings" in origin["message"]
-    )
+    if dimension == "$missing":
+        assert "$missing" in origin["message"] and "Graph variables" in origin["message"]
+    else:
+        assert "dimensions" in origin["message"] and "parameter bindings" in origin["message"]
     downstream = next(e for e in report["errors"] if e["node"] == "n0")
     assert downstream["port"] == "a"
     assert "upstream error" in downstream["message"]

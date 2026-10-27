@@ -11,12 +11,13 @@ from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
-from .core import validate_project, params
+from .core import validate_project, params, graph_context
 from .attention import expand_attention
 from .operations import unroll_loop
 from .compiler import compile_project, export_zip
 from .templates import templates
 from .tokenizers import TokenizerService, ALLOWED_SUFFIXES
+from .tokenizer_bindings import input_tokenizers
 
 ROOT=Path(__file__).parent.parent
 DATA=Path(os.environ.get('WEAVE_DATA', ROOT/'data'));DATA.mkdir(parents=True,exist_ok=True)
@@ -71,9 +72,9 @@ def validate(project:dict):return validate_project(project)
 
 @app.post('/api/attention/expand')
 def expand(request:dict):
-    project=request['project'];graph=project['graph'];config=project['config']
-    for id in request.get('path',[]):
-        n=next(n for n in graph['nodes'] if n['id']==id);config={**config,**params(n,config)};graph=n['data']['body']
+    project=request['project']
+    try:graph,config=graph_context(project,request.get('path',[]))
+    except (KeyError,ValueError) as exc:raise HTTPException(422,str(exc))
     n=next(n for n in graph['nodes'] if n['id']==request['node_id'])
     if n['data']['kind'] not in ('attention','cross_attention'):raise HTTPException(422,'Select an attention node')
     report=validate_project(project)
@@ -87,10 +88,9 @@ def expand(request:dict):
 
 @app.post('/api/graph/unroll')
 def unroll(request:dict):
-    project=request['project'];graph=project['graph'];config=project['config']
+    project=request['project']
     try:
-        for id in request.get('path',[]):
-            n=next(n for n in graph['nodes'] if n['id']==id);config={**config,**params(n,config)};graph=n['data']['body']
+        graph,config=graph_context(project,request.get('path',[]))
         return unroll_loop(graph,request['node_id'],config)
     except (KeyError,ValueError,StopIteration) as exc:raise HTTPException(422,str(exc))
 
@@ -107,7 +107,8 @@ def code(project:dict):
 def export(project:dict):
     tok=project.get('tokenizer') or {};token_id=tok.get('id','')
     directory=DATA/'tokenizers'/token_id if re.fullmatch('[a-f0-9]{20}',token_id) else None
-    try:result=export_zip(project,directory)
+    directories={info["id"]: DATA/"tokenizers"/info["id"] for info in input_tokenizers(project).values() if re.fullmatch(r"[a-f0-9]{20}",info.get("id", ""))}
+    try:result=export_zip(project,directory,directories)
     except ValueError as exc:raise HTTPException(422,exc.args[0])
     name=re.sub(r'[^a-zA-Z0-9_-]','_',project.get('name','model'))
     return Response(result,media_type='application/zip',headers={'Content-Disposition':f'attachment; filename="{name}.zip"'})

@@ -73,6 +73,8 @@ import {
   parseSelection,
   pasteSelection,
 } from "./graphClipboard";
+import { GraphVariables } from "./GraphVariables";
+import { graphVariableScope, bindingValue } from "./graphVariables";
 import { localizeLayerDefaults } from "./parameterScopes";
 import { newId, copyText, retainedPath, Dialog } from "./ui";
 import { visiblePatternField, changePattern } from "./patterns";
@@ -154,6 +156,7 @@ import type {
   ValidationReport,
   ValidationIssue,
   TokenPreview,
+  TokenizerInfo,
 } from "./types";
 const copy = <T,>(v: T): T => structuredClone(v);
 const uid = newId;
@@ -631,6 +634,15 @@ function ArchitectureNode({ id, data, selected }: NodeProps<DisplayNode>) {
       )}
       <div className="node-body">
         <Diagram kind={kind} p={p} body={data.body} role={role} />
+        {kind === "input" && data._tokenizer && (
+          <div className="input-tokenizer-summary">
+            <Database size={12} />
+            <span>
+              {data._tokenizer.repo || data._tokenizer.class || "Tokenizer"}
+            </span>
+            <small>{format(data._tokenizer.capacity)} IDs</small>
+          </div>
+        )}
       </div>
       <div className="node-footer">
         <code>
@@ -1062,6 +1074,7 @@ function Workbench({
   } | null>(null);
   const [saving, setSaving] = useState(false);
   const [deletedProject, setDeletedProject] = useState<Project | null>(null);
+  const [tokenizerTarget, setTokenizerTarget] = useState<string | null>(null);
   const [tokSource, setTokSource] = useState(""),
     [tokRevision, setTokRevision] = useState(""),
     [tokText, setTokText] = useState("The cat sat on the mat."),
@@ -1285,6 +1298,21 @@ function Workbench({
     [graph, report, prefix, sharedGroups, selection],
   );
   const selected = graph.nodes.find((n: GraphNode) => n.id === selection);
+  const tokenizerInput =
+    modal === "tokenizer"
+      ? allNodes(project).find((item) => item.path === tokenizerTarget)?.node
+      : undefined;
+  const inputTokenizer = tokenizerInput?.data.tokenizer;
+  const variableScope = graphVariableScope(project, path);
+  const selectedTokenizer = selected
+    ? (report?.tokenizers?.[prefix + selected.id] ?? selected.data.tokenizer)
+    : undefined;
+  const fieldVariables = { ...variableScope.effective };
+  if (selectedTokenizer) {
+    fieldVariables.vocab = selectedTokenizer.capacity;
+    if (selectedTokenizer.mask_id != null)
+      fieldVariables.mask_id = selectedTokenizer.mask_id;
+  }
   const selectedCount = graph.nodes.filter((node) => node.selected).length;
   const connection = graph.edges.find((e) => e.id === selectedEdge);
   const referenceDetails =
@@ -1929,6 +1957,28 @@ function Workbench({
     setSelection(id);
     notify("Reusable block created · open to edit its internals");
   }
+  function applyInputTokenizer(info: TokenizerInfo) {
+    if (ref.current.id !== project.id) {
+      notify("Tokenizer result ignored because the active project changed.");
+      return false;
+    }
+    if (
+      !allNodes(ref.current).some(
+        (item) =>
+          item.path === tokenizerTarget && item.node.data.kind === "input",
+      )
+    ) {
+      notify("The tokenizer input is no longer available.");
+      return false;
+    }
+    change((p) => {
+      const input = allNodes(p).find(
+        (item) => item.path === tokenizerTarget,
+      )?.node;
+      if (input) input.data.tokenizer = info;
+    });
+    return true;
+  }
   async function inspectTokenizer() {
     setBusy(true);
     setTokError("");
@@ -1939,12 +1989,8 @@ function Workbench({
           revision: tokRevision || null,
         }),
       );
-      change((p) => {
-        p.tokenizer = info;
-        p.config.vocab = info.capacity;
-        if (info.mask_id != null) p.config.mask_id = info.mask_id;
-      });
-      notify("Tokenizer loaded · linked vocabulary dimensions updated");
+      if (applyInputTokenizer(info))
+        notify("Tokenizer loaded · linked vocabulary dimensions updated");
     } catch (e) {
       setTokError(String(e));
     } finally {
@@ -1963,12 +2009,7 @@ function Workbench({
         body: form,
       });
       const info = tokenizerSchema.parse(await responseData(r));
-      change((p) => {
-        p.tokenizer = info;
-        p.config.vocab = info.capacity;
-        if (info.mask_id != null) p.config.mask_id = info.mask_id;
-      });
-      notify("Tokenizer bundle inspected");
+      if (applyInputTokenizer(info)) notify("Tokenizer bundle inspected");
     } catch (e) {
       setTokError(String(e));
     } finally {
@@ -1976,12 +2017,12 @@ function Workbench({
     }
   }
   async function previewTokenizer() {
-    if (!project.tokenizer) return;
+    if (!inputTokenizer) return;
     try {
       setTokPreview(
         previewSchema.parse(
           await api("/tokenizers/preview", {
-            id: project.tokenizer.id,
+            id: inputTokenizer.id,
             text: tokText,
           }),
         ),
@@ -2419,17 +2460,6 @@ function Workbench({
               <Columns2 size={15} aria-hidden="true" />
               <span>Split view</span>
             </button>
-            <button
-              className="tokenizer-chip"
-              onClick={() => setModal("tokenizer")}
-            >
-              <Database size={13} />
-              {project.tokenizer
-                ? project.tokenizer.repo || "Local tokenizer"
-                : "Select tokenizer"}
-              <span>{format(project.config.vocab)} vocab</span>
-              <ChevronDown size={12} />
-            </button>
           </div>
         </nav>
         <div className={"editor-area " + (splitView ? "has-comparison" : "")}>
@@ -2501,6 +2531,15 @@ function Workbench({
                     onClick={groupSelection}
                   >
                     <Box size={15} />
+                  </button>
+                  <button
+                    aria-label="Graph variables"
+                    className="variables-button"
+                    title="Graph variables: define values used by $name bindings"
+                    onClick={() => setModal("variables")}
+                  >
+                    <Braces size={15} />
+                    <span className="variables-button-label">Variables</span>
                   </button>
                   <button
                     aria-label="Auto arrange"
@@ -3104,6 +3143,76 @@ function Workbench({
                   >
                     <Maximize2 size={13} /> Zoom to this node
                   </button>
+                  {selected.data.kind === "input" &&
+                    (selected.data.tokenizer ||
+                      ((selected.data.params.dtype ?? "int64") === "int64" &&
+                        (selected.data.params.shape ?? ["B", "T"]).length ===
+                          2)) && (
+                      <section
+                        className="input-tokenizer-settings"
+                        aria-label="Input tokenizer"
+                      >
+                        <div className="section-label">Tokenizer</div>
+                        <button
+                          className="tokenizer-chip"
+                          disabled={
+                            path.length > 0 &&
+                            !!selectedTokenizer &&
+                            !selected.data.tokenizer
+                          }
+                          onClick={() => {
+                            setTokenizerTarget(prefix + selected.id);
+                            setTokError("");
+                            setTokPreview(null);
+                            setTokSource(selected.data.tokenizer?.repo ?? "");
+                            setTokRevision("");
+                            setModal("tokenizer");
+                          }}
+                        >
+                          <Database size={14} />
+                          <span>
+                            {selectedTokenizer?.repo ||
+                              selectedTokenizer?.class ||
+                              "Select tokenizer"}
+                          </span>
+                          {selected.data.tokenizer && (
+                            <small>
+                              {format(selected.data.tokenizer.capacity)} vocab
+                            </small>
+                          )}
+                          <ChevronRight size={14} />
+                        </button>
+                        {selectedTokenizer && (
+                          <div className="stat-row">
+                            <span>Vocabulary capacity</span>
+                            <b>{selectedTokenizer.capacity.toLocaleString()}</b>
+                          </div>
+                        )}
+                        {!selected.data.tokenizer && selectedTokenizer && (
+                          <p className="field-help">
+                            Inherited from the connected input ·{" "}
+                            {format(selectedTokenizer.capacity)} token IDs.
+                            Configure the originating token input to change it.
+                          </p>
+                        )}
+                        {selected.data.tokenizer && (
+                          <button
+                            className="small-button"
+                            onClick={() =>
+                              updateNode((node) => {
+                                delete node.data.tokenizer;
+                              })
+                            }
+                          >
+                            Remove tokenizer
+                          </button>
+                        )}
+                        <p className="field-help">
+                          The tokenizer defines token IDs and vocabulary size.
+                          Embedding width is configured on each embedding block.
+                        </p>
+                      </section>
+                    )}
                   <div className="section-label">Configuration</div>
                   {selected.data.kind === "attention_pattern" &&
                     selected.data.params.pattern === "custom" &&
@@ -3127,24 +3236,32 @@ function Workbench({
                           !["iterations", "shared"].includes(k)),
                     )
                     .map(([k, v]) => (
-                      <Field
-                        key={k}
-                        name={k}
-                        value={v ?? null}
-                        onChange={(next) =>
-                          updateNode((n) => {
-                            n.data.params = parametersSchema.parse({
-                              ...n.data.params,
-                              [k]: next,
-                            });
-                            if (k === "pattern")
-                              n.data.params = changePattern(
-                                n.data.params,
-                                next,
-                              );
-                          })
-                        }
-                      />
+                      <React.Fragment key={k}>
+                        <Field
+                          name={k}
+                          value={v ?? null}
+                          onChange={(next) =>
+                            updateNode((n) => {
+                              n.data.params = parametersSchema.parse({
+                                ...n.data.params,
+                                [k]: next,
+                              });
+                              if (k === "pattern")
+                                n.data.params = changePattern(
+                                  n.data.params,
+                                  next,
+                                );
+                            })
+                          }
+                        />
+                        {typeof v === "string" && v.startsWith("$") && (
+                          <p className="binding-resolution field-help">
+                            {v} ={" "}
+                            {bindingValue(v, fieldVariables) ??
+                              "undefined · add it in Graph variables"}
+                          </p>
+                        )}
+                      </React.Fragment>
                     ))}
                   {selected.data.kind === "attention_pattern" && (
                     <p className="field-help">
@@ -3432,13 +3549,15 @@ function Workbench({
           label={
             modal === "tokenizer"
               ? "Tokenizer configuration"
-              : modal === "settings"
-                ? "Project settings"
-                : modal === "unsaved"
-                  ? "Unsaved changes"
-                  : modal === "new-project"
-                    ? "New project"
-                    : "Projects & examples"
+              : modal === "variables"
+                ? "Graph variables"
+                : modal === "settings"
+                  ? "Project settings"
+                  : modal === "unsaved"
+                    ? "Unsaved changes"
+                    : modal === "new-project"
+                      ? "New project"
+                      : "Projects & examples"
           }
           onClose={() => {
             setModal(null);
@@ -3456,14 +3575,16 @@ function Workbench({
               </span>
               <h2>
                 {modal === "tokenizer"
-                  ? "Connect a tokenizer"
-                  : modal === "projects"
-                    ? "Projects & examples"
-                    : modal === "new-project"
-                      ? "New project"
-                      : modal === "unsaved"
-                        ? "Keep your changes?"
-                        : "Project settings"}
+                  ? `Tokenizer · ${tokenizerInput?.data.label ?? "Input"}`
+                  : modal === "variables"
+                    ? "Graph variables"
+                    : modal === "projects"
+                      ? "Projects & examples"
+                      : modal === "new-project"
+                        ? "New project"
+                        : modal === "unsaved"
+                          ? "Keep your changes?"
+                          : "Project settings"}
               </h2>
             </div>
             <button onClick={() => setModal(null)} aria-label="Close dialog">
@@ -3525,12 +3646,29 @@ function Workbench({
                 </button>
               </div>
             </>
+          ) : modal === "variables" ? (
+            <GraphVariables
+              values={variableScope.own}
+              inherited={variableScope.inherited}
+              nested={path.length > 0}
+              onChange={(values) =>
+                change((p) => {
+                  if (path.length) graphAt(p, path).variables = values;
+                  else {
+                    p.config = values;
+                    delete p.graph.variables;
+                  }
+                })
+              }
+            />
           ) : modal === "tokenizer" ? (
             <>
               <p>
-                Inspect vocabulary, special tokens, and token shapes. Embeddings
-                and output heads linked to <code>$vocab</code> update
-                automatically.
+                Tokenizer for <strong>{tokenizerInput?.data.label}</strong>. Its
+                vocabulary and special tokens follow this input through
+                connected blocks. Embeddings and output heads linked to{" "}
+                <code>$vocab</code> update automatically; numeric overrides stay
+                independent.
               </p>
               <label className="property-field">
                 <span>Hugging Face repository or server-local path</span>
@@ -3573,29 +3711,29 @@ function Workbench({
                 onChange={(e) => uploadTokenizer(e.target.files)}
               />
               {tokError && <div className="inline-error">{tokError}</div>}
-              {project.tokenizer && (
+              {inputTokenizer && (
                 <div className="tokenizer-result">
                   <div className="result-heading">
                     <CheckCircle2 size={17} />
-                    <b>{project.tokenizer.repo || project.tokenizer.class}</b>
+                    <b>{inputTokenizer.repo || inputTokenizer.class}</b>
                     <span>Loaded</span>
                   </div>
                   <div className="token-stats">
                     <div>
                       <span>Vocabulary</span>
-                      <b>{project.tokenizer.size.toLocaleString()}</b>
+                      <b>{inputTokenizer.size.toLocaleString()}</b>
                     </div>
                     <div>
                       <span>Embedding capacity</span>
-                      <b>{project.tokenizer.capacity.toLocaleString()}</b>
+                      <b>{inputTokenizer.capacity.toLocaleString()}</b>
                     </div>
                     <div>
                       <span>Base vocabulary</span>
-                      <b>{project.tokenizer.base_size.toLocaleString()}</b>
+                      <b>{inputTokenizer.base_size.toLocaleString()}</b>
                     </div>
                   </div>
                   <div className="special-tokens">
-                    {Object.entries(project.tokenizer.special_tokens).map(
+                    {Object.entries(inputTokenizer.special_tokens).map(
                       ([k, v]) => (
                         <span key={k}>
                           {k.replace("_token", "")}{" "}

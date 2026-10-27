@@ -4399,3 +4399,120 @@ textarea:focus-visible {
     margin-left: 34px;
   }
 }
+
+.input-tokenizer-settings {
+  margin-bottom: 22px;
+}
+.input-tokenizer-settings .tokenizer-chip {
+  width: 100%;
+  max-width: 100%;
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  height: auto;
+  white-space: normal;
+}
+.input-tokenizer-settings .tokenizer-chip > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  flex: 1;
+}
+.input-tokenizer-summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 12px;
+  color: var(--theme-muted, #74816d);
+  font-size: 10px;
+}
+.input-tokenizer-summary > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+.input-tokenizer-summary > small {
+  white-space: nowrap;
+}
+.binding-resolution {
+  margin-top: -6px;
+  margin-bottom: 16px;
+  overflow-wrap: anywhere;
+}
+.graph-variables table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  margin: 16px 0;
+}
+.graph-variables th,
+.graph-variables td {
+  padding: 10px 6px;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
+  overflow-wrap: anywhere;
+}
+.graph-variables th {
+  font-weight: 550;
+}
+.graph-variables th:last-child,
+.graph-variables td:last-child {
+  width: 76px;
+  text-align: right;
+}
+.graph-variables input {
+  width: 100%;
+  min-width: 0;
+  padding: 8px 10px;
+  border-radius: 5px;
+  border: 1px solid var(--line);
+  background: var(--theme-base, #f7f9f5);
+  color: inherit;
+}
+.graph-variables input[aria-invalid="true"] {
+  border-color: var(--theme-coral-accent, #bc6c61);
+}
+.variable-add {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(64px, 100px) auto;
+  gap: 10px;
+  align-items: end;
+  margin: 20px 0;
+}
+.variable-add label {
+  min-width: 0;
+}
+.variable-add label > span {
+  display: block;
+  margin-bottom: 6px;
+}
+.variable-add button {
+  min-height: 35px;
+}
+.graph-variables details {
+  margin: 20px 0;
+}
+.graph-variables summary {
+  cursor: pointer;
+}
+.graph-actions .variables-button {
+  color: var(--theme-green-text, #3c603f);
+  width: auto;
+  padding: 4px 8px;
+  white-space: nowrap;
+}
+@media (max-width: 1100px) {
+  .variables-button-label {
+    display: none;
+  }
+}
+@media (max-width: 440px) {
+  .variable-add {
+    grid-template-columns: minmax(0, 1fr) 80px;
+  }
+  .variable-add button {
+    grid-column: 1 / -1;
+  }
+}

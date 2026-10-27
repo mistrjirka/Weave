@@ -7,6 +7,7 @@ import re
 import math
 from .patterns import validate_pattern,validate_mask
 from .advice import design_advice
+from .tokenizer_bindings import bind_input_tokenizers
 
 VERSION = 1
 
@@ -51,7 +52,7 @@ def definition_signature(node,config):
     d=node['data'];p=params(node,config)
     signature={'kind':d['kind'],'params':p}
     if d.get('body'):
-        body=d['body'];scope={**config,**p}
+        body=d['body'];scope={**config,**p,**d['body'].get('variables', {})}
         signature['body']={'nodes':[(n['id'],definition_signature(n,scope),n['data'].get('share')) for n in sorted(body['nodes'],key=lambda n:n['id'])],
             'edges':sorted((e['source'],e.get('sourceHandle') or 'out',e['target'],e.get('targetHandle') or 'a') for e in body['edges'])}
     return signature
@@ -69,8 +70,33 @@ def resolve(value, config):
     return value
 
 
+def variable_names(value):
+    if isinstance(value, str) and re.fullmatch(r'\$[A-Za-z_][A-Za-z_0-9]*', value):
+        return {value[1:]}
+    if isinstance(value, dict):
+        return set().union(*(variable_names(item) for item in value.values()))
+    if isinstance(value, list):
+        return set().union(*(variable_names(item) for item in value))
+    return set()
+
+
 def params(node, config):
     return resolve(node['data'].get('params', {}), config)
+
+
+
+def graph_context(project, path):
+    """The same lexical variables are used by compilation and graph rewrites."""
+    graph = project['graph']
+    config = {**project.get('config', {}), **graph.get('variables', {})}
+    for node_id in path:
+        node = next((node for node in graph['nodes'] if node['id'] == node_id), None)
+        if not node or not node['data'].get('body'):
+            raise ValueError('The containing block is no longer available.')
+        config = {**config, **params(node, config)}
+        graph = node['data']['body']
+        config.update(graph.get('variables', {}))
+    return graph, config
 
 
 def port_names(node):
@@ -104,7 +130,8 @@ def ordered(graph):
 
 
 def validate_project(project):
-    errors, warnings, shapes, counts, raw_counts = [], [], {}, {}, {}
+    project, token_domains, binding_errors = bind_input_tokenizers(project, ordered)
+    errors, warnings, shapes, counts, raw_counts = binding_errors, [], {}, {}, {}
     cfg = project.get('config', {})
     for field in ('width','vocab','heads','ffn_width'):
         if field in cfg and (not isinstance(cfg[field],int) or isinstance(cfg[field],bool) or cfg[field]<1):
@@ -117,7 +144,7 @@ def validate_project(project):
         errors.append({'node': None, 'message': f"Tokenizer needs {tok['capacity']} embedding rows; vocabulary capacity is {cfg.get('vocab')} ."})
 
     def visit(graph, inputs=None, prefix='', config=None):
-        cfg=config or project.get('config',{})
+        cfg={**(config if config is not None else project.get('config',{})), **graph.get('variables', {})}
         local = {}
         total = 0
         outputs = []
@@ -130,6 +157,8 @@ def validate_project(project):
             return [], 0
         for n in sequence:
             key = prefix + n['id']; d = n['data']; kind = d.get('kind'); p = params(n, cfg)
+            tok = token_domains.get(key)
+            vocabulary = tok['capacity'] if tok else cfg.get('vocab', 0)
             incoming = {}
             for e in graph.get('edges', []):
                 if e['target'] == n['id']:
@@ -144,6 +173,9 @@ def validate_project(project):
             args = [incoming.get(k) for k in port_names(n)]
             out = None; count = 0
             try:
+                missing = sorted(variable_names(d.get('params', {})) - set(cfg) - {'sqrt_width'})
+                if missing:
+                    raise ValueError('Unknown variable ' + ', '.join('$' + name for name in missing) + '. Add it in Graph variables or enter a number in this block.')
                 if d.get('iteration'):
                     schedule=d['iteration'];index=schedule.get('index');steps=schedule.get('total')
                     if not isinstance(index,int) or not isinstance(steps,int) or not 0<=index<steps:raise ValueError('Application schedule needs 0 ≤ index < total.')
@@ -203,7 +235,7 @@ def validate_project(project):
                         out.update(buckets=buckets,orders=orders,hash_heads=p.get('hash_heads',1))
                     else:
                         mask = p.get('mask_id', cfg.get('mask_id'))
-                        if not isinstance(mask, int) or not 0 <= mask < cfg.get('vocab', 0):
+                        if not isinstance(mask, int) or not 0 <= mask < vocabulary:
                             raise ValueError('Set a mask token ID within the vocabulary capacity.')
                         shape = list(x['shape']); length = p.get('length', 0)
                         if not isinstance(length,int) or length < 0:
@@ -265,9 +297,9 @@ def validate_project(project):
                         if kind == 'gate': count = 1
                 elif kind == 'select':
                     y = args[1]
-                    if x['dtype'] != 'float32' or y['dtype'] != 'int64' or x['shape'][:-1] != y['shape'] or x['shape'][-1] != cfg.get('vocab'):
+                    if x['dtype'] != 'float32' or y['dtype'] != 'int64' or x['shape'][:-1] != y['shape'] or x['shape'][-1] != vocabulary:
                         raise ValueError('Selection requires logits [B,T,V] and current token IDs [B,T], with V matching the vocabulary.')
-                    if not isinstance(cfg.get('mask_id'), int) or not 0 <= cfg['mask_id'] < cfg.get('vocab', 0):
+                    if not isinstance(p.get('mask_id', cfg.get('mask_id')), int) or not 0 <= p.get('mask_id', cfg.get('mask_id')) < vocabulary:
                         raise ValueError('Selection requires a valid mask token ID.')
                     out = y
                 elif kind == 'custom':
@@ -442,7 +474,7 @@ def validate_project(project):
     if not errors:
         allocated=set()
         def allocation(graph,prefix='',multiple=1,config=None):
-            config=config or project.get('config',{})
+            config={**(config if config is not None else project.get('config',{})), **graph.get('variables', {})}
             result=0
             for n in ordered(graph):
                 d=n['data'];key=prefix+n['id'];share=d.get('share');p=params(n,config)
@@ -462,4 +494,4 @@ def validate_project(project):
     # Skip structurally malformed graphs rather than hiding the original error.
     if not any(e.get('node') is None for e in errors):
         warnings.extend(design_advice(project, shapes, counts, resolve))
-    return {'valid': not errors, 'errors': errors, 'warnings': warnings, 'shapes': shapes, 'counts': counts, 'parameters': total, 'outputs': outputs}
+    return {'valid': not errors, 'errors': errors, 'warnings': warnings, 'shapes': shapes, 'counts': counts, 'parameters': total, 'outputs': outputs, 'tokenizers': token_domains}

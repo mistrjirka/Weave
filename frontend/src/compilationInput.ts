@@ -2,6 +2,7 @@ import type { Graph, Project } from "./types";
 
 function computationGraph(graph: Graph): Graph {
   return {
+    ...(graph.variables ? { variables: graph.variables } : {}),
     nodes: graph.nodes.map((node) => ({
       id: node.id,
       type: node.type,

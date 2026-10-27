@@ -23,12 +23,19 @@ export function allNodes(project: Project) {
 }
 
 function semantic(data: NodeData): unknown {
-  const result: { kind: string; params: Parameters; body?: unknown } = {
+  const result: {
+    kind: string;
+    params: Parameters;
+    body?: unknown;
+    tokenizer?: NodeData["tokenizer"];
+  } = {
     kind: data.kind,
     params: data.params || {},
+    tokenizer: data.tokenizer,
   };
   if (data.body)
     result.body = {
+      variables: data.body.variables,
       nodes: data.body.nodes
         .map((n: GraphNode) => ({
           id: n.id,

@@ -61,7 +61,7 @@ for (const width of [3840, 1920, 1280]) {
     await expect(inspector.locator("input, select")).toHaveCount(0);
     await expect(
       page.getByRole("button", { name: /Select tokenizer/ }),
-    ).toHaveCount(1);
+    ).toHaveCount(0);
     await page.getByRole("button", { name: "Split view", exact: true }).click();
     const divider = page.getByRole("separator", { name: "Resize graph panes" });
     await expect(divider).toBeVisible();

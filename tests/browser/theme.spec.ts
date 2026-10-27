@@ -1,3 +1,4 @@
+import { openInputTokenizer } from "./helpers";
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
@@ -214,13 +215,16 @@ for (const { width, theme } of ["dark", "black"].flatMap((theme) =>
     await expect(form).toBeVisible();
     await audit(page, '[role="dialog"]');
     await form.getByRole("button", { name: "Cancel", exact: true }).click();
-    await page
-      .getByRole("button", { name: "Select tokenizer", exact: false })
-      .click();
+    await openInputTokenizer(page);
     await audit(page, '[role="dialog"]');
     await page
       .getByRole("button", { name: "Close dialog", exact: true })
       .click();
+    const closeProperties = page.getByRole("button", {
+      name: "Close properties",
+      exact: true,
+    });
+    if (await closeProperties.isVisible()) await closeProperties.click();
     await page
       .getByRole("button", { name: "PyTorch code", exact: true })
       .click();

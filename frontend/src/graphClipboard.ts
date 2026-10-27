@@ -7,9 +7,19 @@ const format = "weave.graph-selection";
 /** Copy document data, without React Flow state, cached routes or view callbacks. */
 function documentGraph(graph: Graph): Graph {
   return {
+    ...(graph.variables ? { variables: { ...graph.variables } } : {}),
     nodes: graph.nodes.map((node) => {
-      const { kind, label, params, body, share, role, description, iteration } =
-        node.data;
+      const {
+        kind,
+        label,
+        params,
+        body,
+        share,
+        role,
+        description,
+        iteration,
+        tokenizer,
+      } = node.data;
       return {
         id: node.id,
         type: "architecture",
@@ -23,6 +33,7 @@ function documentGraph(graph: Graph): Graph {
           ...(role ? { role } : {}),
           ...(description ? { description } : {}),
           ...(iteration ? { iteration: { ...iteration } } : {}),
+          ...(tokenizer ? { tokenizer: structuredClone(tokenizer) } : {}),
         },
       };
     }),

@@ -109,13 +109,13 @@ class Operation:
 # Builders receive resolved settings, inferred input dimensions and local names.
 OPERATIONS = {
     "embedding": Operation(
-        constructor=lambda p, c, s: f"nn.Embedding(num_embeddings={p.get('vocab', c['vocab'])!r}, embedding_dim={p.get('width', c['width'])!r})"
+        constructor=lambda p, c, s: f"nn.Embedding(num_embeddings={p.get('vocab', c.get('vocab'))!r}, embedding_dim={p.get('width', c.get('width', 128))!r})"
     ),
     "linear": Operation(
-        constructor=lambda p, c, s: f"nn.Linear(in_features={s[-1]!r}, out_features={p.get('out', c['width'])!r}, bias={p.get('bias', False)!r})"
+        constructor=lambda p, c, s: f"nn.Linear(in_features={s[-1]!r}, out_features={p.get('out', c.get('width', 128))!r}, bias={p.get('bias', False)!r})"
     ),
     "head": Operation(
-        constructor=lambda p, c, s: f"nn.Linear(in_features={s[-1]!r}, out_features={p.get('out', c['vocab'])!r}, bias={p.get('bias', False)!r})"
+        constructor=lambda p, c, s: f"nn.Linear(in_features={s[-1]!r}, out_features={p.get('out', c.get('vocab'))!r}, bias={p.get('bias', False)!r})"
     ),
     "norm": Operation(
         constructor=lambda p, c, s: f"nn.RMSNorm({s[-1]!r}, eps={p.get('eps', 1e-6)!r})"
@@ -129,7 +129,7 @@ OPERATIONS = {
         runtime=("NGram",),
     ),
     "lookup": Operation(
-        constructor=lambda p, c, s: f"Lookup(orders={s[-1]!r}, buckets={p.get('buckets', 8192)!r}, width={p.get('width', c['width'])!r})",
+        constructor=lambda p, c, s: f"Lookup(orders={s[-1]!r}, buckets={p.get('buckets', 8192)!r}, width={p.get('width', c.get('width', 128))!r})",
         runtime=("Lookup",),
     ),
     "gate": Operation(constructor=lambda p, c, s: "Gate()", runtime=("Gate",)),
@@ -153,7 +153,7 @@ OPERATIONS = {
         runtime=("EngramHash",),
     ),
     "engram_lookup": Operation(
-        constructor=lambda p, c, s: f"EngramLookup(width={p.get('width', c['width'])!r}, orders={p.get('orders', [2,3])!r}, heads={p.get('hash_heads', 2)!r}, slots={p.get('buckets', 8192)!r}, sub_dim={p.get('sub_dim', 128)!r}, dilation={p.get('dilation', 3)!r})",
+        constructor=lambda p, c, s: f"EngramLookup(width={p.get('width', c.get('width', 128))!r}, orders={p.get('orders', [2,3])!r}, heads={p.get('hash_heads', 2)!r}, slots={p.get('buckets', 8192)!r}, sub_dim={p.get('sub_dim', 128)!r}, dilation={p.get('dilation', 3)!r})",
         runtime=("EngramLookup",),
     ),
     "add": Operation(expression=lambda a, p, c: f"{a[0]} + {a[1]}"),
@@ -220,7 +220,7 @@ OPERATIONS = {
         expression=lambda a, p, c: f"F.pad({a[0]}, (0, {p.get('length', 0)!r}), value={p.get('mask_id', c.get('mask_id'))!r})"
     ),
     "select": Operation(
-        expression=lambda a, p, c: f"select_tokens({a[0]}, {a[1]}, mask_id={c['mask_id']!r}, step=step, steps=steps, temperature={p.get('temperature', 0)!r}, strategy={p.get('strategy', 'confidence')!r})",
+        expression=lambda a, p, c: f"select_tokens({a[0]}, {a[1]}, mask_id={p.get('mask_id', c.get('mask_id'))!r}, step=step, steps=steps, temperature={p.get('temperature', 0)!r}, strategy={p.get('strategy', 'confidence')!r})",
         helpers=("select_tokens",),
     ),
 }
@@ -320,7 +320,7 @@ class SourceGenerator:
         return self.class_names.take(base)
 
     def graph_class(self, graph, label, prefix="", config=None):
-        config = self.project["config"] if config is None else config
+        config = {**(self.project["config"] if config is None else config), **graph.get("variables", {})}
         contracts = {
             n["id"]: self.report["shapes"].get(prefix + n["id"]) for n in graph["nodes"]
         }

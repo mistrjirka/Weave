@@ -105,6 +105,8 @@ export function presentNodes(
       _role: inferRole(n.data),
       _groupLabel: n.data.share ? groups.get(n.data.share)?.label : undefined,
       _shape: report?.shapes[prefix + n.id],
+      _tokenizer:
+        report?.tokenizers?.[prefix + n.id] ?? n.data.tokenizer ?? undefined,
       _count: report?.counts[prefix + n.id],
       _error: report?.errors.some(
         (e) =>
