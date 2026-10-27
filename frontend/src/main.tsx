@@ -63,6 +63,9 @@ import {
 } from "lucide-react";
 import "@xyflow/react/dist/style.css";
 import "./style.css";
+import "./theme.css";
+import { ThemePicker } from "./ThemePicker";
+import { compilationInput } from "./compilationInput";
 import { newId, copyText, retainedPath, Dialog } from "./ui";
 import { visiblePatternField, changePattern } from "./patterns";
 import {
@@ -650,7 +653,7 @@ function ZoomReadout() {
   return (
     <button
       className="zoom-readout"
-      aria-label="Zoom to 100 percent"
+      aria-label={`Zoom to 100 percent · current ${Math.round(zoom * 100)}%`}
       title="Zoom to 100% for readable node details"
       onClick={() => flow.zoomTo(1, { duration: motion(200) })}
     >
@@ -1113,12 +1116,15 @@ function Workbench({
     try {
       localStorage.setItem("weave.project", JSON.stringify(project));
     } catch {}
+  }, [project]);
+  const compilationBody = useMemo(() => compilationInput(project), [project]);
+  useEffect(() => {
     const controller = new AbortController();
     const timer = setTimeout(() => {
       fetch("/api/code", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(project),
+        body: compilationBody,
         signal: controller.signal,
       })
         .then(responseData)
@@ -1138,7 +1144,7 @@ function Workbench({
       clearTimeout(timer);
       controller.abort();
     };
-  }, [project]);
+  }, [compilationBody]);
   useEffect(() => {
     try {
       localStorage.setItem("weave.blocks", JSON.stringify(customBlocks));
@@ -2251,6 +2257,7 @@ function Workbench({
             </button>
           </div>
           <div className="view-actions">
+            <ThemePicker />
             <button
               ref={splitButton}
               className="split-view-button"
@@ -2482,7 +2489,7 @@ function Workbench({
                         variant={BackgroundVariant.Dots}
                         gap={22}
                         size={1}
-                        color="#ced6cc"
+                        color="var(--graph-dots, #ced6cc)"
                       />
                       <Controls showInteractive={false} />
                       <MiniMap
@@ -2497,7 +2504,7 @@ function Workbench({
                             red: "#b86767",
                           })[family(n.data.kind as string)] || "#b2beb3"
                         }
-                        maskColor="rgba(247,249,245,.7)"
+                        maskColor="var(--graph-minimap-mask, rgba(247,249,245,.7))"
                         pannable
                         zoomable
                       />
@@ -2570,7 +2577,11 @@ function Workbench({
                       Copy code
                     </button>
                   </div>
-                  <pre>
+                  <pre
+                    tabIndex={0}
+                    role="region"
+                    aria-label="Generated PyTorch code"
+                  >
                     {source.split("\n").map((line, i) => (
                       <div key={i}>
                         <span className="line-number">{i + 1}</span>
@@ -2612,7 +2623,13 @@ function Workbench({
                           {r.config && (
                             <details>
                               <summary>Published configuration</summary>
-                              <pre>{JSON.stringify(r.config, null, 2)}</pre>
+                              <pre
+                                tabIndex={0}
+                                role="region"
+                                aria-label={`Configuration for ${r.title}`}
+                              >
+                                {JSON.stringify(r.config, null, 2)}
+                              </pre>
                             </details>
                           )}
                         </div>

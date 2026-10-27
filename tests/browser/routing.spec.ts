@@ -147,12 +147,21 @@ function scopes(project: Project) {
   return result;
 }
 
-for (const mobile of [false, true])
-  test(`every example and nested graph has unobstructed arrows on ${mobile ? "phone" : "desktop"}`, async ({
+for (const { mobile, dark } of [
+  { mobile: false, dark: false },
+  { mobile: true, dark: false },
+  { mobile: false, dark: true },
+  { mobile: true, dark: true },
+])
+  test(`every example and nested graph has unobstructed arrows on ${mobile ? "phone" : "desktop"}${dark ? " in dark theme" : ""}`, async ({
     page,
     request,
   }) => {
-    test.setTimeout(240000);
+    test.setTimeout(300000);
+    if (dark)
+      await page.addInitScript(() =>
+        localStorage.setItem("weave.theme", "dark"),
+      );
     await page.setViewportSize(
       mobile ? { width: 390, height: 844 } : { width: 1600, height: 1000 },
     );
@@ -183,6 +192,28 @@ for (const mobile of [false, true])
           page.getByRole("button", { name: "Auto arrange", exact: true }),
         ).toBeEnabled();
         const graph = await currentGraph(page, path);
+        if (dark) {
+          await expect(page.locator("html")).toHaveAttribute(
+            "data-theme",
+            "dark",
+          );
+          const brightCards = await page.locator(".arch-node").evaluateAll(
+            (cards) =>
+              cards.filter((card) => {
+                const color =
+                  getComputedStyle(card)
+                    .backgroundColor.match(/[\d.]+/g)
+                    ?.map(Number) || [];
+                return (
+                  color.length >= 3 && Math.min(...color.slice(0, 3)) > 100
+                );
+              }).length,
+          );
+          expect(
+            brightCards,
+            template.name + "/" + path.join("/") + " dark cards",
+          ).toBe(0);
+        }
         if (graph.edges.length)
           await expect
             .poll(() => page.locator('[data-label-visible="true"]').count())
@@ -209,7 +240,7 @@ for (const mobile of [false, true])
           });
         if (!path.length)
           await page.screenshot({
-            path: `data/routing-audit/elk-${template.id}-${mobile ? "phone" : "desktop"}.png`,
+            path: `data/routing-audit/elk-${template.id}-${mobile ? "phone" : "desktop"}${dark ? "-dark" : ""}.png`,
           });
         count++;
         for (const node of graph.nodes.filter((n) => n.data.body)) {

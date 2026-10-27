@@ -166,3 +166,11 @@ Use **New project** in the top bar to name a network and start from a blank canv
 **Your workspace** opens a browser with **Your projects** and **Reference architectures**. Saved projects appear first in the sidebar's **Projects** collection. **View reference** opens a read-only example beside your work; **Use as starting point** creates an independent editable copy. The reference pane also has **Use this example**. Viewing references does not replace your editing document.
 
 Browser tabs and creation starters survive reload and copying the URL: `?workspace=projects`, `?workspace=examples`, or `?workspace=new&starter=looped`. See the [workflow assessment and tested user journeys](PROJECT_WORKFLOW_REVIEW.md).
+
+## Color themes
+
+Choose **System**, **Light**, or **Dark** with the theme selector beside Split view. On phones it appears as a monitor, sun, or moon icon. System follows your operating-system preference; an explicit choice persists in this browser, survives reload, and synchronizes between open tabs. Theme selection does not change the graph or its shareable URL.
+
+The dark palette covers node diagrams, loops, attention patterns, graph labels, properties, validation notes, generated code, project dialogs, and the reference pane. `frontend/src/theme.css` defines the shared palette; existing light colors remain the component fallbacks. Theme initialization runs before the app loads to avoid a light flash. Browser tests cover system changes, stored preferences, unavailable storage, desktop/phone contrast, and every example scope in both themes.
+
+Code generation tracks the computational graph separately from its layout. Moving or measuring nodes, arranging nested graphs, and changing themes do not restart an in-flight compile; graph and parameter edits still regenerate code and shape diagnostics.

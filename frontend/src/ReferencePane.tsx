@@ -237,7 +237,7 @@ function ReferenceZoom() {
   const flow = useReactFlow();
   return (
     <button
-      aria-label="Reference zoom to 100 percent"
+      aria-label={`Reference zoom to 100 percent · current ${Math.round(zoom * 100)}%`}
       title="Reference zoom to 100%"
       onClick={() => flow.zoomTo(1)}
     >
@@ -555,7 +555,7 @@ function ReferenceCanvas({
               variant={BackgroundVariant.Dots}
               gap={22}
               size={1}
-              color="#ced6cc"
+              color="var(--graph-dots, #ced6cc)"
             />
             <Controls showInteractive={false} />
             <Panel position="bottom-center">

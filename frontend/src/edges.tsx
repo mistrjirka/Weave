@@ -248,7 +248,11 @@ function RoutedEdge({
   ]);
   const [hovered, setHovered] = useState(false),
     marker = "arrow-" + useId().replace(/:/g, "");
-  const color = weight ? "#8563a4" : route.detour ? "#5e7e9c" : "#6a8072";
+  const color = weight
+    ? "var(--graph-weight-edge, #8563a4)"
+    : route.detour
+      ? "var(--graph-bypass-edge, #5e7e9c)"
+      : "var(--graph-edge, #6a8072)";
   const text = weight
     ? `${typeof data?.label === "string" ? data.label : ""} · shared weights`
     : route.blocked

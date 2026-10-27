@@ -52,12 +52,12 @@ export function GraphNavigator({
       <button
         className="node-nav-current"
         data-node-id={current.id}
-        aria-label="Focus current node"
+        aria-label={`Focus current node: ${current.data.label} ${index + 1} / ${ordered.length} · follow connections`}
         onClick={() => focus(index)}
       >
         <ScanSearch size={14} />
         <span>
-          <b>{current.data.label}</b>
+          <b>{current.data.label}</b>{" "}
           <small>
             {index + 1} / {ordered.length} · follow connections
           </small>

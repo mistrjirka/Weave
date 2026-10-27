@@ -1,0 +1,154 @@
+/* Components retain their original light colors as fallbacks in style.css.
+   A shared dark palette covers surfaces, text, borders, and computation motifs. */
+:root {
+  color-scheme: light;
+}
+html[data-theme="dark"] {
+  color-scheme: dark;
+  --theme-base: #141f19;
+  --theme-raised: #1c2a22;
+  --theme-deep: #0e1912;
+  --theme-text: #e1eae2;
+  --theme-muted: #b4c5b6;
+  --theme-on-strong: #f1f7ed;
+  --theme-overlay-highlight: #ffffff;
+
+  --theme-neutral-surface: #25352b;
+  --theme-neutral-strong: #35463b;
+  --theme-neutral-visual: #9bae9d;
+  --theme-neutral-border: #475e4e;
+
+  --theme-green-surface: #22372a;
+  --theme-green-strong: #35563d;
+  --theme-green-visual: #9ac39c;
+  --theme-green-text: #c7dfba;
+  --theme-green-accent: #a4d49f;
+  --theme-green-border: #4d7055;
+  --theme-green-line: #82ad7c;
+
+  --theme-violet-surface: #30263e;
+  --theme-violet-text: #d4bfef;
+  --theme-violet-accent: #c4a2e5;
+  --theme-violet-visual: #ad88d0;
+  --theme-violet-border: #69517e;
+
+  --theme-blue-surface: #21323f;
+  --theme-blue-strong: #304b60;
+  --theme-blue-text: #b7d8f0;
+  --theme-blue-accent: #9bc7e8;
+  --theme-blue-visual: #84b0d1;
+  --theme-blue-border: #486a85;
+  --theme-blue-line: #88afd0;
+
+  --theme-amber-surface: #352d1e;
+  --theme-amber-strong: #574625;
+  --theme-amber-text: #efd299;
+  --theme-amber-accent: #dfbb73;
+  --theme-amber-visual: #c09b55;
+  --theme-amber-border: #79643e;
+  --theme-amber-line: #bda268;
+
+  --theme-coral-surface: #3a2924;
+  --theme-coral-text: #f1bba8;
+  --theme-coral-accent: #f0aa91;
+  --theme-coral-visual: #d7987f;
+  --theme-coral-border: #8b5e4f;
+  --theme-coral-line: #dc9a83;
+
+  --graph-dots: #3e5345;
+  --graph-edge: #9ab4a0;
+  --graph-bypass-edge: #9bc7e8;
+  --graph-weight-edge: #c4a2e5;
+  --graph-minimap-mask: #0e1912b3;
+}
+
+html[data-theme="dark"] .react-flow {
+  --xy-minimap-background-color: var(--theme-deep);
+  --xy-connectionline-stroke: var(--graph-edge);
+  --xy-edge-label-color: var(--theme-text);
+  --xy-edge-label-background-color: var(--theme-raised);
+  --xy-selection-background-color: #a4d49f22;
+  --xy-selection-border: 1px dashed var(--theme-green-accent);
+  --xy-controls-button-color: var(--theme-text);
+  --xy-controls-button-background-color: var(--theme-raised);
+  --xy-controls-button-background-color-hover: var(--theme-green-surface);
+  --xy-controls-button-border-color: var(--theme-neutral-border);
+}
+html[data-theme="dark"] .legend .coral {
+  background: var(--theme-coral-visual);
+}
+html[data-theme="dark"] input::placeholder,
+html[data-theme="dark"] textarea::placeholder {
+  color: var(--theme-muted);
+  opacity: 1;
+}
+.code-view pre:focus-visible,
+.references-view pre:focus-visible {
+  outline: 2px solid var(--theme-green-accent, #739660);
+  outline-offset: -2px;
+}
+
+.theme-picker {
+  position: relative;
+  display: inline-flex;
+  flex-shrink: 0;
+  color: var(--theme-green-text, #426234);
+}
+.theme-picker > svg {
+  position: absolute;
+  left: 9px;
+  top: 50%;
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+.theme-picker select {
+  width: 98px;
+  min-height: 32px;
+  border: 1px solid var(--theme-neutral-border, #dce5d3);
+  border-radius: 5px;
+  padding: 6px 8px 6px 29px;
+  appearance: none;
+  background: var(--theme-raised, #fff);
+  color: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.theme-picker option {
+  background: var(--theme-raised, #fff);
+  color: var(--theme-text, #263b30);
+  font-size: 13px;
+}
+@media (max-width: 760px) {
+  .theme-picker select {
+    width: 34px;
+    padding: 6px 0;
+    color: transparent;
+    font-size: 16px;
+  }
+  .theme-picker select:focus-visible {
+    outline: 2px solid var(--theme-green-accent, #739660);
+  }
+}
+@media (max-width: 600px) {
+  .split-view-button span {
+    display: none;
+  }
+  .split-view-button {
+    min-width: 34px;
+  }
+}
+@media (max-width: 380px) {
+  .tokenizer-chip {
+    font-size: 0;
+    width: 34px;
+    min-width: 34px;
+    padding: 7px;
+    gap: 0;
+  }
+  .tokenizer-chip > svg:last-child {
+    display: none;
+  }
+  .view-tabs {
+    gap: 4px;
+  }
+}
