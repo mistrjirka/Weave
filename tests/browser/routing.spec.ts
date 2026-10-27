@@ -1,4 +1,9 @@
 import { openExample } from "./helpers";
+import {
+  cardStyleViolations,
+  collectCardSamples,
+  saveCardGallery,
+} from "./cardStyles";
 import { test, expect } from "@playwright/test";
 import type { Page } from "@playwright/test";
 import type { Graph, Project, GraphNode } from "../../frontend/src/types";
@@ -181,6 +186,7 @@ for (const { mobile, theme } of [
       .getByRole("button", { name: "Show edge labels", exact: true })
       .click();
     let count = 0;
+    const cardSamples = new Map<string, string>();
     for (const template of templates) {
       await openExample(page, template.name);
       // Traverse by clicking each scope, checking all authored variants including every Needle layer.
@@ -195,6 +201,12 @@ for (const { mobile, theme } of [
           page.getByRole("button", { name: "Auto arrange", exact: true }),
         ).toBeEnabled();
         const graph = await currentGraph(page, path);
+        await expect
+          .poll(() => cardStyleViolations(page), {
+            message: `Card spacing: ${template.name}/${path.join("/")}`,
+          })
+          .toEqual([]);
+        await collectCardSamples(page, cardSamples);
         if (theme !== "light") {
           await expect(page.locator("html")).toHaveAttribute(
             "data-theme",
@@ -256,6 +268,11 @@ for (const { mobile, theme } of [
     }
     expect(count).toBe(templates.reduce((sum, p) => sum + scopes(p).length, 0));
     expect(errors).toEqual([]);
+    await saveCardGallery(
+      page,
+      cardSamples,
+      `${theme}-${mobile ? "phone" : "desktop"}`,
+    );
   });
 
 test("phone navigation stays readable and its controls do not cover the focused block", async ({

@@ -319,7 +319,7 @@ function Diagram({
             )
             .slice(0, 3)
             .map((n: GraphNode, i: number) => (
-              <React.Fragment key={n.id}>
+              <span className="loop-stage" key={n.id}>
                 {i > 0 && <ArrowRight size={13} />}
                 <span className={"mini-block " + family(n.data.kind)}>
                   {n.data.kind === "block"
@@ -334,7 +334,7 @@ function Diagram({
                             ? "SwiGLU"
                             : n.data.label.slice(0, 12)}
                 </span>
-              </React.Fragment>
+              </span>
             ))}
         </div>
         <svg className="return-path" viewBox="0 0 280 30">
@@ -622,7 +622,9 @@ function ArchitectureNode({ id, data, selected }: NodeProps<DisplayNode>) {
           )}
         </div>
       )}
-      <Diagram kind={kind} p={p} body={data.body} role={role} />
+      <div className="node-body">
+        <Diagram kind={kind} p={p} body={data.body} role={role} />
+      </div>
       <div className="node-footer">
         <code>
           {shape

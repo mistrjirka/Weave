@@ -55,6 +55,7 @@ function TransformerMotif({ body }: { body: Graph }) {
   const residual = body.nodes.some((n) =>
     ["add", "gate"].includes(n.data.kind),
   );
+  const visibleStages = stages.slice(0, 5);
   return (
     <div className="transformer-motif">
       {residual && (
@@ -63,19 +64,22 @@ function TransformerMotif({ body }: { body: Graph }) {
         </div>
       )}
       <div className="transformer-stages">
-        {stages.slice(0, 5).map((n, i) => (
-          <Fragment key={n.id}>
+        {visibleStages.map((n, i) => (
+          <span className="transformer-step" key={n.id}>
             {i > 0 && <ArrowRight size={12} />}
             <span
               className={
-                n.data.kind.includes("attention") ? "attention-stage" : ""
+                "transformer-stage " +
+                (n.data.kind.includes("attention") ? "attention-stage" : "")
               }
             >
               {stageLabels[n.data.kind]}
             </span>
-          </Fragment>
+            {residual && i === visibleStages.length - 1 && (
+              <b className="transformer-sum">+</b>
+            )}
+          </span>
         ))}
-        {residual && <b>+</b>}
       </div>
       <small>
         {stages.length > 5 ? `${stages.length} stages · ` : ""}
