@@ -4719,3 +4719,33 @@ textarea:focus-visible {
     left: auto;
   }
 }
+
+.moe-preview {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 3px;
+  font-size: 10px;
+}
+.moe-preview > span:first-child,
+.moe-preview > span:nth-last-child(2),
+.moe-experts i {
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 4px;
+  font-style: normal;
+}
+.moe-experts {
+  display: grid;
+  gap: 3px;
+}
+.moe-paths {
+  line-height: 0.8;
+  opacity: 0.7;
+}
+.moe-preview small {
+  width: 100%;
+  text-align: center;
+  margin-top: 5px;
+}

@@ -9,6 +9,53 @@ except ImportError:
     from sparse_runtime import AttentionPattern,as_pattern,attend
 
 
+class SparseMoE(nn.Module):
+    """Top-k per-token routing through independently editable expert modules."""
+    def __init__(self, width, experts, top_k, balance_weight):
+        super().__init__()
+        self.router = nn.Linear(width, len(experts), bias=False)
+        self.experts = nn.ModuleList(experts)
+        self.top_k = top_k
+        self.balance_weight = balance_weight
+        self.aux_losses = []
+
+    def forward(self, x):
+        shape = x.shape
+        tokens = x.reshape(-1, shape[-1])
+        probabilities = self.router(tokens).float().softmax(dim=-1)
+        weights, indices = probabilities.topk(self.top_k, dim=-1)
+        if self.top_k > 1:
+            weights = weights / weights.sum(dim=-1, keepdim=True)
+        result = torch.zeros_like(tokens)
+        for index, expert in enumerate(self.experts):
+            token_index, slot = torch.where(indices == index)
+            if token_index.numel() == 0:
+                continue
+            selected = tokens[token_index].unsqueeze(0)
+            output = expert(selected).squeeze(0)
+            gate = weights[token_index, slot].to(output.dtype).unsqueeze(-1)
+            result = result.index_add(0, token_index, output * gate)
+        if self.training and self.balance_weight:
+            assignments = F.one_hot(indices, num_classes=len(self.experts)).float().mean(dim=(0, 1))
+            balance = len(self.experts) * (assignments * probabilities.mean(dim=0)).sum()
+            self.aux_losses.append(balance * self.balance_weight)
+        return result.reshape(shape)
+
+
+def clear_moe_losses(model):
+    for module in model.modules():
+        if isinstance(module, SparseMoE):
+            module.aux_losses.clear()
+
+
+def moe_auxiliary_loss(model):
+    losses = [loss for module in model.modules() if isinstance(module, SparseMoE) for loss in module.aux_losses]
+    if losses:
+        return torch.stack(losses).sum()
+    parameter = next(model.parameters(), None)
+    return parameter.new_zeros(()) if parameter is not None else torch.tensor(0.)
+
+
 class Attention(nn.Module):
     def __init__(self, width, heads, kv_heads, head_dim=None, value_dim=None,
                  causal=True, window=0, rope=True, theta=10000., qk_norm=False, gated=False, conv_taps=0,backend='dense'):

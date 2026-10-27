@@ -89,6 +89,41 @@ def explicit_looped():
     return g
 
 
+
+def expert_graph():
+    return {'nodes':[
+        node('input','input','Expert input',0,120,{'index':0,'shape':['B','T','$width'],'dtype':'float32'}),
+        node('ffn','ffn','Expert feed-forward',300,120,{'hidden':'$ffn_width'}),
+        node('output','output','Expert output',600,120),
+    ], 'edges':[edge('input','ffn'),edge('ffn','output')]}
+
+
+def moe_body(experts=4):
+    nodes=[node('input','input','Token features',0,180,{'index':0,'shape':['B','T','$width'],'dtype':'float32'}),
+           node('router','moe_router','Token router',320,0,{'experts':experts}),
+           node('combine','moe_combine','Weighted combine',1100,180,{'experts':experts}),
+           node('output','output','Mixed features',1400,180)]
+    edges=[edge('input','router'),edge('router','combine'),edge('combine','output')]
+    for index in range(experts):
+        expert_id=f'expert_{index+1}'
+        nodes.append(node(expert_id,'block',f'Expert {index+1}',700,index*230,{},expert_graph(),role='moe-expert'))
+        edges.extend([edge('input',expert_id),edge(expert_id,'combine',f'e{index}')])
+    return {'nodes':nodes,'edges':edges}
+
+
+def moe_transformer():
+    body=transformer(kv=2)
+    ffn=next(n for n in body['nodes'] if n['id']=='ffn')
+    ffn['data']={'kind':'moe','label':'Mixture of experts','params':{'experts':4,'top_k':2,'balance_weight':0.01},'body':moe_body(),'role':'moe'}
+    return language_model(body, layers=2)
+
+
+def embedding_example():
+    return {'nodes':[node('ids','input','Token IDs',0,120,{'index':0,'shape':['B','T'],'dtype':'int64'}),
+                     node('embedding','embedding','Embedding table',320,120,{'width':'$width','vocab':'$vocab'}),
+                     node('output','output','Token vectors',640,120)],
+            'edges':[edge('ids','embedding'),edge('embedding','output')]}
+
 def sparse_transformer():
     g=language_model();body=g['nodes'][2]['data']['body']
     body['nodes'].extend([node('local','attention_pattern','Local attention window',0,500,{'pattern':'local','window':32,'causal':False}),node('global','attention_pattern','Global anchor tokens',0,800,{'pattern':'global','global_tokens':[0],'global_stride':0,'causal':False}),node('combine','pattern_union','Local ∪ global attention',320,600)])
@@ -149,5 +184,7 @@ def templates():
         items.append(project(f'needle{version}',f'Needle {version}',f'{layers} layers · {heads}/{kv} GQA · Engram memory · 4 residual lanes.',g,config={'width':width,'heads':heads,'ffn_width':width*2,'vocab':8192,'mask_id':3},references=[{'title':f'Needle {version} published configuration','url':f'https://huggingface.co/Cactus-Compute/needle{version}/tree/{rev}','revision':rev,'config':conf,'notes':'Published backbone settings with a float32 PyTorch port of Engram, learned Monarch mixing and mHC routing. Exports contain random weights, not checkpoint conversion. Quantization, padding-aware masks, auxiliary probe heads and trained ladder subnetworks are not reproduced.'},{'title':'Upstream architecture source','url':'https://github.com/cactus-compute/needle/blob/b4fc11b04f1852888d375c8c6dfbaca44572d014/needle/model/architecture.py','revision':'b4fc11b04f1852888d375c8c6dfbaca44572d014','notes':'Needle 2 uses its published configuration with the current shared SAN building blocks; historical checkpoint parity is not asserted.'}]))
     items.append(project('thimble','Thimble','Deep-thin gated transformer · sandwich RMSNorm · GQA 8/4 · tied embeddings.',language_model(transformer(sandwich=True,kv=4),20),config={'width':448,'heads':8,'ffn_width':896,'vocab':16384,'mask_id':3},references=[{'title':'Thimble PyTorch trunk','url':'https://github.com/nikshepsvn/thimble/blob/bb7d5768651d525516f3647d551005a4411845af/src/tiny_toolcall/model.py','revision':'bb7d5768651d525516f3647d551005a4411845af','notes':'Trunk computation reproduced with editable primitives. Grammar dispatcher, retrieval and auxiliary name/pointer heads are outside this trunk graph. Release vocabulary is 16K; source Config defaults to 8192.'}]))
     items.append(project('sparse','Sparse attention composition','Causal attention with a union of local windows and global anchor tokens. Patterns are editable graph nodes.',sparse_transformer()))
+    items.append(project('embedding-table','Embedding table','Token IDs index a learned table of vectors.',embedding_example()))
+    items.append(project('moe-transformer','MoE transformer','A decoder transformer with four editable experts and top-2 token routing.',moe_transformer(),references=[{'title':'Switch Transformer: top-1 routing and balancing','url':'https://arxiv.org/abs/2101.03961'},{'title':'Training MoEs at Scale with PyTorch','url':'https://pytorch.org/blog/training-moes/'}]))
     items.append(project('blank','Blank project','Start with token input and build your own architecture.',{'nodes':[node('ids','input','Token IDs',80,150,{'index':0,'shape':['B','T'],'dtype':'int64'}),node('out','output','Output',700,150)],'edges':[]}))
     return items

@@ -10,7 +10,7 @@ from functools import lru_cache
 import black
 from .core import params, validate_project, ordered
 from .tokenizer_bindings import bind_input_tokenizers, input_tokenizers
-from .codegen import SourceGenerator
+from .codegen import SourceGenerator, has_moe
 
 
 @lru_cache(maxsize=8)
@@ -101,6 +101,20 @@ def compile_project(project):
         + ')\nprint(output.shape if hasattr(output, "shape") else [v.shape for v in output])\n',
         mode=black.Mode(line_length=88),
     )
+    if (
+        has_moe(project["graph"])
+        and len(report["outputs"]) == 1
+        and report["outputs"][0]
+        and report["outputs"][0]["dtype"] == "float32"
+    ):
+        files["train_example.py"] = black.format_str(
+            "import torch\nfrom model import Model\nfrom runtime import moe_auxiliary_loss\n\n"
+            + "\n".join(declarations)
+            + "\n\nmodel = Model().train()\noptimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)\noptimizer.zero_grad(set_to_none=True)\noutput = model("
+            + ", ".join(arguments)
+            + ")\n# Replace this placeholder with your task loss and real training data.\ntask_loss = output.float().square().mean()\nloss = task_loss + moe_auxiliary_loss(model)\nloss.backward()\noptimizer.step()\nprint('loss:', loss.item())\n",
+            mode=black.Mode(line_length=88),
+        )
     configured = input_tokenizers(document)
     if not configured and document.get("tokenizer"):
         configured = {
@@ -143,6 +157,10 @@ def load_tokenizer(input_node=None):
         + json.dumps(project.get("references", []), indent=2)
         + "\n"
     )
+    if has_moe(project["graph"]):
+        files[
+            "README.md"
+        ] += "\n## Mixture of experts\n\nWhen present, `train_example.py` demonstrates adding `moe_auxiliary_loss(model)` to a placeholder task loss. Set the balancing weight to zero to disable it. Experts receive selected tokens packed into a single sequence; token-mixing operations inside an expert therefore do not see the original sequences. Routing has no capacity limit or distributed optimization.\n"
     root = Path(__file__).parent.parent
     files["THIRD_PARTY_NOTICES.md"] = (root / "THIRD_PARTY_NOTICES.md").read_text()
     for filename in ("needle_LICENSE", "thimble_LICENSE"):

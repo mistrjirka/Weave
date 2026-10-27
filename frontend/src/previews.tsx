@@ -47,6 +47,7 @@ const stageLabels: Record<string, string> = {
   linear: "Linear",
   block: "Block",
   loop: "Loop",
+  moe: "MoE",
 };
 function TransformerMotif({ body }: { body: Graph }) {
   const stages = body.nodes.filter((n) =>
@@ -209,7 +210,40 @@ const predictor: Renderer = ({ body }) => (
     <b>Editable neural graph</b>
   </div>
 );
+const moe: Renderer = ({ p }) => (
+  <div
+    className="moe-preview"
+    role="img"
+    aria-label={`${p.top_k} of ${p.experts} experts selected for each token`}
+  >
+    <span>Router</span>
+    <span className="moe-paths">
+      ↗<br />→<br />↘
+    </span>
+    <span className="moe-experts">
+      <i>Expert</i>
+      <i>Expert</i>
+      <i>Expert</i>
+    </span>
+    <span className="moe-paths">
+      ↘<br />→<br />↗
+    </span>
+    <span>Combine</span>
+    <small>
+      {String(p.top_k)} of {String(p.experts)} experts per token
+    </small>
+  </div>
+);
+const router: Renderer = () => (
+  <div className="adapter-preview">Token features → routing scores</div>
+);
+const weightedCombine: Renderer = () => (
+  <div className="adapter-preview">Selected expert outputs → weighted sum</div>
+);
 const kinds: Record<string, Renderer> = {
+  moe,
+  moe_router: router,
+  moe_combine: weightedCombine,
   attention_pattern: pattern,
   pattern_union: combine,
   pattern_intersection: combine,
@@ -218,6 +252,8 @@ const roles: Record<string, Renderer> = {
   denoising,
   transformer,
   adapter,
+  "moe-expert": adapter,
+  "moe-shared-expert": adapter,
   predictor,
 };
 export function renderPreview(props: PreviewProps): ReactNode {

@@ -200,3 +200,11 @@ Split view has one active property selection. Selecting a reference block clears
 Graph cards share a content gutter (`--node-inset` and `.node-body`) across their headers, previews, weight badges, and footers. Diagram components handle their internal layout without adding a second horizontal gutter. Loop and transformer stages wrap as connected groups; long labels remain inside the card. Browser walkthroughs check card bounds in every example scope alongside edge routing. `tests/browser/cards.spec.ts` also exercises every library entry, validation badges, and long denoising labels on phones; review galleries are written under `data/card-gallery-*.png`.
 
 Run `npm run test:controls` to check typed weight groups and attention preset edits, including validation, exported PyTorch execution, gradients, and parameter counts for all five presets.
+
+### Mixture of experts
+
+The **MoE transformer** example replaces a transformer feed-forward layer with token routing. Open the Mixture of experts block to see its router, expert blocks and weighted combine; open an expert to edit its graph. The outer block controls expert count, top-k and the optional balancing-loss weight. New experts are independent copies. The fixed routing scaffold must stay connected as shown, while expert bodies can be edited.
+
+For an always-on shared expert, add an **Always-on expert** block on a parallel branch from the same input and use an Add node to combine it with the MoE output. This is an ordinary editable graph branch. It is shared across tokens; use parameter groups separately if you want to share weights between layers.
+
+For graphs with one floating-point output, the exported `train_example.py` demonstrates adding `moe_auxiliary_loss(model)` to a task loss. The placeholder loss and input must be replaced with training data and an appropriate objective. Selected tokens are packed into a single sequence for each expert, so attention or other token-mixing layers in an expert can mix unrelated sequences and lose original positions. The implementation does not impose expert capacity limits or provide distributed routing.

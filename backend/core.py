@@ -29,7 +29,7 @@ PORTS = {
     'multiply': ['a', 'b'], 'concat': ['a', 'b'], 'attention': ['a','b'],
     'cross_attention': ['a', 'b','c'], 'ffn': ['a'], 'ngram': ['a'],
     'lookup': ['a'], 'mask': ['a'], 'select': ['a', 'b'],
-    'loop': ['a'], 'block': ['a'], 'custom': ['a'], 'reference': ['a'],
+    'loop': ['a'], 'block': ['a'], 'moe': ['a'], 'moe_router': ['a'], 'moe_combine': ['a'], 'custom': ['a'], 'reference': ['a'],
     'gate': ['a', 'b'], 'scale': ['a'], 'hadamard': ['a'],
     'mhc': ['a'], 'engram': ['a', 'b'], 'head': ['a'],
     'lane_expand':['a'], 'lane_reduce':['a'], 'routing':['a'],
@@ -101,6 +101,9 @@ def graph_context(project, path):
 
 def port_names(node):
     d = node['data']
+    if d['kind']=='moe_combine':
+        count=d.get('params',{}).get('experts',0)
+        return ['a'] + [f'e{i}' for i in range(count)] if type(count) is int and 0 <= count <= 256 else ['a']
     if d['kind']=='custom' and d.get('params',{}).get('input_shapes'):
         return [chr(97+i) for i in range(len(d['params']['input_shapes']))]
     if d['kind'] in ('block', 'loop') and d.get('body'):
@@ -129,6 +132,34 @@ def ordered(graph):
     return result
 
 
+
+def moe_structure(node, settings):
+    """Validate the editable routing scaffold used by the sparse dispatcher."""
+    body=node['data'].get('body')
+    if not body: raise ValueError('MoE needs an editable expert graph.')
+    nodes=body.get('nodes',[])
+    def one(kind):
+        matches=[item for item in nodes if item['data'].get('kind')==kind]
+        if len(matches)!=1: raise ValueError(f'MoE needs exactly one {kind.replace("_", " ")} node.')
+        return matches[0]
+    source,router,combine,output=(one(kind) for kind in ('input','moe_router','moe_combine','output'))
+    experts=[n for n in nodes if n['data'].get('role')=='moe-expert']
+    count=settings.get('experts')
+    if type(count) is not int or not 1<=count<=256: raise ValueError('Expert count must be an integer between 1 and 256.')
+    if len(experts)!=count or len(nodes)!=count+4 or any(n['data'].get('kind')!='block' or not n['data'].get('body') for n in experts):
+        raise ValueError('The MoE graph must contain exactly its configured editable expert blocks. Change the expert count on the outer MoE block.')
+    if router['data'].get('params',{}).get('experts')!=count or combine['data'].get('params',{}).get('experts')!=count:
+        raise ValueError('Router and combine expert counts must match the MoE container.')
+    expected={(source['id'],router['id'],'a'),(router['id'],combine['id'],'a'),(combine['id'],output['id'],'a')}
+    for index, expert in enumerate(experts):
+        expected.add((source['id'],expert['id'],'a'))
+        expected.add((expert['id'],combine['id'],f'e{index}'))
+    edges=body.get('edges',[])
+    actual=[(e.get('source'),e.get('target'),e.get('targetHandle') or 'a') for e in edges]
+    if len(actual)!=len(expected) or set(actual)!=expected:
+        raise ValueError('Connect the router and every expert to the weighted combine as shown in the MoE scaffold; edit expert internals inside each expert block.')
+    return router, experts
+
 def validate_project(project):
     project, token_domains, binding_errors = bind_input_tokenizers(project, ordered)
     errors, warnings, shapes, counts, raw_counts = binding_errors, [], {}, {}, {}
@@ -143,7 +174,7 @@ def validate_project(project):
     if tok and cfg.get('vocab', 0) < tok.get('capacity', 0):
         errors.append({'node': None, 'message': f"Tokenizer needs {tok['capacity']} embedding rows; vocabulary capacity is {cfg.get('vocab')} ."})
 
-    def visit(graph, inputs=None, prefix='', config=None):
+    def visit(graph, inputs=None, prefix='', config=None, moe_body=False):
         cfg={**(config if config is not None else project.get('config',{})), **graph.get('variables', {})}
         local = {}
         total = 0
@@ -200,6 +231,43 @@ def validate_project(project):
                     pass
                 elif kind == 'output':
                     out = x; outputs.append((p.get('index', 0), out))
+                elif kind == 'moe':
+                    if x['dtype'] != 'float32' or len(x['shape']) != 3 or type(x['shape'][-1]) is not int:
+                        raise ValueError('MoE expects float features [B, T, D] with a known width.')
+                    router, experts = moe_structure(n,p)
+                    top_k=p.get('top_k',2); weight=p.get('balance_weight',0.01)
+                    if type(top_k) is not int or not 1<=top_k<=len(experts):
+                        raise ValueError(f'top k must be between 1 and {len(experts)} experts.')
+                    if not isinstance(weight,(int,float)) or isinstance(weight,bool) or not math.isfinite(weight) or weight<0:
+                        raise ValueError('Balance weight must be a finite non-negative number.')
+                    def warn_token_mixing(graph, prefix):
+                        for child in graph.get('nodes', []):
+                            child_data = child['data']
+                            child_key = prefix + child['id']
+                            if child_data.get('kind') in ('attention', 'cross_attention', 'sdpa', 'causal_conv', 'ngram', 'engram_hash', 'engram_lookup'):
+                                warnings.append({'node': child_key, 'message': 'Expert routing packs selected tokens into one sequence. This operation may mix tokens from different original sequences or lose their positions; use token-wise layers unless this is intended.'})
+                            if child_data.get('body'):
+                                warn_token_mixing(child_data['body'], child_key + '/')
+                    for expert in experts:
+                        warn_token_mixing(expert['data']['body'], key + '/' + expert['id'] + '/')
+                    nested, count = visit(d['body'], args, key + '/', {**cfg,**p}, True)
+                    if len(nested)!=1 or nested[0]!=x:
+                        raise ValueError(f'Each expert and the combined output must preserve the input shape and dtype: {x}.')
+                    out=nested[0]
+                elif kind == 'moe_router':
+                    if not moe_body: raise ValueError('A token router belongs inside an MoE container.')
+                    dim=x['shape'][-1]; count_experts=p.get('experts')
+                    if x['dtype']!='float32' or len(x['shape'])!=3 or type(dim) is not int or type(count_experts) is not int or count_experts<1:
+                        raise ValueError('Router expects [B, T, D] float features and a positive expert count.')
+                    out={'shape':x['shape'][:-1]+[count_experts],'dtype':'float32'}
+                    count=dim*count_experts
+                elif kind == 'moe_combine':
+                    if not moe_body: raise ValueError('A weighted expert combine belongs inside an MoE container.')
+                    if not args[1:] or any(arg != args[1] for arg in args[1:]):
+                        raise ValueError('All experts must return matching shapes and dtypes.')
+                    out=args[1]
+                    if out['dtype']!='float32' or x['dtype']!='float32' or x['shape'][:-1]!=out['shape'][:-1] or x['shape'][-1]!=len(args)-1:
+                        raise ValueError('Routing scores and expert outputs must agree on token and expert dimensions.')
                 elif kind in ('block', 'loop'):
                     if not d.get('body'):
                         raise ValueError('Container has no internal graph.')

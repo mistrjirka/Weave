@@ -15,7 +15,7 @@ import re
 import unicodedata
 from collections.abc import Callable
 
-from .core import definition_signature, ordered, params, port_names
+from .core import definition_signature, ordered, params, port_names, moe_structure
 
 MODULE_NAMES = {
     "forward",
@@ -281,6 +281,14 @@ def needs_schedule(graph):
     )
 
 
+def has_moe(graph):
+    return any(
+        n["data"]["kind"] == "moe"
+        or (n["data"].get("body") and has_moe(n["data"]["body"]))
+        for n in graph["nodes"]
+    )
+
+
 def has_shared_modules(graph):
     return any(
         n["data"].get("share")
@@ -300,7 +308,16 @@ class SourceGenerator:
         }
         self.imported_names = imported_names
         self.class_names = Names(
-            imported_names | {"Model", "CustomBlock", "torch", "nn", "F"}
+            imported_names
+            | {
+                "Model",
+                "CustomBlock",
+                "SparseMoE",
+                "clear_moe_losses",
+                "torch",
+                "nn",
+                "F",
+            }
         )
         self.classes = []
         self.cache = {}
@@ -320,7 +337,10 @@ class SourceGenerator:
         return self.class_names.take(base)
 
     def graph_class(self, graph, label, prefix="", config=None):
-        config = {**(self.project["config"] if config is None else config), **graph.get("variables", {})}
+        config = {
+            **(self.project["config"] if config is None else config),
+            **graph.get("variables", {}),
+        }
         contracts = {
             n["id"]: self.report["shapes"].get(prefix + n["id"]) for n in graph["nodes"]
         }
@@ -365,6 +385,9 @@ class SourceGenerator:
         if needs_schedule(graph):
             parameters.extend(["*", "step=0", "steps=1"])
         forward = []
+        if not prefix and has_moe(graph):
+            self.imports["runtime"].add("clear_moe_losses")
+            forward.append("clear_moe_losses(self)")
         returns = []
         attributes = {}
         for node in sequence:
@@ -389,7 +412,12 @@ class SourceGenerator:
             if kind == "output":
                 returns.append((p.get("index", 0), args[0]))
                 continue
-            if kind in ("block", "loop"):
+            if kind == "moe":
+                source = edges["a"]["source"]
+                width = contracts[source]["shape"][-1]
+                nested = self.moe_class(node, prefix, config, width)
+                constructor = nested + ("(shared_modules)" if self.shared else "()")
+            elif kind in ("block", "loop"):
                 body = data["body"]
                 nested = self.graph_class(
                     body,
@@ -498,6 +526,52 @@ class SourceGenerator:
         )
         self.classes.append(source)
         return class_name
+
+    def moe_class(self, node, prefix, config, width):
+        settings = params(node, config)
+        _, experts = moe_structure(node, settings)
+        body = node["data"]["body"]
+        scope = {**config, **settings, **body.get("variables", {})}
+        name = self.class_name(node["data"].get("label", "Mixture of experts"))
+        init = ["super().__init__()"]
+        if self.shared:
+            init.append(
+                "shared_modules = {} if shared_modules is None else shared_modules"
+            )
+        attributes = []
+        for index, expert in enumerate(experts):
+            expert_name = f"expert_{index + 1}"
+            nested = self.graph_class(
+                expert["data"]["body"],
+                expert["data"].get("label", expert_name),
+                prefix + node["id"] + "/" + expert["id"] + "/",
+                {**scope, **params(expert, scope)},
+            )
+            constructor = nested + ("(shared_modules)" if self.shared else "()")
+            share = expert["data"].get("share")
+            if share:
+                init.extend(
+                    [
+                        f"if {share!r} not in shared_modules:",
+                        f"    shared_modules[{share!r}] = {constructor}",
+                        f"{expert_name} = shared_modules[{share!r}]",
+                    ]
+                )
+            else:
+                init.append(f"{expert_name} = {constructor}")
+            attributes.append(expert_name)
+        init.append(
+            f"self.routing = SparseMoE(width={width!r}, experts=[{', '.join(attributes)}], top_k={settings.get('top_k', 2)!r}, balance_weight={settings.get('balance_weight', 0.01)!r})"
+        )
+        self.imports["runtime"].add("SparseMoE")
+        signature = "self, shared_modules=None" if self.shared else "self"
+        source = (
+            f"class {name}(nn.Module):\n    def __init__({signature}):\n"
+            + "\n".join("        " + line for line in init)
+        )
+        source += "\n\n    def forward(self, x):\n        return self.routing(x)"
+        self.classes.append(source)
+        return name
 
     def add_module(self, lines, name, constructor, share):
         if share:

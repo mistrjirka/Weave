@@ -2,6 +2,22 @@ import { patternDefinitions, patternDefaults } from "./patterns";
 import type { CatalogEntry } from "./types";
 export const catalog: CatalogEntry[] = [
   {
+    kind: "moe",
+    label: "Mixture of experts",
+    description: "Top-k token routing through editable experts",
+    category: "Composition",
+    params: { experts: 4, top_k: 2, balance_weight: 0.01 },
+    role: "moe",
+  },
+  {
+    kind: "block",
+    label: "Always-on expert",
+    description: "An editable shared expert for a parallel branch",
+    category: "Composition",
+    params: {},
+    role: "moe-shared-expert",
+  },
+  {
     kind: "loop",
     label: "Looped transformer",
     description:

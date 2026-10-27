@@ -560,13 +560,18 @@ function ArchitectureNode({ id, data, selected }: NodeProps<DisplayNode>) {
   const kind = data.kind;
   const Icon = icons[kind] || Shapes;
   const p = data._previewParams ?? data.params;
-  const expanded = ["loop", "block"].includes(kind);
+  const expanded = ["loop", "block", "moe"].includes(kind);
   const role = data._role || inferRole(data);
   const color = role === "denoising" ? "coral" : family(kind);
   const shape = data._shape;
   return (
     <div
       className={`arch-node ${color} role-${role} ${expanded ? "container-node" : ""} ${selected || data._focused ? "selected" : ""} ${data._error ? "has-error" : ""}`}
+      style={
+        kind === "moe_combine"
+          ? { minHeight: 105 + data._ports.length * 28 }
+          : undefined
+      }
       data-visual-role={role}
       aria-label={`${data.label} node`}
     >
@@ -683,7 +688,8 @@ function ArchitectureNode({ id, data, selected }: NodeProps<DisplayNode>) {
             data._open(id);
           }}
         >
-          Open {kind === "loop" ? "loop body" : "block"}
+          Open{" "}
+          {kind === "loop" ? "loop body" : kind === "moe" ? "experts" : "block"}
           <ArrowUpRight size={14} />
         </button>
       )}
@@ -1527,6 +1533,70 @@ function Workbench({
       throw new Error("The transformer block definition is unavailable");
     return copy(body);
   }
+  function moeBody(): Graph {
+    const loop = templates
+      .find((t) => t.id === "moe-transformer")
+      ?.graph.nodes.find((n) => n.data.kind === "loop");
+    const body = loop?.data.body?.nodes.find((n) => n.data.kind === "moe")?.data
+      .body;
+    if (!body)
+      throw new Error("The mixture of experts definition is unavailable");
+    return copy(body);
+  }
+  function resizeExperts(data: NodeData, value: JsonValue) {
+    if (
+      typeof value !== "number" ||
+      !Number.isInteger(value) ||
+      value < 1 ||
+      value > 256
+    )
+      throw new Error("Expert count must be an integer between 1 and 256.");
+    const body = data.body;
+    if (!body) throw new Error("The MoE graph is missing.");
+    const input = body.nodes.find((n) => n.data.kind === "input");
+    const router = body.nodes.find((n) => n.data.kind === "moe_router");
+    const combine = body.nodes.find((n) => n.data.kind === "moe_combine");
+    const experts = body.nodes.filter((n) => n.data.role === "moe-expert");
+    if (!input || !router || !combine || !experts.length)
+      throw new Error("The MoE scaffold is incomplete.");
+    for (const expert of experts.slice(value)) {
+      body.nodes = body.nodes.filter((n) => n.id !== expert.id);
+      body.edges = body.edges.filter(
+        (edge) => edge.source !== expert.id && edge.target !== expert.id,
+      );
+    }
+    for (let i = experts.length; i < value; i++) {
+      const expert = copy(experts[0]);
+      makeIndependent(expert);
+      expert.id = uid();
+      expert.data.label = `Expert ${i + 1}`;
+      expert.position = { x: experts[0].position.x, y: i * 230 };
+      body.nodes.push(expert);
+      body.edges.push(
+        {
+          id: uid(),
+          source: input.id,
+          target: expert.id,
+          sourceHandle: "out",
+          targetHandle: "a",
+          type: "smoothstep",
+        },
+        {
+          id: uid(),
+          source: expert.id,
+          target: combine.id,
+          sourceHandle: "out",
+          targetHandle: `e${i}`,
+          type: "smoothstep",
+        },
+      );
+    }
+    router.data.params.experts = value;
+    combine.data.params.experts = value;
+    data.params.experts = value;
+    if (typeof data.params.top_k === "number" && data.params.top_k > value)
+      data.params.top_k = value;
+  }
   function addNode(
     entry: CatalogEntry,
     screenPosition?: { x: number; y: number },
@@ -1573,6 +1643,13 @@ function Workbench({
           },
         ],
       };
+    }
+    if (kind === "moe") body = moeBody();
+    if (entry.role === "moe-shared-expert") {
+      const expert = moeBody().nodes.find((n) => n.data.role === "moe-expert")
+        ?.data.body;
+      if (!expert) throw new Error("Expert definition is unavailable");
+      body = copy(expert);
     }
     if (entry.role === "transformer") body = transformerBody();
     if (entry.role === "adapter") body = adapterBody();
@@ -3412,6 +3489,12 @@ function Workbench({
                     .filter(
                       ([k]) =>
                         k !== "source" &&
+                        !(
+                          k === "experts" &&
+                          ["moe_router", "moe_combine"].includes(
+                            selected.data.kind,
+                          )
+                        ) &&
                         (selected.data.kind !== "attention_pattern" ||
                           visiblePatternField(selected.data.params, k)) &&
                         (!selected.data.iteration ||
@@ -3424,6 +3507,10 @@ function Workbench({
                           value={v ?? null}
                           onChange={(next) =>
                             updateNode((n) => {
+                              if (n.data.kind === "moe" && k === "experts") {
+                                resizeExperts(n.data, next);
+                                return;
+                              }
                               if (
                                 transformer &&
                                 transformerSettingKeys.has(k)
@@ -3452,6 +3539,22 @@ function Workbench({
                         )}
                       </React.Fragment>
                     ))}
+                  {selected.data.kind === "moe" && (
+                    <p className="field-help">
+                      Open experts to edit their individual graphs. The router
+                      selects tokens and the combine sums their weighted
+                      outputs. Expert count is a fixed integer; other settings
+                      can use variables.
+                    </p>
+                  )}
+                  {["moe_router", "moe_combine"].includes(
+                    selected.data.kind,
+                  ) && (
+                    <p className="field-help">
+                      Expert count is controlled by the outer Mixture of experts
+                      block. Edit the graph inside each expert.
+                    </p>
+                  )}
                   {selected.data.kind === "attention_pattern" && (
                     <p className="field-help">
                       Connect features to a, and optionally key features to b.

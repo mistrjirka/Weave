@@ -61,6 +61,21 @@ export function optionalPorts(n: GraphNode) {
   );
 }
 export function nodePorts(n: GraphNode) {
+  if (n.data.kind === "moe_combine") {
+    const count = n.data.params.experts;
+    return [
+      "a",
+      ...Array.from(
+        {
+          length:
+            typeof count === "number" && Number.isInteger(count)
+              ? Math.max(0, Math.min(256, count))
+              : 0,
+        },
+        (_, i) => `e${i}`,
+      ),
+    ];
+  }
   return n.data.kind === "custom" && n.data.params?.input_shapes?.length
     ? n.data.params.input_shapes.map((_, i: number) =>
         String.fromCharCode(97 + i),

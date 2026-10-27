@@ -15,6 +15,7 @@ const moduleKinds = new Set([
   "routing",
   "engram_lookup",
   "block",
+  "moe",
   "loop",
   "custom",
   "mhc",
