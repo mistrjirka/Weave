@@ -236,6 +236,8 @@ def validate_project(project):
                         raise ValueError('MoE expects float features [B, T, D] with a known width.')
                     router, experts = moe_structure(n,p)
                     top_k=p.get('top_k',2); weight=p.get('balance_weight',0.01)
+                    if p.get('router', 'softmax') not in ('softmax', 'sigmoid'):
+                        raise ValueError('Router scoring must be softmax or sigmoid.')
                     if type(top_k) is not int or not 1<=top_k<=len(experts):
                         raise ValueError(f'top k must be between 1 and {len(experts)} experts.')
                     if not isinstance(weight,(int,float)) or isinstance(weight,bool) or not math.isfinite(weight) or weight<0:

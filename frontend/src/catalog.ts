@@ -6,7 +6,7 @@ export const catalog: CatalogEntry[] = [
     label: "Mixture of experts",
     description: "Top-k token routing through editable experts",
     category: "Composition",
-    params: { experts: 4, top_k: 2, balance_weight: 0.01 },
+    params: { experts: 4, top_k: 2, balance_weight: 0.01, router: "softmax" },
     role: "moe",
   },
   {

@@ -201,25 +201,54 @@ small {
   display: flex;
   align-items: center;
   gap: 8px;
-  color: var(--theme-green-text, #80927e);
-  border-bottom: 1px solid
-    color-mix(in srgb, var(--theme-neutral-border, #ffffff) 7.06%, transparent);
-  padding: 0 0 12px;
+  min-width: 0;
+  min-height: 42px;
+  padding: 0 9px;
+  color: var(--theme-muted, #c0d0bc);
+  background: var(--theme-input, #213a2a);
+  border: 1px solid var(--theme-green-border, #647d68);
+  border-radius: 7px;
+}
+.library-search-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  cursor: text;
+}
+.library-search-field > svg {
+  flex: none;
 }
 .library-search input {
-  background: transparent;
-  color: var(--theme-on-strong, #e0e6d8);
-  border: 0;
-  width: 100%;
-  font-size: 10px;
+  flex: 1;
   min-width: 0;
+  width: 100%;
+  padding: 8px 0;
+  background: transparent;
+  color: var(--theme-on-strong, #eef5e9);
+  border: 0;
+  font-size: 12px;
 }
 .library-search input::placeholder {
-  color: var(--theme-green-text, #87947f);
+  color: var(--theme-muted, #bdcdb8);
+  opacity: 1;
 }
-.library-search > span {
-  font-size: 13px;
-  color: var(--theme-green-text, #819078);
+.library-search-clear {
+  flex: none;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border-radius: 4px;
+  color: inherit;
+}
+.library-search-clear:hover {
+  background: #ffffff24;
+  color: var(--theme-on-strong, #fff);
+}
+.library-search:focus-within {
+  outline: 2px solid var(--theme-green-line, #a6c68f);
+  outline-offset: 2px;
 }
 .library-scroll {
   flex: 1;
@@ -2273,12 +2302,6 @@ textarea:focus-visible {
 }
 .library-search input {
   font-size: 12px;
-}
-.library-search input::placeholder {
-  color: var(--theme-green-text, #a4b59b);
-}
-.library-search:focus-within {
-  border-color: var(--theme-green-border, #bddc9e);
 }
 .workspace-button {
   font-size: 12px;
@@ -4748,4 +4771,13 @@ textarea:focus-visible {
   width: 100%;
   text-align: center;
   margin-top: 5px;
+}
+
+/* Compound search controls show one focus ring around the whole field. */
+:is(.library-search, .project-browser-search, .connection-picker-search)
+  input:focus,
+:is(.library-search, .project-browser-search, .connection-picker-search)
+  input:focus-visible {
+  outline: none;
+  box-shadow: none;
 }

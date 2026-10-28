@@ -203,7 +203,7 @@ Run `npm run test:controls` to check typed weight groups and attention preset ed
 
 ### Mixture of experts
 
-The **MoE transformer** example replaces a transformer feed-forward layer with token routing. Open the Mixture of experts block to see its router, expert blocks and weighted combine; open an expert to edit its graph. The outer block controls expert count, top-k and the optional balancing-loss weight. New experts are independent copies. The fixed routing scaffold must stay connected as shown, while expert bodies can be edited.
+The **MoE transformer** example shows an attention block and a separate MoE residual branch on the main canvas. Open the Mixture of experts block to see its router, expert blocks and weighted combine; open an expert to edit its graph. The outer block controls expert count, top-k, softmax or sigmoid router scoring, and the optional balancing-loss weight. New experts are independent copies. The fixed routing scaffold must stay connected as shown, while expert bodies can be edited.
 
 For an always-on shared expert, add an **Always-on expert** block on a parallel branch from the same input and use an Add node to combine it with the MoE output. This is an ordinary editable graph branch. It is shared across tokens; use parameter groups separately if you want to share weights between layers.
 

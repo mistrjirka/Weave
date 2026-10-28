@@ -1005,6 +1005,7 @@ function Workbench({
         !initialSaved.some((p) => p.id === initial.id)
       );
     });
+  const librarySearchRef = useRef<HTMLInputElement>(null);
   const [projectTab, setProjectTab] = useState<ProjectTab>(
     initialLocation.workspace === "examples" ? "examples" : "projects",
   );
@@ -1534,11 +1535,9 @@ function Workbench({
     return copy(body);
   }
   function moeBody(): Graph {
-    const loop = templates
+    const body = templates
       .find((t) => t.id === "moe-transformer")
-      ?.graph.nodes.find((n) => n.data.kind === "loop");
-    const body = loop?.data.body?.nodes.find((n) => n.data.kind === "moe")?.data
-      .body;
+      ?.graph.nodes.find((n) => n.data.kind === "moe")?.data.body;
     if (!body)
       throw new Error("The mixture of experts definition is unavailable");
     return copy(body);
@@ -2333,24 +2332,39 @@ function Workbench({
           </button>
         </div>
         <div className="library-search">
-          <Search size={14} />
-          <input
-            aria-label={
-              left === "blocks"
-                ? "Search blocks"
-                : "Search projects and examples"
-            }
-            name="library-search"
-            autoComplete="off"
-            placeholder={
-              left === "blocks"
-                ? "Find a building block…"
-                : "Find a project or example…"
-            }
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-          />
-          <span>⌕</span>
+          <label className="library-search-field">
+            <Search size={16} aria-hidden="true" />
+            <input
+              ref={librarySearchRef}
+              aria-label={
+                left === "blocks"
+                  ? "Search blocks"
+                  : "Search projects and examples"
+              }
+              name="library-search"
+              autoComplete="off"
+              placeholder={
+                left === "blocks"
+                  ? "Find a building block…"
+                  : "Find a project or example…"
+              }
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+          </label>
+          {search && (
+            <button
+              type="button"
+              className="library-search-clear"
+              aria-label="Clear search"
+              onClick={() => {
+                setSearch("");
+                librarySearchRef.current?.focus();
+              }}
+            >
+              <X size={15} aria-hidden="true" />
+            </button>
+          )}
         </div>
         <div className="library-scroll">
           {search && !groups.length && left === "blocks" && (
@@ -3473,6 +3487,31 @@ function Workbench({
                     </label>
                   )}
                   <div className="section-label">Configuration</div>
+                  {selected.data.kind === "moe" && (
+                    <label className="property-field">
+                      <span>Router scoring</span>
+                      <select
+                        aria-label="Router scoring"
+                        value={
+                          typeof selected.data.params.router === "string"
+                            ? selected.data.params.router
+                            : "softmax"
+                        }
+                        onChange={(event) =>
+                          updateNode((n) => {
+                            n.data.params.router = event.target.value;
+                          })
+                        }
+                      >
+                        <option value="softmax">Softmax top-k</option>
+                        <option value="sigmoid">Sigmoid top-k</option>
+                      </select>
+                      <small className="field-help">
+                        Both route each token to the top-k experts. Choose how
+                        the router scores them.
+                      </small>
+                    </label>
+                  )}
                   {selected.data.kind === "attention_pattern" &&
                     selected.data.params.pattern === "custom" &&
                     selected.data.params.matrix && (
@@ -3489,6 +3528,7 @@ function Workbench({
                     .filter(
                       ([k]) =>
                         k !== "source" &&
+                        !(k === "router" && selected.data.kind === "moe") &&
                         !(
                           k === "experts" &&
                           ["moe_router", "moe_combine"].includes(

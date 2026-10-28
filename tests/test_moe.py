@@ -18,13 +18,7 @@ def example(name):
 
 
 def moe_node(project):
-    return next(
-        n
-        for n in next(
-            n for n in project["graph"]["nodes"] if n["data"]["kind"] == "loop"
-        )["data"]["body"]["nodes"]
-        if n["data"]["kind"] == "moe"
-    )
+    return next(n for n in project["graph"]["nodes"] if n["data"]["kind"] == "moe")
 
 
 def test_examples_validate_and_bad_moe_shapes_report():
@@ -82,7 +76,7 @@ def test_exports_run_and_parameter_count_matches(tmp_path):
             attention = next(
                 n
                 for n in next(
-                    n for n in project["graph"]["nodes"] if n["data"]["kind"] == "loop"
+                    n for n in project["graph"]["nodes"] if n["id"] == "stack"
                 )["data"]["body"]["nodes"]
                 if n["data"]["kind"] == "attention"
             )
@@ -168,9 +162,9 @@ def test_invalid_scaffold_and_expert_count_report_errors():
 def test_expert_weight_groups_share_modules_in_export(tmp_path):
     project = example("moe-transformer")
     project["config"].update(width=16, ffn_width=32, vocab=32, heads=4)
-    body = next(n for n in project["graph"]["nodes"] if n["data"]["kind"] == "loop")[
-        "data"
-    ]["body"]
+    body = next(n for n in project["graph"]["nodes"] if n["id"] == "stack")["data"][
+        "body"
+    ]
     next(n for n in body["nodes"] if n["data"]["kind"] == "attention")["data"][
         "params"
     ].update(heads=4, kv_heads=2)
@@ -188,7 +182,7 @@ def test_expert_weight_groups_share_modules_in_export(tmp_path):
         path.write_text(content)
     check = f"""from model import Model
 m = Model()
-a, b = m.transformer_layers[0].mixture_of_experts.routing.experts[:2]
+a, b = m.mixture_of_experts.routing.experts[:2]
 assert a is b
 assert sum(p.numel() for p in m.parameters()) == {report['parameters']}
 """
@@ -200,3 +194,29 @@ assert sum(p.numel() for p in m.parameters()) == {report['parameters']}
         timeout=60,
         env={**os.environ, "OMP_NUM_THREADS": "1"},
     )
+
+
+def test_sigmoid_router_selection_and_validation():
+    project = example("moe-transformer")
+    moe_node(project)["data"]["params"]["router"] = "sigmoid"
+    assert validate_project(project)["valid"]
+    assert 'router="sigmoid"' in compile_project(project)["model.py"]
+    moe_node(project)["data"]["params"]["router"] = "unsupported"
+    assert any(
+        "Router scoring" in e["message"] for e in validate_project(project)["errors"]
+    )
+    experts = [nn.Linear(2, 2, bias=False) for _ in range(3)]
+    model = SparseMoE(2, experts, top_k=2, balance_weight=0.01, router="sigmoid")
+    x = torch.randn(1, 5, 2, requires_grad=True)
+    scores = model.router(x).sigmoid()
+    weights, indices = scores.topk(2, dim=-1)
+    weights = weights / weights.sum(dim=-1, keepdim=True)
+    dense = torch.stack([expert(x) for expert in experts], dim=-2)
+    expected = (
+        dense.gather(-2, indices.unsqueeze(-1).expand(-1, -1, -1, 2))
+        * weights.unsqueeze(-1)
+    ).sum(-2)
+    actual = model(x)
+    torch.testing.assert_close(actual, expected)
+    (actual.square().mean() + moe_auxiliary_loss(model)).backward()
+    assert model.router.weight.grad.abs().sum() > 0

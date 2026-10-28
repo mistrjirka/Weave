@@ -11,21 +11,23 @@ except ImportError:
 
 class SparseMoE(nn.Module):
     """Top-k per-token routing through independently editable expert modules."""
-    def __init__(self, width, experts, top_k, balance_weight):
+    def __init__(self, width, experts, top_k, balance_weight, router="softmax"):
         super().__init__()
         self.router = nn.Linear(width, len(experts), bias=False)
         self.experts = nn.ModuleList(experts)
         self.top_k = top_k
         self.balance_weight = balance_weight
+        self.router_type = router
         self.aux_losses = []
 
     def forward(self, x):
         shape = x.shape
         tokens = x.reshape(-1, shape[-1])
-        probabilities = self.router(tokens).float().softmax(dim=-1)
+        logits = self.router(tokens).float()
+        probabilities = logits.softmax(dim=-1) if self.router_type == "softmax" else logits.sigmoid()
         weights, indices = probabilities.topk(self.top_k, dim=-1)
         if self.top_k > 1:
-            weights = weights / weights.sum(dim=-1, keepdim=True)
+            weights = weights / weights.sum(dim=-1, keepdim=True).clamp_min(torch.finfo(weights.dtype).tiny)
         result = torch.zeros_like(tokens)
         for index, expert in enumerate(self.experts):
             token_index, slot = torch.where(indices == index)
@@ -37,7 +39,8 @@ class SparseMoE(nn.Module):
             result = result.index_add(0, token_index, output * gate)
         if self.training and self.balance_weight:
             assignments = F.one_hot(indices, num_classes=len(self.experts)).float().mean(dim=(0, 1))
-            balance = len(self.experts) * (assignments * probabilities.mean(dim=0)).sum()
+            balance_probabilities = probabilities / probabilities.sum(dim=-1, keepdim=True).clamp_min(torch.finfo(probabilities.dtype).tiny)
+            balance = len(self.experts) * (assignments * balance_probabilities.mean(dim=0)).sum()
             self.aux_losses.append(balance * self.balance_weight)
         return result.reshape(shape)
 

@@ -18,9 +18,9 @@ for (const viewport of [
     await expect(
       page.getByRole("button", { name: "Shapes compatible" }),
     ).toBeVisible();
-    await page.goto("/?model=moe-transformer&block=stack");
+    await page.goto("/?model=moe-transformer");
     await expect(
-      page.locator('.react-flow__node[data-id="ffn"] .moe-preview'),
+      page.locator('.react-flow__node[data-id="moe"] .moe-preview'),
     ).toBeVisible();
     await expect.poll(() => cardStyleViolations(page)).toEqual([]);
     await page
@@ -50,8 +50,14 @@ for (const viewport of [
 test("changing expert count updates the graph and keeps expert bodies editable", async ({
   page,
 }) => {
-  await page.goto("/?model=moe-transformer&block=stack");
-  await page.locator('.react-flow__node[data-id="ffn"]').click();
+  await page.goto("/?model=moe-transformer");
+  await page.locator('.react-flow__node[data-id="moe"]').click();
+  const router = page.getByRole("combobox", {
+    name: "Router scoring",
+    exact: true,
+  });
+  await router.selectOption("sigmoid");
+  await expect(page.locator(".moe-preview")).toContainText("sigmoid router");
   const count = page.getByRole("textbox", { name: "experts", exact: true });
   await count.fill("3");
   await count.press("Enter");
@@ -74,4 +80,32 @@ test("changing expert count updates the graph and keeps expert bodies editable",
   await expect(
     page.getByRole("button", { name: "Shapes compatible" }),
   ).toBeVisible();
+});
+
+test("older MoE graphs without a router setting can choose one", async ({
+  page,
+  request,
+}) => {
+  const templates = await (await request.get("/api/templates")).json();
+  const project = templates.find(
+    (item: { id: string }) => item.id === "moe-transformer",
+  );
+  const moe = project.graph.nodes.find(
+    (node: { data: { kind: string } }) => node.data.kind === "moe",
+  );
+  delete moe.data.params.router;
+  await page.goto("/?model=blank");
+  await page
+    .locator('input[type="file"]')
+    .first()
+    .setInputFiles({
+      name: "old-moe.json",
+      mimeType: "application/json",
+      buffer: Buffer.from(JSON.stringify(project)),
+    });
+  await page.locator('.react-flow__node[data-id="moe"]').click();
+  const router = page.getByRole("combobox", { name: "Router scoring" });
+  await expect(router).toHaveValue("softmax");
+  await router.selectOption("sigmoid");
+  await expect(page.locator(".moe-preview")).toContainText("sigmoid router");
 });

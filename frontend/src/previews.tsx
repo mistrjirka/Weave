@@ -230,7 +230,8 @@ const moe: Renderer = ({ p }) => (
     </span>
     <span>Combine</span>
     <small>
-      {String(p.top_k)} of {String(p.experts)} experts per token
+      {String(p.top_k)} of {String(p.experts)} experts per token ·{" "}
+      {String(p.router || "softmax")} router
     </small>
   </div>
 );

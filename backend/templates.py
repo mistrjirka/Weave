@@ -112,10 +112,21 @@ def moe_body(experts=4):
 
 
 def moe_transformer():
-    body=transformer(kv=2)
-    ffn=next(n for n in body['nodes'] if n['id']=='ffn')
-    ffn['data']={'kind':'moe','label':'Mixture of experts','params':{'experts':4,'top_k':2,'balance_weight':0.01},'body':moe_body(),'role':'moe'}
-    return language_model(body, layers=2)
+    """Expose the attention and MoE residual branch on the main canvas."""
+    graph=language_model(transformer(kv=2, ffn=False), layers=1)
+    attention=next(n for n in graph['nodes'] if n['id']=='stack')
+    attention['data'].update(kind='block', label='Causal attention block', params={}, role='transformer')
+    graph['nodes'].extend([
+        node('moe_norm','norm','Pre-expert RMSNorm',950,120),
+        node('moe','moe','Mixture of experts',1250,120,{'experts':4,'top_k':2,'balance_weight':0.01,'router':'softmax'},moe_body(),role='moe'),
+        node('moe_residual','add','Expert residual',1600,250),
+    ])
+    graph['edges']=[e for e in graph['edges'] if not (e['source']=='stack' and e['target']=='norm')]
+    graph['edges'].extend([edge('stack','moe_norm'),edge('moe_norm','moe'),edge('stack','moe_residual'),edge('moe','moe_residual','b'),edge('moe_residual','norm')])
+    for n in graph['nodes']:
+        if n['id'] in ('norm','head','out'):
+            n['position']['x']={'norm':1950,'head':2250,'out':2550}[n['id']]
+    return graph
 
 
 def embedding_example():
@@ -185,6 +196,6 @@ def templates():
     items.append(project('thimble','Thimble','Deep-thin gated transformer · sandwich RMSNorm · GQA 8/4 · tied embeddings.',language_model(transformer(sandwich=True,kv=4),20),config={'width':448,'heads':8,'ffn_width':896,'vocab':16384,'mask_id':3},references=[{'title':'Thimble PyTorch trunk','url':'https://github.com/nikshepsvn/thimble/blob/bb7d5768651d525516f3647d551005a4411845af/src/tiny_toolcall/model.py','revision':'bb7d5768651d525516f3647d551005a4411845af','notes':'Trunk computation reproduced with editable primitives. Grammar dispatcher, retrieval and auxiliary name/pointer heads are outside this trunk graph. Release vocabulary is 16K; source Config defaults to 8192.'}]))
     items.append(project('sparse','Sparse attention composition','Causal attention with a union of local windows and global anchor tokens. Patterns are editable graph nodes.',sparse_transformer()))
     items.append(project('embedding-table','Embedding table','Token IDs index a learned table of vectors.',embedding_example()))
-    items.append(project('moe-transformer','MoE transformer','A decoder transformer with four editable experts and top-2 token routing.',moe_transformer(),references=[{'title':'Switch Transformer: top-1 routing and balancing','url':'https://arxiv.org/abs/2101.03961'},{'title':'Training MoEs at Scale with PyTorch','url':'https://pytorch.org/blog/training-moes/'}]))
+    items.append(project('moe-transformer','MoE transformer','A causal attention block followed by four editable experts and top-2 token routing.',moe_transformer(),references=[{'title':'Switch Transformer: top-1 routing and balancing','url':'https://arxiv.org/abs/2101.03961'},{'title':'Training MoEs at Scale with PyTorch','url':'https://pytorch.org/blog/training-moes/'}]))
     items.append(project('blank','Blank project','Start with token input and build your own architecture.',{'nodes':[node('ids','input','Token IDs',80,150,{'index':0,'shape':['B','T'],'dtype':'int64'}),node('out','output','Output',700,150)],'edges':[]}))
     return items

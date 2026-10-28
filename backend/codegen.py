@@ -561,7 +561,7 @@ class SourceGenerator:
                 init.append(f"{expert_name} = {constructor}")
             attributes.append(expert_name)
         init.append(
-            f"self.routing = SparseMoE(width={width!r}, experts=[{', '.join(attributes)}], top_k={settings.get('top_k', 2)!r}, balance_weight={settings.get('balance_weight', 0.01)!r})"
+            f"self.routing = SparseMoE(width={width!r}, experts=[{', '.join(attributes)}], top_k={settings.get('top_k', 2)!r}, balance_weight={settings.get('balance_weight', 0.01)!r}, router={settings.get('router', 'softmax')!r})"
         )
         self.imports["runtime"].add("SparseMoE")
         signature = "self, shared_modules=None" if self.shared else "self"
