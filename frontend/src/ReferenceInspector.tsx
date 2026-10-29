@@ -1,5 +1,31 @@
+import { useId, useState } from "react";
 import { LockKeyhole } from "lucide-react";
 import type { TensorContract } from "./types";
+import { settingHelp } from "./settingHelp";
+
+function ReferenceSettingHelp({ name, text }: { name: string; text: string }) {
+  const [open, setOpen] = useState(false);
+  const id = useId();
+  return (
+    <span className="reference-setting-help">
+      <button
+        type="button"
+        className="setting-help-button"
+        aria-label={`Explain ${name}`}
+        aria-expanded={open}
+        aria-controls={id}
+        onClick={() => setOpen((value) => !value)}
+      >
+        ?
+      </button>
+      {open && (
+        <span id={id} className="setting-explanation">
+          {text}
+        </span>
+      )}
+    </span>
+  );
+}
 
 export interface ReferenceInspection {
   id: string;
@@ -8,6 +34,7 @@ export interface ReferenceInspection {
   kind: string;
   projectName: string;
   description?: string;
+  annotation?: string;
   properties: { name: string; value: string }[];
   shape: TensorContract | null;
   parameters: number;
@@ -52,12 +79,26 @@ export function ReferenceInspector({
       {inspection.description && (
         <p className="inspector-description">{inspection.description}</p>
       )}
+      {inspection.annotation && (
+        <>
+          <div className="section-label">Design note</div>
+          <p className="inspector-description">{inspection.annotation}</p>
+        </>
+      )}
       <div className="section-label">Block settings</div>
       {inspection.properties.length ? (
         <dl>
           {inspection.properties.map((property) => (
             <div key={property.name}>
-              <dt>{property.name.replaceAll("_", " ")}</dt>
+              <dt>
+                {property.name.replaceAll("_", " ")}
+                {settingHelp(inspection.kind, property.name) && (
+                  <ReferenceSettingHelp
+                    name={property.name.replaceAll("_", " ")}
+                    text={settingHelp(inspection.kind, property.name)!}
+                  />
+                )}
+              </dt>
               <dd>{property.value}</dd>
             </div>
           ))}

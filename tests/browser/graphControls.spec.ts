@@ -120,7 +120,8 @@ test("dropping an output on empty space searches, adds and connects a node in on
   });
   await expect(search).toBeFocused();
   await search.fill("embedding");
-  await expect(picker.getByRole("option")).toHaveCount(1);
+  await expect(picker.getByRole("option")).toHaveCount(2);
+  await expect(picker.getByRole("option").first()).toContainText("Embedding");
   await search.press("Enter");
   await expect(picker).toHaveCount(0);
   await expect(page.locator(".flow-wrap .react-flow__node")).toHaveCount(
@@ -349,6 +350,52 @@ test("premade looped transformers expose settings and exchange their editable at
   ).toBe(false);
 });
 
+test("new projects share a configurable RoPE theta with new transformer blocks", async ({
+  page,
+}) => {
+  await openExample(page, "Blank project");
+  const variables = page.getByRole("complementary", {
+    name: "Canvas variables",
+    exact: true,
+  });
+  await expect(variables).toContainText("$theta");
+  await expect
+    .poll(async () => (await document(page)).config.theta)
+    .toBe(1_000_000);
+  await page.getByRole("button", { name: "Blocks", exact: true }).click();
+  await page
+    .locator(".library-item")
+    .filter({ hasText: "Premade recurrent transformer" })
+    .click();
+  await expect
+    .poll(
+      async () =>
+        (await document(page)).graph.nodes.find((n) => n.data.kind === "loop")
+          ?.data.params.theta,
+    )
+    .toBe("$theta");
+  const loop = (await document(page)).graph.nodes.find(
+    (n) => n.data.kind === "loop",
+  )!;
+  expect(
+    loop.data.body!.nodes.find((n) => n.data.kind === "attention")!.data.params
+      .theta,
+  ).toBe("$theta");
+  const theta = variables.getByRole("textbox", { name: "Value of $theta" });
+  await theta.fill("500000");
+  await theta.press("Enter");
+  await expect
+    .poll(async () => (await document(page)).config.theta)
+    .toBe(500_000);
+  await expect
+    .poll(
+      async () =>
+        (await document(page)).graph.nodes.find((n) => n.data.kind === "loop")
+          ?.data.params.theta,
+    )
+    .toBe("$theta");
+});
+
 for (const width of [1600, 390])
   test(`canvas variables are visible, editable and movable at ${width}px`, async ({
     page,
@@ -433,3 +480,140 @@ for (const width of [1600, 390])
       card.getByRole("textbox", { name: "Value of $width", exact: true }),
     ).toBeVisible();
   });
+
+test("attention settings explain and enforce preset-dependent values", async ({
+  page,
+}) => {
+  await openExample(page, "Blank project");
+  await page.getByRole("button", { name: "Blocks", exact: true }).click();
+  await page
+    .locator(".library-item")
+    .filter({ hasText: "Premade recurrent transformer" })
+    .click();
+  const inspector = page.getByRole("complementary", {
+    name: "Property inspector",
+  });
+  const variant = inspector.getByRole("combobox", { name: "Attention type" });
+  const heads = inspector.getByRole("textbox", { name: "heads", exact: true });
+  const kv = inspector.getByRole("textbox", { name: "kv heads", exact: true });
+  await variant.selectOption("mha");
+  await expect(kv).toBeDisabled();
+  await expect(kv).toHaveValue("8");
+  await expect(inspector).toContainText(
+    "MHA uses one key/value head per query head",
+  );
+  await heads.fill("4");
+  await heads.press("Enter");
+  await expect(kv).toHaveValue("4");
+  await variant.selectOption("mqa");
+  await expect(kv).toBeDisabled();
+  await expect(kv).toHaveValue("1");
+  await expect(inspector).toContainText("MQA shares one key/value head");
+  await variant.selectOption("gqa");
+  await expect(variant).toHaveValue("gqa");
+  await expect(kv).toBeEnabled();
+  await expect(kv).toHaveValue("2");
+  await variant.selectOption("local");
+  await expect(kv).toBeEnabled();
+  await inspector.getByRole("switch", { name: "rope", exact: true }).click();
+  await expect(
+    inspector.getByRole("textbox", { name: "theta", exact: true }),
+  ).toBeDisabled();
+  await expect(inspector).toContainText(
+    "Enable rotary positions to use this setting",
+  );
+});
+
+test("attention help opens by click and keyboard, and inactive settings retain values", async ({
+  page,
+}) => {
+  await openExample(page, "Blank project");
+  await page.getByRole("button", { name: "Blocks", exact: true }).click();
+  await page
+    .locator(".library-item")
+    .filter({ hasText: "Premade recurrent transformer" })
+    .click();
+  const inspector = page.getByRole("complementary", {
+    name: "Property inspector",
+  });
+  for (const [name, words] of [
+    ["causal", "earlier tokens"],
+    ["rope", "token positions"],
+    ["qk norm", "attention scores"],
+    ["gated", "learned gate"],
+    ["window", "nearby tokens"],
+    ["backend", "CPU or GPU"],
+  ]) {
+    const button = inspector.getByRole("button", {
+      name: `Explain ${name}`,
+      exact: true,
+    });
+    await button.click();
+    await expect(button).toHaveAttribute("aria-expanded", "true");
+    await expect(
+      inspector.locator(".setting-explanation").filter({ hasText: words }),
+    ).toBeVisible();
+    await button.click();
+  }
+  const causalHelp = inspector.getByRole("button", {
+    name: "Explain causal",
+    exact: true,
+  });
+  await causalHelp.focus();
+  await page.keyboard.press("Enter");
+  await expect(causalHelp).toHaveAttribute("aria-expanded", "true");
+  const theta = inspector.getByRole("textbox", { name: "theta", exact: true });
+  const previous = await theta.inputValue();
+  await inspector.getByRole("switch", { name: "rope", exact: true }).click();
+  await expect(theta).toBeDisabled();
+  await inspector.getByRole("switch", { name: "rope", exact: true }).click();
+  await expect(theta).toBeEnabled();
+  await expect(theta).toHaveValue(previous);
+});
+
+test("LayerNorm bias becomes inactive without affine parameters", async ({
+  page,
+}) => {
+  await openExample(page, "Blank project");
+  await page.getByRole("button", { name: "Blocks", exact: true }).click();
+  await page.locator(".library-item").filter({ hasText: "LayerNorm" }).click();
+  const inspector = page.getByRole("complementary", {
+    name: "Property inspector",
+  });
+  const bias = inspector.getByRole("switch", { name: "bias", exact: true });
+  await expect(bias).toBeEnabled();
+  await inspector.getByRole("switch", { name: "affine", exact: true }).click();
+  await expect(bias).toBeDisabled();
+  await expect(inspector).toContainText(
+    "Enable learned affine parameters to use a bias",
+  );
+  await inspector.getByRole("switch", { name: "affine", exact: true }).click();
+  await expect(bias).toBeEnabled();
+  await expect(bias).toHaveAttribute("aria-checked", "true");
+});
+
+test("attention explanations remain usable on a narrow screen", async ({
+  page,
+}) => {
+  await openExample(page, "Blank project");
+  await page.getByRole("button", { name: "Blocks", exact: true }).click();
+  await page
+    .locator(".library-item")
+    .filter({ hasText: "Premade recurrent transformer" })
+    .click();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByRole("button", { name: "Properties", exact: true }).click();
+  const inspector = page.getByRole("complementary", {
+    name: "Property inspector",
+  });
+  const help = inspector.getByRole("button", {
+    name: "Explain causal",
+    exact: true,
+  });
+  await help.click();
+  await expect(
+    inspector
+      .locator(".setting-explanation")
+      .filter({ hasText: "earlier tokens" }),
+  ).toBeVisible();
+});

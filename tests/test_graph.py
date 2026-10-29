@@ -66,6 +66,33 @@ def test_loop_rejects_state_shape_change():
     assert any('Loop state' in e['message'] for e in validate_project(p)['errors'])
 
 
+def test_loop_reports_attention_head_mismatch_without_false_output_count_error():
+    p=templates()[1]
+    p['config']['width']=512
+    loop=next(n for n in p['graph']['nodes'] if n['data']['kind']=='loop')
+    attn=next(n for n in loop['data']['body']['nodes'] if n['data']['kind']=='attention')
+    attn['data']['params'].update(heads=10,kv_heads=10)
+    report=validate_project(p)
+    messages=[e['message'] for e in report['errors']]
+    assert any('512 ÷ 10' in m and '8' in m and 'KV heads' in m for m in messages)
+    assert any(e['node']==loop['id'] and '512 ÷ 10' in e['message'] for e in report['errors'])
+    assert not any('exactly one output' in m for m in messages)
+    attn['data']['params'].update(heads=8,kv_heads=8)
+    assert validate_project(p)['valid']
+
+    p['config']['width']=32
+    attn['data']['params'].update(heads=6,kv_heads=3)
+    messages=[e['message'] for e in validate_project(p)['errors']]
+    assert any('may also need to change the KV head count' in m for m in messages)
+
+
+def test_container_reports_multiple_declared_outputs_even_when_one_is_unresolved():
+    p=templates()[1]
+    loop=next(n for n in p['graph']['nodes'] if n['data']['kind']=='loop')
+    loop['data']['body']['nodes'].append(node('extra','output','Unconnected output',0,0))
+    assert any('exactly one output' in e['message'] for e in validate_project(p)['errors'])
+
+
 def test_explicit_sharing_inside_independent_layers():
     p=templates()[1]
     body=p['graph']['nodes'][2]['data']['body']
@@ -156,7 +183,7 @@ def test_expanded_attention_preserves_parameters_and_behavior(tmp_path):
     from backend.attention import expand_attention
     p=templates()[1];p=small(p)
     body=p['graph']['nodes'][2]['data']['body'];attn=next(n for n in body['nodes'] if n['id']=='attn')
-    settings={'heads':4,'kv_heads':2,'head_dim':8,'value_dim':8,'causal':True,'qk_norm':True,'gated':True,'rope':True,'conv_taps':3,'window':4}
+    settings={'heads':4,'kv_heads':2,'head_dim':8,'value_dim':8,'causal':True,'qk_norm':True,'gated':True,'rope':True,'conv_taps':3,'window':2,'conv_respects_window':True,'qkv_bias':True,'output_bias':True,'qk_norm_eps':1e-5,'theta':1000000.,'rope_scaling':'yarn','rope_factor':4.,'rope_original_context':32768}
     project={'version':1,'name':'Expanded attention','config':{'width':32,'heads':4,'vocab':64},'graph':expand_attention(settings,32)}
     for name,content in compile_project(project).items():
         target=tmp_path/name;target.parent.mkdir(parents=True,exist_ok=True);target.write_text(content)
@@ -165,7 +192,7 @@ import torch
 from model import Model
 from runtime import Attention
 torch.set_num_threads(1)
-model=Model();primitive=Attention(32,4,2,8,8,True,4,True,10000.,True,True,3)
+model=Model();primitive=Attention(32,4,2,8,8,True,2,True,1000000.,True,True,3,qk_norm_eps=1e-5,qkv_bias=True,rope_scaling="yarn",rope_factor=4.,rope_original_context=32768,output_bias=True,conv_respects_window=True)
 # Match the named layers exposed by the exported PyTorch module.
 ops = {
  'q': model.q_projection, 'k': model.k_projection, 'v': model.v_projection,

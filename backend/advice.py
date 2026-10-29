@@ -16,6 +16,7 @@ AUTOGRAD_SOURCE = (
     "https://docs.pytorch.org/tutorials/beginner/basics/autogradqs_tutorial.html"
 )
 ATTENTION_SOURCE = "https://docs.pytorch.org/docs/2.9/generated/torch.nn.functional.scaled_dot_product_attention.html"
+TRANSFORMER_SOURCE = "https://arxiv.org/abs/1706.03762"
 
 
 @dataclass
@@ -116,6 +117,29 @@ def consecutive_linear(scope, node):
     )
 
 
+def ffn_bottleneck(scope, node):
+    parent = scope.input_node(node["id"])
+    shape = scope.shape(parent["id"]) if parent else None
+    if not shape or type(shape[-1]) is not int:
+        return
+    width = shape[-1]
+    hidden = scope.settings(node).get("hidden", width * 4)
+    if type(hidden) is not int or hidden < 1 or hidden * 2 > width:
+        return
+    # The existing extreme-bottleneck rule already covers this case.
+    if hidden <= 4 and width >= 16 * hidden:
+        return
+    yield hint(
+        scope,
+        node,
+        "ffn-bottleneck",
+        "Narrow feed-forward hidden width",
+        f"This feed-forward branch maps each token from {width} features to {hidden} internal features and back to {width}. Its hidden width is at most half its input width.",
+        "This is valid and can save parameters and computation; it may also limit this branch's capacity. Many transformer FFNs use a wider hidden layer. If unsure, compare a wider setting on your validation task. A residual connection can preserve information outside this branch.",
+        TRANSFORMER_SOURCE,
+    )
+
+
 def output_softmax(scope, node):
     if not any(
         scope.nodes[c]["data"]["kind"] == "output" for c in scope.children[node["id"]]
@@ -181,6 +205,7 @@ def empty_attention_rows(scope, node):
 
 RULES = (
     (frozenset({"linear", "ffn"}), narrow_bottleneck),
+    (frozenset({"ffn"}), ffn_bottleneck),
     (frozenset({"linear", "head"}), consecutive_linear),
     (frozenset({"softmax"}), output_softmax),
     (frozenset({"select"}), discrete_sampling),
@@ -228,6 +253,12 @@ def design_advice(project, shapes, counts, resolve):
                             AUTOGRAD_SOURCE,
                         )
                     )
+                # An unfinished graph may not reach an output yet. A known FFN
+                # width is still useful feedback while the user is designing it.
+                if node["data"]["kind"] == "ffn":
+                    advice.extend(ffn_bottleneck(scope, node))
+                if node["data"].get("body"):
+                    visit(node["data"]["body"], {**config, **scope.settings(node)}, key + "/")
                 continue
             for kinds, rule in RULES:
                 if node["data"]["kind"] in kinds:

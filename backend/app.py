@@ -153,4 +153,8 @@ def tokenizer_preview(request:PreviewRequest):
     except Exception as exc:raise HTTPException(422,str(exc))
 
 
+from .training.api import router as training_router
+app.include_router(training_router(DATA))
+
+
 if (ROOT/'dist').is_dir():app.mount('/',StaticFiles(directory=ROOT/'dist',html=True),name='frontend')

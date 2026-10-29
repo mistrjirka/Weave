@@ -69,12 +69,13 @@ def as_pattern(value,q,k):
 _compiled_flex=None
 
 
-def attend(q,k,v,mask=None,causal=False,window=0,backend='dense'):
+def attend(q,k,v,mask=None,causal=False,window=0,backend='dense',dropout_p=0.0):
     pattern=as_pattern(mask,q,k) if mask is not None else AttentionPattern('full',q,k)
     if window:
         pattern=AttentionPattern('intersection',q,k,children=[pattern,AttentionPattern('local',q,k,{'window':window})])
     if causal:pattern=AttentionPattern('intersection',q,k,children=[pattern,AttentionPattern('causal',q,k)])
-    use_flex=backend=='flex' or backend=='auto' and q.is_cuda
+    if dropout_p and backend=='flex':raise ValueError('FlexAttention does not support attention dropout; use dense or auto.')
+    use_flex=not dropout_p and (backend=='flex' or backend=='auto' and q.is_cuda)
     if use_flex:
         if backend=='flex' and not q.is_cuda:raise RuntimeError('Compiled FlexAttention requires a compatible GPU. Select dense for CPU execution.')
         from torch.nn.attention.flex_attention import create_block_mask,flex_attention
@@ -83,5 +84,5 @@ def attend(q,k,v,mask=None,causal=False,window=0,backend='dense'):
         if _compiled_flex is None:_compiled_flex=torch.compile(flex_attention)
         return _compiled_flex(q,k,v,block_mask=block_mask)
     if mask is None and not window:
-        return F.scaled_dot_product_attention(q,k,v,is_causal=causal)
-    return F.scaled_dot_product_attention(q,k,v,attn_mask=pattern.dense(q.shape[0],q.shape[1]),is_causal=False)
+        return F.scaled_dot_product_attention(q,k,v,is_causal=causal,dropout_p=dropout_p)
+    return F.scaled_dot_product_attention(q,k,v,attn_mask=pattern.dense(q.shape[0],q.shape[1]),is_causal=False,dropout_p=dropout_p)

@@ -15,15 +15,25 @@ except ImportError:
     from sparse_runtime import AttentionPattern, as_pattern
 
 
-def rotary_positions(x, theta=10000.0):
+def rotary_positions(x, theta=10000.0, rope_scaling="none", rope_factor=1.0, rope_original_context=32768):
     width = x.shape[-1]
     positions = torch.arange(x.shape[-2], device=x.device).float()
     frequencies = theta ** (-torch.arange(0, width, 2, device=x.device).float() / width)
+    scale = 1.0
+    if rope_scaling == "yarn":
+        def correction(rotations):
+            return width * math.log(rope_original_context / (rotations * 2 * math.pi)) / (2 * math.log(theta))
+        low, high = max(math.floor(correction(32)), 0), min(math.ceil(correction(1)), width - 1)
+        if low == high:
+            high += 0.001
+        ramp = ((torch.arange(width // 2, device=x.device, dtype=torch.float32) - low) / (high - low)).clamp(0, 1)
+        frequencies = frequencies * ((1 - ramp) + ramp / rope_factor)
+        scale = 1 + 0.1 * math.log(rope_factor)
     angles = torch.outer(positions, frequencies)
     angles = torch.cat((angles, angles), dim=-1).to(x.dtype)
     first, second = x.chunk(2, dim=-1)
     rotated = torch.cat((-second, first), dim=-1)
-    return x * angles.cos() + rotated * angles.sin()
+    return scale * (x * angles.cos() + rotated * angles.sin())
 
 
 def fuse_memory(hidden_states, memory):

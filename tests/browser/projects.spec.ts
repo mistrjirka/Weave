@@ -160,7 +160,10 @@ test("using an example creates an independent named draft, retaining its source 
   const draft = await currentProject(page);
   expect(draft.id).not.toBe(starter.id);
   expect(draft.references).toEqual(starter.references);
-  expect(draft.config).toEqual(starter.config);
+  expect(draft.config).toEqual({
+    ...starter.config,
+    theta: starter.config.theta ?? 1_000_000,
+  });
   expect(draft.graph.nodes.map((n) => n.id)).toEqual(
     starter.graph.nodes.map((n) => n.id),
   );

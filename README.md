@@ -71,11 +71,11 @@ Shape validation propagates symbolic batch/sequence dimensions through nested bl
 | Looped transformer | Explicit shared-weight recurrent depth | Fixed iteration count |
 | Text diffusion | Bidirectional predictor, append-mask operation, confidence/random selection, linear unmasking loop | LLaDA-style composition, not the original 8B architecture/checkpoint; no CFG |
 | Needle 1 | 12-layer attention-only encoder, 8-layer self/cross-attention decoder, gated residuals, shared embeddings | Documented topology port; no original QAT, initialization, cache or checkpoint conversion |
-| Needle 2 | Published 27-layer settings; Engram sites, gated attention, learned Monarch mixer, four-lane mHC routing | Uses current SAN computation with Needle 2 config; historical checkpoint parity is not asserted |
+| Needle 2 | Published 27-layer settings; Engram, gated attention, two-stage Hadamard mixer, four-lane mHC routing | Historical float32 backbone; no checkpoint conversion, packed masks or quantization |
 | Needle 3 | Published 20-layer settings; asymmetric QK/value heads, causal convolution, global/local attention, Engram, Monarch, mHC | Full-depth backbone; no trained ladder slicing, probe heads, padding-aware packed masks or quantization |
 | Thimble | 20-layer 448-wide trunk, gated GQA 8/4, QK norm, sandwich norms, SwiGLU, tied embeddings | Grammar dispatcher, retrieval, auxiliary name/pointer heads and pretrained weights are outside the trunk graph |
 
-Upstream settings and pinned revisions are available in **References** and retained in project JSON. Float32 PyTorch ports do not claim bitwise parity with quantized deployment engines. The Engram hash and Monarch equations are checked against independent NumPy translations; attention is checked against the saved upstream Thimble implementation.
+Upstream settings and pinned revisions are available in **References** and retained in project JSON. Float32 PyTorch ports do not claim bitwise parity with quantized deployment engines. Weight-matched small-model logits are compared with pinned upstream JAX for Needle 1/2/3, upstream PyTorch for Thimble, and Transformers for GPT-2, Hammer and SHELLper. These checks cover float32 full-sequence inference, not trained checkpoints or deployment kernels.
 
 The generic n-gram lookup and fixed Hadamard mixer are separate from architecture-specific Engram and learned Monarch operations. They can all be combined freely in custom graphs.
 
@@ -208,3 +208,13 @@ The **MoE transformer** example shows an attention block and a separate MoE resi
 For an always-on shared expert, add an **Always-on expert** block on a parallel branch from the same input and use an Add node to combine it with the MoE output. This is an ordinary editable graph branch. It is shared across tokens; use parameter groups separately if you want to share weights between layers.
 
 For graphs with one floating-point output, the exported `train_example.py` demonstrates adding `moe_auxiliary_loss(model)` to a task loss. The placeholder loss and input must be replaced with training data and an appropriate objective. Selected tokens are packed into a single sequence for each expert, so attention or other token-mixing layers in an expert can mix unrelated sequences and lose original positions. The implementation does not impose expert capacity limits or provide distributed routing.
+
+The LFM2.5 SHELLper reference includes editable GQA and double-gated causal-convolution layer graphs. Its exported backbone uses random weights and full-sequence inference; padding-aware attention, decoding caches, the tokenizer, and fine-tuned weights are not reproduced. Its 4,608-wide FFN reflects LFM2's automatic adjustment of the published 6,656 configuration value. Hammer 2.1 0.5B also has an editable random-weight Qwen2 backbone with QKV biases and YaRN; padding masks, KV cache, tokenizer and fine-tuned weights are not reproduced.
+
+Sequence dimensions such as `T` are symbolic in the graph. They describe a variable input length, not a training context limit; an exported model's practical and trained context length depends on positional encoding, training data, and memory. Use a fixed input dimension when you specifically want the graph to require one length.
+
+The block library also includes LayerNorm, GELU, ReLU, dropout, learned positional embeddings, and 1D/2D convolution and pooling. Sequence operators use `[B,T,C]`; 2D image operators use `[B,C,H,W]`. Fixed input dimensions are needed when a convolution or pool changes a symbolic spatial length. Dropout follows PyTorch train/eval behavior; learned position tables enforce their configured maximum length.
+
+## Training workspace
+
+The **Training** tab provides editable multi-stage PyTorch recipes, local launch or terminal monitoring, live metrics, generated examples, GPU monitoring, checkpoint lineage and verified snapshots. Single-device, DDP, supported split-model placement and separate evaluation-GPU strategies are available. Training execution is opt-in and operator-authenticated; graph editing remains independent. See [training setup, recipes, limitations, reporting API and backup/restore](TRAINING.md).

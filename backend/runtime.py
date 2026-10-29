@@ -54,25 +54,28 @@ def clear_moe_losses(model):
 def moe_auxiliary_loss(model):
     losses = [loss for module in model.modules() if isinstance(module, SparseMoE) for loss in module.aux_losses]
     if losses:
-        return torch.stack(losses).sum()
+        return torch.stack([loss.to(losses[0].device) for loss in losses]).sum()
     parameter = next(model.parameters(), None)
     return parameter.new_zeros(()) if parameter is not None else torch.tensor(0.)
 
 
 class Attention(nn.Module):
     def __init__(self, width, heads, kv_heads, head_dim=None, value_dim=None,
-                 causal=True, window=0, rope=True, theta=10000., qk_norm=False, gated=False, conv_taps=0,backend='dense'):
+                 causal=True, window=0, rope=True, theta=10000., qk_norm=False, gated=False, conv_taps=0,backend='dense', qk_norm_eps=1e-6, qkv_bias=False, rope_scaling='none', rope_factor=1.0, rope_original_context=32768, output_bias=False, attention_dropout=0.0, conv_respects_window=False):
         super().__init__()
         self.h, self.kv = heads, kv_heads
         self.hd, self.vd = head_dim or width // heads, value_dim or width // heads
         self.causal, self.window, self.rope, self.theta = causal, window, rope, theta
+        self.attention_dropout=attention_dropout
+        self.conv_respects_window=conv_respects_window
         self.backend=backend
-        self.q = nn.Linear(width, heads * self.hd, bias=False)
-        self.k = nn.Linear(width, kv_heads * self.hd, bias=False)
-        self.v = nn.Linear(width, kv_heads * self.vd, bias=False)
-        self.o = nn.Linear(heads * self.vd, width, bias=False)
-        self.q_norm = nn.RMSNorm(self.hd, eps=1e-6) if qk_norm else nn.Identity()
-        self.k_norm = nn.RMSNorm(self.hd, eps=1e-6) if qk_norm else nn.Identity()
+        self.rope_scaling, self.rope_factor, self.rope_original_context = rope_scaling, rope_factor, rope_original_context
+        self.q = nn.Linear(width, heads * self.hd, bias=qkv_bias)
+        self.k = nn.Linear(width, kv_heads * self.hd, bias=qkv_bias)
+        self.v = nn.Linear(width, kv_heads * self.vd, bias=qkv_bias)
+        self.o = nn.Linear(heads * self.vd, width, bias=output_bias)
+        self.q_norm = nn.RMSNorm(self.hd, eps=qk_norm_eps) if qk_norm else nn.Identity()
+        self.k_norm = nn.RMSNorm(self.hd, eps=qk_norm_eps) if qk_norm else nn.Identity()
         self.gate = nn.Linear(width, heads * self.vd, bias=False) if gated else None
         self.taps=nn.ParameterList()
         for d in [heads*self.hd,kv_heads*self.hd,kv_heads*self.vd] if conv_taps else []:
@@ -81,27 +84,67 @@ class Attention(nn.Module):
     def rotate(self, x):
         pos = torch.arange(x.shape[-2], device=x.device, dtype=torch.float32)
         inv = self.theta ** (-torch.arange(0, self.hd, 2, device=x.device).float() / self.hd)
+        scale = 1.0
+        if self.rope_scaling == 'yarn':
+            def correction(rotations):
+                return self.hd * math.log(self.rope_original_context / (rotations * 2 * math.pi)) / (2 * math.log(self.theta))
+            low, high = max(math.floor(correction(32)), 0), min(math.ceil(correction(1)), self.hd - 1)
+            if low == high: high += 0.001
+            ramp = ((torch.arange(self.hd // 2, device=x.device, dtype=torch.float32) - low) / (high - low)).clamp(0, 1)
+            inv = inv * ((1 - ramp) + ramp / self.rope_factor)
+            scale = 1 + 0.1 * math.log(self.rope_factor)
         freq = torch.outer(pos, inv)
         freq = torch.cat((freq, freq), -1).to(x.dtype)
         a, b = x.chunk(2, dim=-1)
-        return x * freq.cos() + torch.cat((-b, a), -1) * freq.sin()
+        return scale * (x * freq.cos() + torch.cat((-b, a), -1) * freq.sin())
 
     def forward(self, x, memory=None, mask=None, **_):
         memory = x if memory is None else memory
         b, t, _ = x.shape; s = memory.shape[1]
         q,k,v=self.q(x),self.k(memory),self.v(memory)
         if self.taps:
-            q,k,v=[sum(taps[j]*shift(z,j) for j in range(taps.shape[0])) for z,taps in zip([q,k,v],self.taps)]
+            q,k,v=[sum(taps[j]*shift(z,j) for j in range(min(taps.shape[0], self.window) if self.conv_respects_window and self.window else taps.shape[0])) for z,taps in zip([q,k,v],self.taps)]
         q = self.q_norm(q.view(b, t, self.h, self.hd)).transpose(1, 2)
         k = self.k_norm(k.view(b, s, self.kv, self.hd)).transpose(1, 2)
         v = v.view(b, s, self.kv, self.vd).transpose(1, 2)
         if self.rope: q, k = self.rotate(q), self.rotate(k)
         k = k.repeat_interleave(self.h // self.kv, dim=1)
         v = v.repeat_interleave(self.h // self.kv, dim=1)
-        y = attend(q,k,v,mask,self.causal,self.window,self.backend)
+        y = attend(q,k,v,mask,self.causal,self.window,self.backend, self.attention_dropout if self.training else 0.0)
         y = y.transpose(1, 2).contiguous().view(b, t, -1)
         if self.gate is not None: y = y * torch.sigmoid(self.gate(x))
         return self.o(y)
+
+
+class LearnedPositions(nn.Module):
+    """Add a learned position vector to each token in a [batch, time, width] tensor."""
+    def __init__(self, width, max_length):
+        super().__init__()
+        self.table = nn.Embedding(max_length, width)
+
+    def forward(self, x):
+        if x.shape[1] > self.table.num_embeddings:
+            raise ValueError('Sequence exceeds the learned position table length.')
+        return x + self.table(torch.arange(x.shape[1], device=x.device))
+
+
+class SequenceConv1d(nn.Module):
+    """A regular Conv1d with the graph's [batch, time, channels] convention."""
+    def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, bias=True):
+        super().__init__()
+        self.conv = nn.Conv1d(in_channels, out_channels, kernel_size, stride=stride, padding=padding, bias=bias)
+
+    def forward(self, x):
+        return self.conv(x.transpose(1, 2)).transpose(1, 2)
+
+
+class SequencePool1d(nn.Module):
+    def __init__(self, kernel_size, stride, mode):
+        super().__init__()
+        self.pool = nn.MaxPool1d(kernel_size, stride) if mode == 'max' else nn.AvgPool1d(kernel_size, stride)
+
+    def forward(self, x):
+        return self.pool(x.transpose(1, 2)).transpose(1, 2)
 
 
 class FFN(nn.Module):
@@ -262,6 +305,19 @@ class Hadamard(nn.Module):
         return (self.transform(F.silu(z)*self.d3)*self.d4)[..., :self.width]
 
 
+class HadamardTwoStage(Hadamard):
+    """Two Walsh transforms and three learned diagonals, as in Needle 2."""
+    def __init__(self, width):
+        super().__init__(width)
+        del self.d4
+        with torch.no_grad(): self.d3.fill_(0.02)
+
+    def forward(self, x, **_):
+        z = F.pad(x, (0, self.n-self.width))
+        z = self.transform(z * self.d1)
+        return (self.transform(F.silu(z * self.d2)) * self.d3)[..., :self.width]
+
+
 class Functional(nn.Module):
     def __init__(self, kind, p, config):
         super().__init__(); self.kind, self.p, self.config = kind, p, config
@@ -271,6 +327,8 @@ class Functional(nn.Module):
         if k == 'multiply': return x * args[0]
         if k == 'subtract': return x - args[0]
         if k == 'concat': return torch.cat((x, args[0]), dim=-1)
+        if k == 'gelu': return F.gelu(x, approximate=p.get('approximate','none'))
+        if k == 'relu': return F.relu(x)
         if k == 'silu': return F.silu(x)
         if k == 'sigmoid': return torch.sigmoid(x)
         if k == 'scale': return x * p.get('factor', 1.)
@@ -283,11 +341,13 @@ class Functional(nn.Module):
         if k == 'matmul':return x@args[0]
         if k == 'transpose':return x.transpose(p.get('dim0',-2),p.get('dim1',-1))
         if k == 'rope':
-            d=x.shape[-1];freq=torch.outer(torch.arange(x.shape[-2],device=x.device).float(),p.get('theta',10000.)**(-torch.arange(0,d,2,device=x.device).float()/d))
-            freq=torch.cat((freq,freq),-1).to(x.dtype);a,b=x.chunk(2,-1)
-            return x*freq.cos()+torch.cat((-b,a),-1)*freq.sin()
+            try:
+                from .export_helpers import rotary_positions
+            except ImportError:
+                from export_helpers import rotary_positions
+            return rotary_positions(x, p.get('theta',10000.), p.get('rope_scaling','none'), p.get('rope_factor',1.0), p.get('rope_original_context',32768))
         if k == 'sdpa':
-            return attend(x,args[0],args[1],args[2] if len(args)>2 else None,p.get('causal',True),p.get('window',0),p.get('backend','dense'))
+            return attend(x,args[0],args[1],args[2] if len(args)>2 else None,p.get('causal',True),p.get('window',0),p.get('backend','dense'),p.get('attention_dropout',0.) if self.training else 0.)
         if k=='attention_pattern':return AttentionPattern(p.get('pattern','local'),x,args[0] if args and args[0] is not None else x,p)
         if k in ('pattern_union','pattern_intersection'):
             a,b=x,args[0]
@@ -334,17 +394,24 @@ def make_module(kind, p, input_shape, config):
     width = input_shape[-1] if input_shape else config['width']
     if kind == 'embedding': return nn.Embedding(p.get('vocab', config['vocab']), p.get('width', config['width']))
     if kind in ('linear', 'head'): return nn.Linear(width, p.get('out', config['vocab'] if kind == 'head' else config['width']), bias=p.get('bias', False))
+    if kind == 'layer_norm': return nn.LayerNorm(width, eps=p.get('eps',1e-5), elementwise_affine=p.get('affine',True), bias=p.get('bias',True))
+    if kind == 'dropout': return nn.Dropout(p.get('probability',0.1))
+    if kind == 'position_embedding': return LearnedPositions(width,p.get('max_length',2048))
+    if kind == 'conv1d': return SequenceConv1d(width,p.get('out',width),p.get('kernel_size',3),p.get('stride',1),p.get('padding',0),p.get('bias',True))
+    if kind == 'pool1d': return SequencePool1d(p.get('kernel_size',2),p.get('stride',2),p.get('mode','max'))
+    if kind == 'conv2d': return nn.Conv2d(input_shape[1],p.get('out_channels',32),p.get('kernel_size',3),stride=p.get('stride',1),padding=p.get('padding',0),bias=p.get('bias',True))
+    if kind == 'pool2d': return (nn.MaxPool2d if p.get('mode','max')=='max' else nn.AvgPool2d)(p.get('kernel_size',2),p.get('stride',2))
     if kind == 'norm': return nn.RMSNorm(width, eps=p.get('eps', 1e-6))
     if kind in ('attention', 'cross_attention'):
         heads = p.get('heads', config.get('heads', 8))
-        return Attention(width, heads, p.get('kv_heads', heads), p.get('head_dim'), p.get('value_dim'), p.get('causal', kind != 'cross_attention'), p.get('window', 0), p.get('rope', True), p.get('theta', 10000.), p.get('qk_norm', False), p.get('gated', False),p.get('conv_taps',0),p.get('backend','dense'))
+        return Attention(width, heads, p.get('kv_heads', heads), p.get('head_dim'), p.get('value_dim'), p.get('causal', kind != 'cross_attention'), p.get('window', 0), p.get('rope', True), p.get('theta', 10000.), p.get('qk_norm', False), p.get('gated', False),p.get('conv_taps',0),p.get('backend','dense'),p.get('qk_norm_eps',1e-6),p.get('qkv_bias',False),p.get('rope_scaling','none'),p.get('rope_factor',1.0),p.get('rope_original_context',32768),p.get('output_bias',False),p.get('attention_dropout',0.0),p.get('conv_respects_window',False))
     if kind == 'ffn': return FFN(width, p.get('hidden', width*4))
     if kind == 'ngram': return NGram(p.get('orders', [2,3]), p.get('buckets', 8192))
     if kind == 'lookup': return Lookup(input_shape[-1], p.get('buckets', 8192), p.get('width', config['width']))
     if kind == 'gate': return Gate()
-    if kind == 'hadamard': return Hadamard(width)
+    if kind == 'hadamard': return HadamardTwoStage(width) if p.get('variant')=='two_stage' else Hadamard(width)
     if kind == 'monarch':return Monarch(width,p.get('split',False))
-    if kind == 'causal_conv':return CausalConv(width,p.get('taps',3))
+    if kind == 'causal_conv':return CausalConv(width,p.get('taps',3),p.get('active_taps'))
     if kind == 'routing':return Routing(width,p.get('lanes',4),p.get('layer',0))
     if kind == 'engram_hash':return EngramHash(p.get('orders',[2,3]),p.get('hash_heads',2),p.get('buckets',8192))
     if kind == 'engram_lookup':return EngramLookup(p.get('width',config['width']),p.get('orders',[2,3]),p.get('hash_heads',2),p.get('buckets',8192),p.get('sub_dim',128),p.get('dilation',3))
@@ -352,6 +419,6 @@ def make_module(kind, p, input_shape, config):
 
 
 class CausalConv(nn.Module):
-    def __init__(self,width,taps):
-        super().__init__();v=torch.zeros(taps,width);v[0]=1;self.taps=nn.Parameter(v)
-    def forward(self,x,**_):return sum(self.taps[j]*shift(x,j) for j in range(self.taps.shape[0]))
+    def __init__(self,width,taps,active_taps=None):
+        super().__init__();v=torch.zeros(taps,width);v[0]=1;self.taps=nn.Parameter(v);self.active_taps=active_taps or taps
+    def forward(self,x,**_):return sum(self.taps[j]*shift(x,j) for j in range(self.active_taps))

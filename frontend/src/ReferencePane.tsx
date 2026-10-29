@@ -24,6 +24,7 @@ import {
   LayoutGrid,
   LockKeyhole,
   Maximize2,
+  MessageSquareText,
   RefreshCw,
   Tags,
   X,
@@ -48,6 +49,7 @@ import { layoutSignature } from "./layout-core";
 import { measureLabels } from "./labels";
 import { edgeTypes, RoutingProvider } from "./edges";
 import { GraphNavigator } from "./GraphNavigator";
+import { GraphAnnotations } from "./GraphAnnotations";
 import { isGraphEditShortcut } from "./ReferenceInspector";
 import type { ReferenceInspection } from "./ReferenceInspector";
 import { graphVariableScope } from "./graphVariables";
@@ -243,9 +245,11 @@ export function ReferencePane({
     </section>
   );
 }
-function referenceFitPadding(): NonNullable<FitViewOptions["padding"]> {
+function referenceFitPadding(
+  withNotes = false,
+): NonNullable<FitViewOptions["padding"]> {
   return {
-    top: "16px",
+    top: withNotes ? `${Math.min(400, window.innerHeight * 0.42)}px` : "16px",
     bottom: "76px",
     left: "24px",
     right: window.innerWidth <= 760 ? "68px" : "24px",
@@ -343,6 +347,8 @@ function ReferenceCanvas({
       onNavigate((previous) => ({ ...previous, blocks: path, node: null }));
   }, [path, location.blocks.length, onNavigate]);
   const [showLabels, setShowLabels] = useState(false);
+  const [showAnnotations, setShowAnnotations] = useState(true);
+  const [variablesOpen, setVariablesOpen] = useState(true);
   const [report, setReport] = useState<ValidationReport | null>(null);
   const [error, setError] = useState("");
   const [arranging, setArranging] = useState(false);
@@ -407,7 +413,12 @@ function ReferenceCanvas({
   );
   const focus = useCallback(() => {
     if (window.innerWidth > 760 && (host.current?.clientWidth ?? 0) >= 720) {
-      void flow.fitView({ padding: 0.16 });
+      const notes =
+        showAnnotations &&
+        graphScope(current.current, currentPath.current).nodes.some((node) =>
+          node.data.annotation?.trim(),
+        );
+      void flow.fitView({ padding: notes ? referenceFitPadding(true) : 0.16 });
       return;
     }
     const graph = graphScope(current.current, currentPath.current);
@@ -417,11 +428,14 @@ function ReferenceCanvas({
     if (node)
       void flow.fitView({
         nodes: [{ id: node.id }],
-        padding: referenceFitPadding(),
+        padding: referenceFitPadding(
+          showAnnotations &&
+            graph.nodes.some((item) => item.data.annotation?.trim()),
+        ),
         minZoom: 0.3,
         maxZoom: 0.95,
       });
-  }, [flow]);
+  }, [flow, showAnnotations]);
   useEffect(() => {
     const element = host.current;
     if (!element) return;
@@ -583,6 +597,7 @@ function ReferenceCanvas({
             kind: selected.data.kind,
             projectName: project.name,
             description: selected.data.description,
+            annotation: selected.data.annotation,
             properties: [
               ...Object.entries(selected.data.params).map(([name, value]) => ({
                 name,
@@ -690,10 +705,31 @@ function ReferenceCanvas({
             <Tags size={15} aria-hidden="true" />
           </button>
           <button
+            aria-label={
+              showAnnotations
+                ? "Hide reference design notes"
+                : "Show reference design notes"
+            }
+            title={
+              showAnnotations
+                ? "Hide reference design notes"
+                : "Show reference design notes"
+            }
+            aria-pressed={showAnnotations}
+            onClick={() => setShowAnnotations((value) => !value)}
+          >
+            <MessageSquareText size={15} aria-hidden="true" />
+          </button>
+          <button
             aria-label="Fit reference graph"
             title="Fit reference graph"
             onClick={() =>
-              void flow.fitView({ padding: referenceFitPadding() })
+              void flow.fitView({
+                padding: referenceFitPadding(
+                  showAnnotations &&
+                    graph.nodes.some((node) => node.data.annotation?.trim()),
+                ),
+              })
             }
           >
             <Maximize2 size={15} aria-hidden="true" />
@@ -773,8 +809,52 @@ function ReferenceCanvas({
             />
             <Controls
               showInteractive={false}
-              fitViewOptions={{ padding: referenceFitPadding() }}
+              fitViewOptions={{
+                padding: referenceFitPadding(
+                  showAnnotations &&
+                    graph.nodes.some((node) => node.data.annotation?.trim()),
+                ),
+              }}
             />
+            <GraphAnnotations nodes={graph.nodes} visible={showAnnotations} />
+            <Panel position="top-left" className="variables-canvas-panel">
+              <aside
+                className="graph-variable-card reference-variables nodrag nopan nowheel"
+                aria-label="Reference variables"
+              >
+                <header className="variable-card-heading">
+                  <strong>Variables · read-only</strong>
+                  <button
+                    aria-label={
+                      variablesOpen
+                        ? "Minimize reference variables"
+                        : "Expand reference variables"
+                    }
+                    onClick={() => setVariablesOpen((open) => !open)}
+                  >
+                    {variablesOpen ? "−" : "+"}
+                  </button>
+                </header>
+                {variablesOpen && (
+                  <div className="variable-card-body">
+                    <dl>
+                      {Object.entries(
+                        graphVariableScope(project, path).effective,
+                      ).map(([name, value]) => (
+                        <div key={name}>
+                          <dt>${name}</dt>
+                          <dd>{value}</dd>
+                        </div>
+                      ))}
+                    </dl>
+                    <small>
+                      Values include inherited variables and enclosing block
+                      settings.
+                    </small>
+                  </div>
+                )}
+              </aside>
+            </Panel>
             <Panel position="bottom-center">
               <GraphNavigator
                 graph={graph}
@@ -783,7 +863,12 @@ function ReferenceCanvas({
                   setSelection(id);
                 }}
                 compact
-                fitPadding={referenceFitPadding}
+                fitPadding={() =>
+                  referenceFitPadding(
+                    showAnnotations &&
+                      graph.nodes.some((node) => node.data.annotation?.trim()),
+                  )
+                }
               />
             </Panel>
           </ReactFlow>

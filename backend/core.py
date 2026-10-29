@@ -25,7 +25,7 @@ def valid_dimension(value):
             isinstance(value, str) and re.fullmatch(r'[A-Za-z_][A-Za-z_0-9]*(?:\+[1-9][0-9]*)*', value) is not None)
 PORTS = {
     'input': [], 'output': ['a'], 'embedding': ['a'], 'linear': ['a'],
-    'norm': ['a'], 'silu': ['a'], 'sigmoid': ['a'], 'add': ['a', 'b'],
+    'norm': ['a'], 'layer_norm': ['a'], 'dropout': ['a'], 'position_embedding': ['a'], 'conv1d': ['a'], 'pool1d': ['a'], 'conv2d': ['a'], 'pool2d': ['a'], 'gelu': ['a'], 'relu': ['a'], 'silu': ['a'], 'sigmoid': ['a'], 'add': ['a', 'b'],
     'multiply': ['a', 'b'], 'concat': ['a', 'b'], 'attention': ['a','b'],
     'cross_attention': ['a', 'b','c'], 'ffn': ['a'], 'ngram': ['a'],
     'lookup': ['a'], 'mask': ['a'], 'select': ['a', 'b'],
@@ -39,6 +39,17 @@ PORTS = {
     'sdpa':['a','b','c','d'], 'causal_conv':['a'], 'softmax':['a'], 'matmul':['a','b'], 'transpose':['a'],
     'attention_pattern':['a','b'], 'pattern_union':['a','b'], 'pattern_intersection':['a','b'],
 }
+
+
+
+def validate_rope_settings(p):
+    theta=p.get('theta',10000.)
+    if not isinstance(theta,(int,float)) or isinstance(theta,bool) or not math.isfinite(theta) or theta<=1:raise ValueError('Rotary theta must be finite and greater than 1.')
+    if p.get('rope_scaling','none') not in ('none','yarn'):raise ValueError('RoPE scaling must be none or yarn.')
+    if p.get('rope_scaling','none')=='yarn':
+        factor=p.get('rope_factor',1)
+        if not isinstance(factor,(int,float)) or isinstance(factor,bool) or not math.isfinite(factor) or factor<1:raise ValueError('YaRN factor must be finite and at least 1.')
+        if type(p.get('rope_original_context',32768)) is not int or p.get('rope_original_context',32768)<1:raise ValueError('YaRN original context must be positive.')
 
 
 def optional_ports(node):
@@ -273,9 +284,14 @@ def validate_project(project):
                 elif kind in ('block', 'loop'):
                     if not d.get('body'):
                         raise ValueError('Container has no internal graph.')
+                    error_start = len(errors)
                     nested, count = visit(d['body'], args, key + '/', {**cfg,**p})
-                    if len(nested) != 1:
+                    declared_outputs = sum(child['data'].get('kind') == 'output' for child in d['body']['nodes'])
+                    if declared_outputs != 1:
                         raise ValueError('A container must have exactly one output.')
+                    if not nested:
+                        cause = errors[error_start]['message'] if len(errors) > error_start else 'an internal output shape could not be determined.'
+                        raise ValueError(f'Cannot determine this container’s output. {cause} Open the container to inspect its graph.')
                     out = nested[0]
                     if kind == 'loop':
                         if not isinstance(p.get('iterations', 1), int) or p.get('iterations', 1) < 1:
@@ -426,6 +442,7 @@ def validate_project(project):
                         out['shape'][1]*=repeats
                     elif kind=='rope':
                         if len(s)!=4 or s[-1]%2:raise ValueError('RoPE expects [B,H,T,D] with even D.')
+                        validate_rope_settings(p)
                     elif kind=='sdpa':
                         k,v=args[1:3]
                         if len(s)!=4 or len(k['shape'])!=4 or len(v['shape'])!=4 or s[:2]!=k['shape'][:2] or k['shape'][:3]!=v['shape'][:3] or s[-1]!=k['shape'][-1] or k['dtype']!='float32' or v['dtype']!='float32':raise ValueError('SDPA requires Q[B,H,T,D], K[B,H,S,D], V[B,H,S,Dv].')
@@ -434,9 +451,13 @@ def validate_project(project):
                             try: validate_mask(args[3],s,k['shape'])
                             except ValueError as exc: raise ContractError(str(exc), 'd') from exc
                         if p.get('backend','dense') not in ('dense','flex','auto'):raise ValueError('Attention backend must be dense, flex, or auto.')
+                        if not isinstance(p.get('attention_dropout',0),(int,float)) or not 0<=p.get('attention_dropout',0)<=1:raise ValueError('Attention dropout must be between 0 and 1.')
+                        if p.get('attention_dropout',0) and p.get('backend','dense')=='flex':raise ValueError('Attention dropout requires the dense or auto backend.')
                     elif kind=='causal_conv':
                         taps=p.get('taps',3)
                         if len(s)!=3 or not isinstance(taps,int) or taps<1:raise ValueError('Causal convolution expects [B,T,D] and a positive tap count.')
+                        active=p.get('active_taps',taps)
+                        if type(active) is not int or not 1<=active<=taps:raise ValueError('Active convolution taps must be between 1 and the tap count.')
                         count=taps*s[-1]
                     elif kind=='matmul':
                         if args[1]['dtype'] != 'float32':
@@ -450,6 +471,29 @@ def validate_project(project):
                         out['shape'][a],out['shape'][b]=s[b],s[a]
                     elif kind=='softmax':
                         if not -len(s)<=p.get('dim',-1)<len(s):raise ValueError('Softmax axis is outside tensor rank.')
+                elif kind in ('conv1d','pool1d','conv2d','pool2d'):
+                    shape=x['shape']; is_2d=kind.endswith('2d'); pooling=kind.startswith('pool')
+                    if x['dtype']!='float32' or len(shape)!=(4 if is_2d else 3):
+                        raise ValueError('Expected float features [B,C,H,W] for 2D or [B,T,C] for 1D.')
+                    kernel=p.get('kernel_size',2 if pooling else 3); stride=p.get('stride',2 if pooling else 1); padding=0 if pooling else p.get('padding',0)
+                    if any(type(v) is not int or v<1 for v in (kernel,stride)) or type(padding) is not int or padding<0:
+                        raise ValueError('Kernel and stride must be positive integers; padding must be a non-negative integer.')
+                    if pooling and p.get('mode','max') not in ('max','average'):raise ValueError('Pooling mode must be max or average.')
+                    channel=shape[1] if is_2d else shape[-1]
+                    if type(channel) is not int or channel<1:raise ValueError('Input channel count must be a known positive integer.')
+                    output=copy.deepcopy(shape)
+                    for axis in ((2,3) if is_2d else (1,)):
+                        length=shape[axis]
+                        if type(length) is int: output[axis]=(length+2*padding-kernel)//stride+1
+                        elif stride==1 and 2*padding==kernel-1: output[axis]=length
+                        else: raise ValueError('Set a fixed input spatial or sequence length to infer this kernel, stride and padding.')
+                        if type(output[axis]) is int and output[axis]<1:raise ValueError('Kernel is too large for the input.')
+                    if not pooling:
+                        out_channels=p.get('out_channels',32) if is_2d else p.get('out',channel)
+                        if type(out_channels) is not int or out_channels<1:raise ValueError('Output channels must be a positive integer.')
+                        output[1 if is_2d else -1]=out_channels
+                        count=channel*out_channels*(kernel**(2 if is_2d else 1))+(out_channels if p.get('bias',True) else 0)
+                    out={'shape':output,'dtype':'float32'}
                 else:
                     if x['dtype'] != 'float32' or len(x['shape']) < 2:
                         raise ValueError('Expected floating point features.')
@@ -479,10 +523,21 @@ def validate_project(project):
                             raise ValueError('Query heads must be a positive multiple of KV heads.')
                         hd = p.get('head_dim', dim // heads); vd = p.get('value_dim', dim // heads)
                         if 'head_dim' not in p and dim % heads:
-                            raise ValueError(f'Width {dim} is not divisible by {heads} heads.')
+                            mha = kv == heads
+                            candidates = sorted((h for h in range(1, min(dim // 2, 256) + 1) if dim % h == 0 and (dim // h) % 2 == 0 and (mha or h % kv == 0)), key=lambda h: (abs(h - heads), h))[:3]
+                            if candidates and mha:
+                                examples = f' For example, use {candidates[0]} query heads and {candidates[0]} KV heads for multi-head attention.'
+                            elif candidates:
+                                examples = f" With {kv} KV heads, examples include {', '.join(map(str, candidates))} query heads."
+                            else:
+                                examples = ' You may also need to change the KV head count.'
+                            raise ValueError(f'Width {dim} cannot be split evenly across {heads} query heads ({dim} ÷ {heads}). Choose a head count that divides the width.{examples} Query heads must also be a multiple of KV heads.')
                         if not isinstance(hd,int) or not isinstance(vd,int) or hd < 2 or hd % 2 or vd < 1:
                             raise ValueError('Q/K head width must be a positive even integer; value width must be positive.')
                         if any(not isinstance(p.get(v,0),int) or p.get(v,0)<0 for v in ('window','conv_taps')):raise ValueError('Attention window and convolution taps must be non-negative integers.')
+                        if not isinstance(p.get('qk_norm_eps',1e-6),(int,float)) or not math.isfinite(p.get('qk_norm_eps',1e-6)) or p.get('qk_norm_eps',1e-6)<=0:raise ValueError('Q/K normalization epsilon must be finite and positive.')
+                        if p.get('rope_scaling','none')!='none' and not p.get('rope',True):raise ValueError('RoPE scaling requires rotary positions.')
+                        if p.get('rope',True):validate_rope_settings(p)
                         if kind == 'cross_attention' and (len(args[1]['shape']) != 3 or args[1]['shape'][0] != x['shape'][0] or args[1]['shape'][-1] != dim or args[1]['dtype'] != 'float32'):
                             raise ContractError(f'Cross-attention memory must be [B,S,D] with batch {x["shape"][0]} and width {dim}; received {args[1]}.', 'b')
                         mask=args[2] if kind=='cross_attention' else args[1]
@@ -492,7 +547,11 @@ def validate_project(project):
                             try: validate_mask(mask,qshape,[memory['shape'][0],heads,memory['shape'][1],hd])
                             except ValueError as exc: raise ContractError(str(exc), 'c' if kind == 'cross_attention' else 'b') from exc
                         if p.get('backend','dense') not in ('dense','flex','auto'):raise ValueError('Attention backend must be dense, flex, or auto.')
+                        if not isinstance(p.get('attention_dropout',0),(int,float)) or not 0<=p.get('attention_dropout',0)<=1:raise ValueError('Attention dropout must be between 0 and 1.')
+                        if p.get('attention_dropout',0) and p.get('backend','dense')=='flex':raise ValueError('Attention dropout requires the dense or auto backend.')
                         count = dim * (heads * hd + kv * hd + kv * vd + heads * vd)
+                        if p.get('qkv_bias', False): count += heads*hd+kv*hd+kv*vd
+                        if p.get('output_bias', False): count += dim
                         if p.get('qk_norm', False): count += 2 * hd
                         if p.get('gated', False): count += dim * heads * vd
                         count += p.get('conv_taps',0)*(heads*hd+kv*hd+kv*vd)
@@ -500,13 +559,28 @@ def validate_project(project):
                         hidden = p.get('hidden', dim * 4)
                         if not isinstance(hidden, int) or hidden < 1: raise ValueError('FFN hidden width must be positive.')
                         count = 3 * dim * hidden
+                    elif kind == 'layer_norm':
+                        if not isinstance(p.get('eps',1e-5),(int,float)) or not math.isfinite(p.get('eps',1e-5)) or p.get('eps',1e-5)<=0:raise ValueError('Normalization epsilon must be finite and positive.')
+                        count=dim*(1+int(p.get('bias',True))) if p.get('affine',True) else 0
+                    elif kind == 'dropout':
+                        probability=p.get('probability',0.1)
+                        if not isinstance(probability,(int,float)) or not 0<=probability<=1:raise ValueError('Dropout probability must be between 0 and 1.')
+                    elif kind == 'position_embedding':
+                        limit=p.get('max_length',2048)
+                        if len(x['shape'])!=3 or type(limit) is not int or limit<1:raise ValueError('Position embeddings require [B,T,D] and a positive table length.')
+                        if type(x['shape'][1]) is int and x['shape'][1]>limit:raise ValueError('Sequence exceeds the learned position table length.')
+                        count=limit*dim
+                    elif kind == 'gelu':
+                        if p.get('approximate','none') not in ('none','tanh'):raise ValueError('GELU approximation must be none or tanh.')
                     elif kind == 'norm':
                         if not isinstance(p.get('eps',1e-6),(int,float)) or p.get('eps',1e-6)<=0:raise ValueError('Normalization epsilon must be positive.')
                         count = dim
                     elif kind=='scale':
                         factor=p.get('factor',1)
                         if not isinstance(factor,(int,float)) or not math.isfinite(factor):raise ValueError('Scale factor must be a finite number.')
-                    elif kind == 'hadamard': count = 4 * (1 << (dim - 1).bit_length())
+                    elif kind == 'hadamard':
+                        if p.get('variant','three_stage') not in ('three_stage','two_stage'):raise ValueError('Hadamard variant must be two_stage or three_stage.')
+                        count = (3 if p.get('variant')=='two_stage' else 4) * (1 << (dim - 1).bit_length())
                     elif kind == 'monarch':
                         size=1 << (dim-1).bit_length();ba=1 << ((size-1).bit_length()//2);bb=size//ba
                         count=3*(ba*ba+bb*bb)+5*size+8*(dim+size)

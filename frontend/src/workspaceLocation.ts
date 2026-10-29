@@ -1,5 +1,5 @@
 /** Shareable view state. Graph documents stay in saved projects/local recovery. */
-export type WorkspaceTab = "graph" | "code" | "sources";
+export type WorkspaceTab = "graph" | "code" | "sources" | "training";
 export interface ReferenceLocation {
   blocks: string[];
   node: string | null;
@@ -44,7 +44,10 @@ export function readWorkspaceLocation(search: string): WorkspaceLocation {
     model: params.get("model") || null,
     blocks: params.getAll("block"),
     node: params.get("node") || null,
-    tab: view === "code" || view === "sources" ? view : "graph",
+    tab:
+      view === "code" || view === "sources" || view === "training"
+        ? view
+        : "graph",
     library: params.get("library") === "models" ? "models" : "blocks",
     panel: panel === "library" || panel === "properties" ? panel : null,
     split: params.get("split") === "1",
@@ -66,6 +69,10 @@ export function readWorkspaceLocation(search: string): WorkspaceLocation {
 }
 export function workspaceURL(href: string, state: WorkspaceLocation): string {
   const url = new URL(href);
+  if (url.searchParams.get("model") !== state.model) {
+    url.searchParams.delete("stage");
+    url.searchParams.delete("run");
+  }
   for (const key of keys) url.searchParams.delete(key);
   const set = (key: string, value: string | null) => {
     if (value) url.searchParams.set(key, value);

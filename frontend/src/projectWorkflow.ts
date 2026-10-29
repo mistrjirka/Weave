@@ -22,6 +22,7 @@ export function createProject(
   const project = structuredClone(starter);
   project.id = id;
   project.name = name.trim();
+  project.config.theta ??= 1_000_000;
   project.description = starter.id === "blank" ? "" : starter.description;
   delete project.updated;
   return project;

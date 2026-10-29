@@ -117,6 +117,13 @@ OPERATIONS = {
     "head": Operation(
         constructor=lambda p, c, s: f"nn.Linear(in_features={s[-1]!r}, out_features={p.get('out', c.get('vocab'))!r}, bias={p.get('bias', False)!r})"
     ),
+    "layer_norm": Operation(constructor=lambda p, c, s: f"nn.LayerNorm({s[-1]!r}, eps={p.get('eps', 1e-5)!r}, elementwise_affine={p.get('affine', True)!r}, bias={p.get('bias', True)!r})"),
+    "dropout": Operation(constructor=lambda p, c, s: f"nn.Dropout(p={p.get('probability', 0.1)!r})"),
+    "position_embedding": Operation(constructor=lambda p, c, s: f"LearnedPositions(width={s[-1]!r}, max_length={p.get('max_length', 2048)!r})", runtime=("LearnedPositions",)),
+    "conv1d": Operation(constructor=lambda p, c, s: f"SequenceConv1d(in_channels={s[-1]!r}, out_channels={p.get('out', s[-1])!r}, kernel_size={p.get('kernel_size', 3)!r}, stride={p.get('stride', 1)!r}, padding={p.get('padding', 0)!r}, bias={p.get('bias', True)!r})", runtime=("SequenceConv1d",)),
+    "pool1d": Operation(constructor=lambda p, c, s: f"SequencePool1d(kernel_size={p.get('kernel_size', 2)!r}, stride={p.get('stride', 2)!r}, mode={p.get('mode', 'max')!r})", runtime=("SequencePool1d",)),
+    "conv2d": Operation(constructor=lambda p, c, s: f"nn.Conv2d(in_channels={s[1]!r}, out_channels={p.get('out_channels', 32)!r}, kernel_size={p.get('kernel_size', 3)!r}, stride={p.get('stride', 1)!r}, padding={p.get('padding', 0)!r}, bias={p.get('bias', True)!r})"),
+    "pool2d": Operation(constructor=lambda p, c, s: f"nn.{('MaxPool2d' if p.get('mode', 'max') == 'max' else 'AvgPool2d')}(kernel_size={p.get('kernel_size', 2)!r}, stride={p.get('stride', 2)!r})"),
     "norm": Operation(
         constructor=lambda p, c, s: f"nn.RMSNorm({s[-1]!r}, eps={p.get('eps', 1e-6)!r})"
     ),
@@ -134,14 +141,14 @@ OPERATIONS = {
     ),
     "gate": Operation(constructor=lambda p, c, s: "Gate()", runtime=("Gate",)),
     "hadamard": Operation(
-        constructor=lambda p, c, s: f"Hadamard({s[-1]!r})", runtime=("Hadamard",)
+        constructor=lambda p, c, s: f"{'HadamardTwoStage' if p.get('variant') == 'two_stage' else 'Hadamard'}({s[-1]!r})", runtime=("Hadamard", "HadamardTwoStage")
     ),
     "monarch": Operation(
         constructor=lambda p, c, s: f"Monarch(width={s[-1]!r}, split={p.get('split', False)!r})",
         runtime=("Monarch",),
     ),
     "causal_conv": Operation(
-        constructor=lambda p, c, s: f"CausalConv(width={s[-1]!r}, taps={p.get('taps', 3)!r})",
+        constructor=lambda p, c, s: f"CausalConv(width={s[-1]!r}, taps={p.get('taps', 3)!r}, active_taps={p.get('active_taps')!r})",
         runtime=("CausalConv",),
     ),
     "routing": Operation(
@@ -162,6 +169,8 @@ OPERATIONS = {
     "concat": Operation(
         expression=lambda a, p, c: f"torch.cat(({a[0]}, {a[1]}), dim=-1)"
     ),
+    "gelu": Operation(expression=lambda a, p, c: f"F.gelu({a[0]}, approximate={p.get('approximate', 'none')!r})"),
+    "relu": Operation(expression=lambda a, p, c: f"F.relu({a[0]})"),
     "silu": Operation(expression=lambda a, p, c: f"F.silu({a[0]})"),
     "sigmoid": Operation(expression=lambda a, p, c: f"torch.sigmoid({a[0]})"),
     "scale": Operation(expression=lambda a, p, c: f"{a[0]} * {p.get('factor', 1.0)!r}"),
@@ -182,11 +191,11 @@ OPERATIONS = {
         expression=lambda a, p, c: f"{a[0]}.repeat_interleave({p.get('repeats', 1)!r}, dim=1)"
     ),
     "rope": Operation(
-        expression=lambda a, p, c: f"rotary_positions({a[0]}, theta={p.get('theta', 10000.0)!r})",
+        expression=lambda a, p, c: f"rotary_positions({a[0]}, theta={p.get('theta', 10000.0)!r}, rope_scaling={p.get('rope_scaling', 'none')!r}, rope_factor={p.get('rope_factor', 1.0)!r}, rope_original_context={p.get('rope_original_context', 32768)!r})",
         helpers=("rotary_positions",),
     ),
     "sdpa": Operation(
-        expression=lambda a, p, c: f"attend({', '.join(a[:3])}, mask={a[3]}, causal={p.get('causal', True)!r}, window={p.get('window', 0)!r}, backend={p.get('backend', 'dense')!r})",
+        expression=lambda a, p, c: f"attend({', '.join(a[:3])}, mask={a[3]}, causal={p.get('causal', True)!r}, window={p.get('window', 0)!r}, backend={p.get('backend', 'dense')!r}, dropout_p={p.get('attention_dropout', 0.0)!r} if self.training else 0.0)",
         sparse=("attend",),
     ),
     "attention_pattern": Operation(
@@ -240,6 +249,14 @@ def attention_constructor(p, config, shape, *, cross=False):
         "rope": p.get("rope", True),
         "theta": p.get("theta", 10000.0),
         "qk_norm": p.get("qk_norm", False),
+        "qk_norm_eps": p.get("qk_norm_eps", 1e-6),
+        "qkv_bias": p.get("qkv_bias", False),
+        "output_bias": p.get("output_bias", False),
+        "attention_dropout": p.get("attention_dropout", 0.0),
+        "conv_respects_window": p.get("conv_respects_window", False),
+        "rope_scaling": p.get("rope_scaling", "none"),
+        "rope_factor": p.get("rope_factor", 1.0),
+        "rope_original_context": p.get("rope_original_context", 32768),
         "gated": p.get("gated", False),
         "conv_taps": p.get("conv_taps", 0),
         "backend": p.get("backend", "dense"),
@@ -252,6 +269,14 @@ def attention_constructor(p, config, shape, *, cross=False):
         "rope": True,
         "theta": 10000.0,
         "qk_norm": False,
+        "qk_norm_eps": 1e-6,
+        "qkv_bias": False,
+        "output_bias": False,
+        "attention_dropout": 0.0,
+        "conv_respects_window": False,
+        "rope_scaling": "none",
+        "rope_factor": 1.0,
+        "rope_original_context": 32768,
         "gated": False,
         "conv_taps": 0,
         "backend": "dense",
@@ -506,6 +531,8 @@ class SourceGenerator:
                         f"self.{attributes[node['id']]}.weight = self.{attributes[tie]}.weight",
                     ]
                 )
+        if not prefix:
+            self.files["graph_modules.json"] = json.dumps(attributes, indent=2)
         values = [value for _, value in sorted(returns)]
         if not values:
             raise ValueError(

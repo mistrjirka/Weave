@@ -178,6 +178,40 @@ def test_ffn_extreme_internal_width_uses_resolved_nested_settings():
     assert validate_project(project)["warnings"][0]["node"] == "body/n0"
 
 
+@pytest.mark.parametrize(("hidden", "expected"), [(32, True), (64, True), (65, False), (128, False), (256, False)])
+def test_ffn_bottleneck_is_advisory_and_uses_input_width(hidden, expected):
+    project = chain(["ffn"])
+    project["graph"]["nodes"][1]["data"]["params"]["hidden"] = hidden
+    report = validate_project(project)
+    assert report["valid"]
+    hints = [w for w in report["warnings"] if w.get("code") == "ffn-bottleneck"]
+    assert bool(hints) is expected
+    if hints:
+        assert "128 features" in hints[0]["message"]
+        assert str(hidden) in hints[0]["message"]
+        assert "valid" in hints[0]["suggestion"]
+        assert "model.py" in compile_project(project)
+
+
+def test_ffn_extreme_bottleneck_does_not_repeat_advice():
+    project = chain(["ffn"])
+    project["graph"]["nodes"][1]["data"]["params"]["hidden"] = 1
+    assert codes(project) == {"narrow-bottleneck"}
+
+
+def test_ffn_bottleneck_appears_in_a_resolved_unfinished_container():
+    project = chain(["ffn"])
+    project["graph"]["nodes"][1]["data"]["params"]["hidden"] = 64
+    body = project["graph"]
+    project["graph"] = {
+        "nodes": [copy.deepcopy(body["nodes"][0]), node("body", "block", "Nested", 0, 0, {}, body), node("out", "output", "Out", 0, 0)],
+        "edges": [edge("x", "body")],
+    }
+    report = validate_project(project)
+    assert not report["valid"]
+    assert any(w.get("code") == "ffn-bottleneck" and w["node"] == "body/n0" for w in report["warnings"])
+
+
 def test_affine_chain_has_one_explanatory_note_and_activations_stop_it():
     project = chain(["linear"] * 4)
     hints = [

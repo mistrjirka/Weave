@@ -78,6 +78,8 @@ export const graphSchema: z.ZodType<Graph> = z.lazy(() =>
               share: z.string().optional(),
               role: z.string().optional(),
               description: z.string().optional(),
+              annotation: z.string().optional(),
+              annotationSource: z.string().optional(),
               iteration: z
                 .object({ index: z.number(), total: z.number() })
                 .optional(),

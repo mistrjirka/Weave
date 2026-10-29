@@ -75,3 +75,19 @@ test("project browser and creation starter survive copied URLs without stale dia
     null,
   );
 });
+
+test("training view and run links stay with their project", () => {
+  const state = readWorkspaceLocation("?model=one&view=training&stage=s&run=r");
+  assert.equal(state.tab, "training");
+  const same = new URL(
+    workspaceURL(
+      "http://localhost/?model=one&view=training&stage=s&run=r",
+      state,
+    ),
+  );
+  assert.equal(same.searchParams.get("run"), "r");
+  state.model = "two";
+  const other = new URL(workspaceURL(same.href, state));
+  assert.equal(other.searchParams.get("run"), null);
+  assert.equal(other.searchParams.get("stage"), null);
+});

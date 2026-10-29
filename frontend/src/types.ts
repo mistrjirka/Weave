@@ -37,6 +37,8 @@ export interface NodeData extends Record<string, unknown> {
   share?: string;
   role?: string;
   description?: string;
+  annotation?: string;
+  annotationSource?: string;
   iteration?: { index: number; total: number };
   tokenizer?: TokenizerInfo | null;
 }

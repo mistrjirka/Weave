@@ -13,3 +13,5 @@ Frontend libraries retain their respective licenses in installed package metadat
 ## ELK layout engine
 
 The frontend bundles unmodified elkjs 0.12.0 from the Eclipse Layout Kernel project, including its browser worker. It is used under the Eclipse Public License 2.0. The package license is preserved in `references/elkjs_LICENSE.md`. Corresponding source and upstream notices: https://github.com/kieler/elkjs/tree/v0.12.0 and https://github.com/eclipse-elk/elk. The layout adapter and React Flow renderer are separate application code.
+
+`references/needle1_architecture.py` and `references/needle2_architecture.py` are pinned original upstream source files used to generate parity fixtures. Their MIT license is in `references/needle_LICENSE`.

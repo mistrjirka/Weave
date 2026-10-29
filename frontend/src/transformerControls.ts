@@ -27,6 +27,14 @@ export const transformerSettingKeys = new Set([
   ...Object.keys(defaults),
   "head_dim",
   "value_dim",
+  "qkv_bias",
+  "output_bias",
+  "attention_dropout",
+  "qk_norm_eps",
+  "rope_scaling",
+  "rope_factor",
+  "rope_original_context",
+  "conv_respects_window",
   "ffn_width",
 ]);
 export function transformerAttention(data: NodeData): GraphNode | undefined {
@@ -40,11 +48,14 @@ export function transformerSettings(data: NodeData): Parameters | null {
     ...attention.data.params,
     ...data.params,
   };
-  settings.ffn_width ??=
-    data.body?.nodes.find((node) => node.data.kind === "ffn")?.data.params
-      .hidden ?? 256;
+  const ffn = data.body?.nodes.find((node) => node.data.kind === "ffn");
+  if (ffn) settings.ffn_width ??= ffn.data.params.hidden ?? 256;
+  else delete settings.ffn_width;
   return settings;
 }
+const literalSetting = (key: string, value: JsonValue | undefined) =>
+  typeof value === "boolean" || key === "backend" || key === "rope_scaling";
+
 export function exposeTransformerSettings(data: NodeData) {
   const attention = transformerAttention(data),
     settings = transformerSettings(data);
@@ -57,8 +68,9 @@ export function exposeTransformerSettings(data: NodeData) {
       for (const node of data.body?.nodes ?? [])
         if (node.data.kind === "ffn") node.data.params.hidden = "$ffn_width";
     } else
-      attention.data.params[key] =
-        typeof value === "boolean" || key === "backend" ? value : "$" + key;
+      attention.data.params[key] = literalSetting(key, value)
+        ? value
+        : "$" + key;
   }
 }
 function number(
@@ -85,13 +97,49 @@ export function attentionVariant(
     kv = number(settings.kv_heads, scope, heads);
   return heads === kv ? "mha" : kv === 1 ? "mqa" : "gqa";
 }
+/** Explain fields whose value is determined or inactive in the current scope. */
+export function attentionFieldDisabledReason(
+  key: string,
+  settings: Parameters,
+  variant?: AttentionVariant | "custom",
+): string | undefined {
+  if (key === "kv_heads" && variant === "mha")
+    return "MHA uses one key/value head per query head. Change heads to update both.";
+  if (key === "kv_heads" && variant === "mqa")
+    return "MQA shares one key/value head across all query heads.";
+  if (
+    ["theta", "rope_scaling", "rope_factor", "rope_original_context"].includes(
+      key,
+    ) &&
+    settings.rope === false
+  )
+    return "Enable rotary positions to use this setting.";
+  if (
+    ["rope_factor", "rope_original_context"].includes(key) &&
+    settings.rope_scaling !== "yarn"
+  )
+    return "Select YaRN rotary scaling to use this setting.";
+  if (
+    key === "conv_respects_window" &&
+    (settings.conv_taps === 0 ||
+      settings.conv_taps === undefined ||
+      settings.window === 0 ||
+      settings.window === undefined)
+  )
+    return "Enable both convolution taps and a local window to use this setting.";
+  if (key === "qk_norm_eps" && settings.qk_norm !== true)
+    return "Enable query/key normalization to use this setting.";
+  return undefined;
+}
+
 export function setTransformerSetting(
   data: NodeData,
   key: string,
   value: JsonValue,
+  scope: Parameters = {},
 ) {
+  const tiedHeads = attentionVariant(data, scope) === "mha";
   exposeTransformerSettings(data);
-  const tiedHeads = data.params.kv_heads === data.params.heads;
   data.params[key] = value;
   if (
     key === "heads" &&
@@ -99,9 +147,12 @@ export function setTransformerSetting(
     (typeof value === "number" || typeof value === "string")
   )
     data.params.kv_heads = value;
-  if (typeof value === "boolean" || key === "backend") {
+  if (key !== "ffn_width") {
     const attention = transformerAttention(data);
-    if (attention) attention.data.params[key] = value;
+    if (attention)
+      attention.data.params[key] = literalSetting(key, value)
+        ? value
+        : "$" + key;
   }
 }
 export function setAttentionVariant(
@@ -128,12 +179,38 @@ export function setAttentionVariant(
   );
   const heads = number(data.params.heads, scope, 8);
   let kv = number(data.params.kv_heads, scope, 2);
+  const originalKv = kv;
   if (variant === "mha") kv = heads;
   else if (variant === "mqa") kv = 1;
-  else if (kv >= heads || heads % kv)
-    kv =
-      Number.isInteger(heads) && heads > 1 && heads % 2 === 0 ? heads / 2 : 1;
-  data.params.kv_heads = kv;
+  else if (
+    kv < 1 ||
+    kv > heads ||
+    heads % kv ||
+    (variant === "gqa" && (kv === 1 || kv === heads))
+  ) {
+    // Prefer a proper grouping when one exists; prime head counts cannot form one.
+    kv = 1;
+    if (Number.isSafeInteger(heads)) {
+      for (
+        let factor = 2;
+        factor <= Math.sqrt(heads) && factor <= 65536;
+        factor++
+      ) {
+        if (heads % factor === 0) {
+          kv = heads / factor;
+          break;
+        }
+      }
+    }
+  }
+  data.params.kv_heads =
+    variant === "mha"
+      ? (data.params.heads ?? kv)
+      : variant === "mqa"
+        ? 1
+        : kv === originalKv
+          ? (data.params.kv_heads ?? kv)
+          : kv;
   data.params.window = variant === "local" ? 32 : 0;
   attention.data.label = attentionVariants.find(
     (option) => option.id === variant,

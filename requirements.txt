@@ -7,3 +7,8 @@ sentencepiece>=0.2
 pytest>=8,<9
 httpx>=0.28,<1
 black>=25,<27
+# Training telemetry, schema checks, and optional Parquet datasets
+nvidia-ml-py>=12,<14
+psutil>=6,<8
+jsonschema>=4,<5
+pyarrow>=18,<27

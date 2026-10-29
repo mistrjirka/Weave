@@ -5,6 +5,7 @@ import React, {
   useRef,
   useState,
 } from "react";
+import { TrainingWorkspace } from "./TrainingWorkspace";
 import { createRoot } from "react-dom/client";
 import {
   ReactFlow,
@@ -45,6 +46,7 @@ import {
   FolderOpen,
   GitBranch,
   Layers3,
+  MessageSquareText,
   LayoutGrid,
   Columns2,
   Tags,
@@ -68,6 +70,7 @@ import "@xyflow/react/dist/style.css";
 import "./style.css";
 import "./theme.css";
 import { ThemePicker } from "./ThemePicker";
+import { settingHelp, generalFieldDisabledReason } from "./settingHelp";
 import { compilationInput } from "./compilationInput";
 import {
   graphClipboardType,
@@ -78,6 +81,7 @@ import {
 import {
   attentionVariants,
   attentionVariant,
+  attentionFieldDisabledReason,
   isAttentionVariant,
   transformerSettings,
   transformerSettingKeys,
@@ -91,8 +95,13 @@ import { WeightGroupPicker } from "./WeightGroupPicker";
 import { supportsWeightSharing, weightGroupChoices } from "./weightGroups";
 import { canvasFitPadding, canvasFitInsets } from "./canvasFitPadding";
 import { GraphVariableCard } from "./GraphVariableCard";
+import { GraphAnnotations } from "./GraphAnnotations";
 import { GraphVariables } from "./GraphVariables";
-import { graphVariableScope, bindingValue } from "./graphVariables";
+import {
+  graphVariableScope,
+  bindingValue,
+  previewParameters,
+} from "./graphVariables";
 import { localizeLayerDefaults } from "./parameterScopes";
 import { newId, copyText, retainedPath, Dialog } from "./ui";
 import { visiblePatternField, changePattern } from "./patterns";
@@ -392,7 +401,7 @@ function Diagram({
           ))}
         </div>
         <span className="vector-caption">
-          {kind === "lookup" ? "hash tables" : "lookup table"}
+          {kind === "lookup" ? "memory tables" : "embedding table"}
           <br />
           <b>→ vectors</b>
         </span>
@@ -647,7 +656,14 @@ function ArchitectureNode({ id, data, selected }: NodeProps<DisplayNode>) {
         )}
         {data._error && <CircleAlert size={15} className="error-icon" />}
       </div>
-      <div className="node-title">{data.label}</div>
+      <div className="node-title">
+        {data.label}{" "}
+        {data.annotation && (
+          <span title="Has a design note" aria-label="Has a design note">
+            ✎
+          </span>
+        )}
+      </div>
       {data.share && (
         <div className="weight-badge" title={data.share}>
           ⛓ {data._groupLabel} · same weights{" "}
@@ -716,11 +732,16 @@ function Field<T extends JsonValue>({
   name,
   value,
   onChange,
+  disabledReason,
+  help,
 }: {
   name: string;
   value: T;
   onChange: (value: T) => void;
+  disabledReason?: string;
+  help?: string;
 }) {
+  const [helpOpen, setHelpOpen] = useState(false);
   const [error, setError] = useState("");
   const errorId = React.useId();
   const [draft, setDraft] = useState(
@@ -733,22 +754,62 @@ function Field<T extends JsonValue>({
     );
   }, [value]);
   const label = name.replaceAll("_", " ");
+  const helpId = `${errorId}-explanation`;
+  const heading = (
+    <span className="setting-heading">
+      <span>{label}</span>
+      {help && (
+        <button
+          type="button"
+          className="setting-help-button"
+          aria-label={`Explain ${label}`}
+          aria-expanded={helpOpen}
+          aria-controls={helpId}
+          onClick={() => setHelpOpen((open) => !open)}
+        >
+          ?
+        </button>
+      )}
+    </span>
+  );
+  const explanation =
+    help && helpOpen ? (
+      <p id={helpId} className="setting-explanation">
+        {help}
+      </p>
+    ) : null;
   if (typeof value === "boolean")
     return (
-      <label className="property-row">
-        <span>{label}</span>
-        <button
-          className={"toggle " + (value ? "on" : "")}
-          role="switch"
-          aria-checked={value}
-          aria-label={label}
-          onClick={() => onChange(!value as T)}
-        >
-          <i />
-        </button>
-      </label>
+      <div className="setting-boolean">
+        <div className="property-row">
+          {heading}
+          <button
+            className={"toggle " + (value ? "on" : "")}
+            role="switch"
+            aria-checked={value}
+            aria-label={label}
+            aria-describedby={
+              disabledReason ? `${errorId}-help` : helpOpen ? helpId : undefined
+            }
+            disabled={!!disabledReason}
+            onClick={() => onChange(!value as T)}
+          >
+            <i />
+          </button>
+        </div>
+        {disabledReason && (
+          <small id={`${errorId}-help`} className="field-help">
+            {disabledReason}
+          </small>
+        )}
+        {explanation}
+      </div>
     );
   const selects: Record<string, string[]> = {
+    variant: ["two_stage", "three_stage"],
+    rope_scaling: ["none", "yarn"],
+    approximate: ["none", "tanh"],
+    mode: ["max", "average"],
     dtype: ["int64", "float32", "bool", "attention_pattern"],
     output_dtype: ["float32", "int64", "bool", "attention_pattern"],
     strategy: ["confidence", "random"],
@@ -766,10 +827,15 @@ function Field<T extends JsonValue>({
   };
   if (selects[name])
     return (
-      <label className="property-field">
-        <span>{label}</span>
+      <div className="property-field">
+        {heading}
         <select
+          aria-label={label}
           name={name}
+          disabled={!!disabledReason}
+          aria-describedby={
+            disabledReason ? `${errorId}-help` : helpOpen ? helpId : undefined
+          }
           value={String(value)}
           onChange={(e) => onChange(e.target.value as T)}
         >
@@ -777,7 +843,13 @@ function Field<T extends JsonValue>({
             <option key={v}>{v}</option>
           ))}
         </select>
-      </label>
+        {disabledReason && (
+          <small id={`${errorId}-help`} className="field-help">
+            {disabledReason}
+          </small>
+        )}
+        {explanation}
+      </div>
     );
   const commit = () => {
     if (
@@ -821,15 +893,24 @@ function Field<T extends JsonValue>({
     onChange(next as T);
   };
   return (
-    <label className="property-field">
-      <span>{label}</span>
+    <div className="property-field">
+      {heading}
       {name === "source" ? (
         <textarea
           className="source-editor"
           aria-label="Python source"
+          disabled={!!disabledReason}
           name={name}
           aria-invalid={!!error}
-          aria-describedby={error ? errorId : undefined}
+          aria-describedby={
+            error
+              ? errorId
+              : disabledReason
+                ? `${errorId}-help`
+                : helpOpen
+                  ? helpId
+                  : undefined
+          }
           value={draft}
           spellCheck={false}
           onChange={(e) => setDraft(e.target.value)}
@@ -838,11 +919,20 @@ function Field<T extends JsonValue>({
       ) : (
         <input
           aria-label={label}
+          disabled={!!disabledReason}
           name={name}
           autoComplete="off"
           spellCheck={false}
           aria-invalid={!!error}
-          aria-describedby={error ? errorId : undefined}
+          aria-describedby={
+            error
+              ? errorId
+              : disabledReason
+                ? `${errorId}-help`
+                : helpOpen
+                  ? helpId
+                  : undefined
+          }
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           onBlur={commit}
@@ -851,12 +941,18 @@ function Field<T extends JsonValue>({
           }}
         />
       )}
+      {disabledReason && (
+        <small id={`${errorId}-help`} className="field-help">
+          {disabledReason}
+        </small>
+      )}
+      {explanation}
       {error && (
         <span id={errorId} className="field-error" role="alert">
           {error}
         </span>
       )}
-    </label>
+    </div>
   );
 }
 
@@ -1083,7 +1179,8 @@ function Workbench({
     starterId,
   ]);
   const [arranging, setArranging] = useState(false),
-    [showLabels, setShowLabels] = useState(false);
+    [showLabels, setShowLabels] = useState(false),
+    [showAnnotations, setShowAnnotations] = useState(true);
   const arrangeRequest = useRef(0);
   const editRevision = useRef(0);
   const [connectionPicker, setConnectionPicker] = useState<{
@@ -1660,6 +1757,13 @@ function Workbench({
       ...(entry.role ? { role: entry.role } : {}),
     };
     if (entry.role === "transformer") exposeTransformerSettings(data);
+    if (
+      entry.role === "transformer" ||
+      ["attention", "cross_attention", "rope"].includes(kind)
+    ) {
+      const theta = graphVariableScope(project, path).effective.theta;
+      data.params.theta = typeof theta === "number" ? "$theta" : 1_000_000;
+    }
     addGraphNode(data, screenPosition, source);
   }
   function addGraphNode(
@@ -2266,7 +2370,7 @@ function Workbench({
     ),
   ];
   return (
-    <div className="app-shell">
+    <div className={"app-shell" + (tab === "training" ? " training-mode" : "")}>
       <a className="skip-link" href="#workspace">
         Skip to editor
       </a>
@@ -2309,220 +2413,246 @@ function Workbench({
           </span>
           <ChevronDown size={14} />
         </button>
-        <div className="sidebar-tabs">
-          <button
-            className={left === "blocks" ? "active" : ""}
-            onClick={() => {
-              setLeft("blocks");
-              setSearch("");
-            }}
-          >
-            <Shapes size={14} />
-            Blocks
-          </button>
-          <button
-            className={left === "models" ? "active" : ""}
-            onClick={() => {
-              setLeft("models");
-              setSearch("");
-            }}
-          >
-            <FolderOpen size={14} />
-            Projects
-          </button>
-        </div>
-        <div className="library-search">
-          <label className="library-search-field">
-            <Search size={16} aria-hidden="true" />
-            <input
-              ref={librarySearchRef}
-              aria-label={
-                left === "blocks"
-                  ? "Search blocks"
-                  : "Search projects and examples"
-              }
-              name="library-search"
-              autoComplete="off"
-              placeholder={
-                left === "blocks"
-                  ? "Find a building block…"
-                  : "Find a project or example…"
-              }
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-            />
-          </label>
-          {search && (
-            <button
-              type="button"
-              className="library-search-clear"
-              aria-label="Clear search"
-              onClick={() => {
-                setSearch("");
-                librarySearchRef.current?.focus();
-              }}
-            >
-              <X size={15} aria-hidden="true" />
+        {tab === "training" ? (
+          <div className="training-sidebar-context">
+            <p>Model workspace</p>
+            <strong>{project.name}</strong>
+            <button onClick={() => setTab("graph")}>
+              <Workflow size={15} aria-hidden="true" />
+              Architecture
             </button>
-          )}
-        </div>
-        <div className="library-scroll">
-          {search && !groups.length && left === "blocks" && (
-            <p className="library-empty" role="status">
-              No blocks match “{search}”. Try attention, memory, or loop.
-            </p>
-          )}
-          {left === "blocks" ? (
-            <>
-              {groups.map((group) => (
-                <div className="library-group" key={group}>
-                  <h3>{group}</h3>
-                  {catalog
-                    .filter(
-                      (e) =>
-                        e.category === group &&
-                        (e.label + " " + e.description)
-                          .toLowerCase()
-                          .includes(search.toLowerCase()),
-                    )
-                    .map((entry) => {
-                      const Icon = icons[entry.kind] || Shapes;
-                      return (
+            <button onClick={() => setTab("code")}>
+              <Code2 size={15} aria-hidden="true" />
+              PyTorch code
+            </button>
+            <span>
+              <Activity size={15} aria-hidden="true" />
+              Training
+            </span>
+            <small>
+              Training stages and run history are next to your scripts.
+            </small>
+          </div>
+        ) : (
+          <>
+            <div className="sidebar-tabs">
+              <button
+                className={left === "blocks" ? "active" : ""}
+                onClick={() => {
+                  setLeft("blocks");
+                  setSearch("");
+                }}
+              >
+                <Shapes size={14} />
+                Blocks
+              </button>
+              <button
+                className={left === "models" ? "active" : ""}
+                onClick={() => {
+                  setLeft("models");
+                  setSearch("");
+                }}
+              >
+                <FolderOpen size={14} />
+                Projects
+              </button>
+            </div>
+            <div className="library-search">
+              <label className="library-search-field">
+                <Search size={16} aria-hidden="true" />
+                <input
+                  ref={librarySearchRef}
+                  aria-label={
+                    left === "blocks"
+                      ? "Search blocks"
+                      : "Search projects and examples"
+                  }
+                  name="library-search"
+                  autoComplete="off"
+                  placeholder={
+                    left === "blocks"
+                      ? "Find a building block…"
+                      : "Find a project or example…"
+                  }
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                />
+              </label>
+              {search && (
+                <button
+                  type="button"
+                  className="library-search-clear"
+                  aria-label="Clear search"
+                  onClick={() => {
+                    setSearch("");
+                    librarySearchRef.current?.focus();
+                  }}
+                >
+                  <X size={15} aria-hidden="true" />
+                </button>
+              )}
+            </div>
+            <div className="library-scroll">
+              {search && !groups.length && left === "blocks" && (
+                <p className="library-empty" role="status">
+                  No blocks match “{search}”. Try attention, memory, or loop.
+                </p>
+              )}
+              {left === "blocks" ? (
+                <>
+                  {groups.map((group) => (
+                    <div className="library-group" key={group}>
+                      <h3>{group}</h3>
+                      {catalog
+                        .filter(
+                          (e) =>
+                            e.category === group &&
+                            (e.label + " " + e.description)
+                              .toLowerCase()
+                              .includes(search.toLowerCase()),
+                        )
+                        .map((entry) => {
+                          const Icon = icons[entry.kind] || Shapes;
+                          return (
+                            <button
+                              className="library-item"
+                              key={entry.label}
+                              title={entry.description}
+                              onClick={() => addNode(entry)}
+                              draggable
+                              onDragStart={(e) =>
+                                e.dataTransfer.setData(
+                                  "application/weave",
+                                  entry.label,
+                                )
+                              }
+                            >
+                              <span
+                                className={"library-icon " + family(entry.kind)}
+                              >
+                                <Icon size={15} />
+                              </span>
+                              <span>
+                                {entry.label}
+                                <small>{entry.description}</small>
+                              </span>
+                              <Plus size={12} className="add-hint" />
+                            </button>
+                          );
+                        })}
+                    </div>
+                  ))}
+                  {customBlocks.length > 0 && (
+                    <div className="library-group">
+                      <h3>Your blocks</h3>
+                      {customBlocks.map((b, i) => (
                         <button
                           className="library-item"
-                          key={entry.label}
-                          title={entry.description}
-                          onClick={() => addNode(entry)}
-                          draggable
-                          onDragStart={(e) =>
-                            e.dataTransfer.setData(
-                              "application/weave",
-                              entry.label,
-                            )
-                          }
+                          key={i}
+                          onClick={() => addGraphNode(b)}
                         >
-                          <span
-                            className={"library-icon " + family(entry.kind)}
-                          >
-                            <Icon size={15} />
+                          <span className="library-icon violet">
+                            <Box size={15} />
                           </span>
                           <span>
-                            {entry.label}
-                            <small>{entry.description}</small>
+                            {b.label}
+                            <small>Reusable subgraph</small>
                           </span>
-                          <Plus size={12} className="add-hint" />
+                          <Plus size={12} />
                         </button>
-                      );
-                    })}
-                </div>
-              ))}
-              {customBlocks.length > 0 && (
-                <div className="library-group">
-                  <h3>Your blocks</h3>
-                  {customBlocks.map((b, i) => (
-                    <button
-                      className="library-item"
-                      key={i}
-                      onClick={() => addGraphNode(b)}
-                    >
-                      <span className="library-icon violet">
-                        <Box size={15} />
-                      </span>
-                      <span>
-                        {b.label}
-                        <small>Reusable subgraph</small>
-                      </span>
-                      <Plus size={12} />
-                    </button>
-                  ))}
-                </div>
-              )}
-            </>
-          ) : (
-            <>
-              <div className="library-group">
-                <h3>Your projects</h3>
-                <p className="collection-description">Saved on this server</p>
-                {saved
-                  .filter((p) =>
-                    p.name
-                      .toLocaleLowerCase()
-                      .includes(search.toLocaleLowerCase()),
-                  )
-                  .map((p) => (
-                    <button
-                      className="model-item"
-                      key={p.id}
-                      onClick={() => loadProject(p, { saved: true })}
-                      title="Open saved project"
-                    >
-                      <FolderOpen size={16} aria-hidden="true" />
-                      <span>
-                        {p.name}
-                        <small>Open saved project</small>
-                      </span>
-                    </button>
-                  ))}
-                {!saved.length && (
-                  <p className="collection-description">
-                    No saved projects yet. Create a network with New project,
-                    then Save it here.
-                  </p>
-                )}
-                {!!saved.length &&
-                  !saved.some((p) =>
-                    p.name
-                      .toLocaleLowerCase()
-                      .includes(search.toLocaleLowerCase()),
-                  ) && (
-                    <p className="collection-description" role="status">
-                      No saved projects match “{search}”.
-                    </p>
+                      ))}
+                    </div>
                   )}
-                <button
-                  className="browse-projects"
-                  onClick={() => {
-                    setProjectTab("projects");
-                    setModal("projects");
-                  }}
-                >
-                  <FolderOpen size={14} aria-hidden="true" />
-                  Manage projects
-                </button>
-              </div>
-              <div className="library-group">
-                <h3>Reference architectures</h3>
-                {templates
-                  .filter(
-                    (t) =>
-                      t.id !== "blank" &&
-                      (t.name + " " + t.description)
-                        .toLocaleLowerCase()
-                        .includes(search.toLocaleLowerCase()),
-                  )
-                  .map((t) => (
-                    <ReferenceCard
-                      key={t.id}
-                      project={t}
-                      compact
-                      onView={() => viewReference(t)}
-                      onUse={() => startNewProject(t.id)}
-                    />
-                  ))}
-                <button
-                  className="browse-projects"
-                  onClick={() => {
-                    setProjectTab("examples");
-                    setModal("projects");
-                  }}
-                >
-                  Browse all examples{" "}
-                  <ArrowUpRight size={14} aria-hidden="true" />
-                </button>
-              </div>
-            </>
-          )}
-        </div>
+                </>
+              ) : (
+                <>
+                  <div className="library-group">
+                    <h3>Your projects</h3>
+                    <p className="collection-description">
+                      Saved on this server
+                    </p>
+                    {saved
+                      .filter((p) =>
+                        p.name
+                          .toLocaleLowerCase()
+                          .includes(search.toLocaleLowerCase()),
+                      )
+                      .map((p) => (
+                        <button
+                          className="model-item"
+                          key={p.id}
+                          onClick={() => loadProject(p, { saved: true })}
+                          title="Open saved project"
+                        >
+                          <FolderOpen size={16} aria-hidden="true" />
+                          <span>
+                            {p.name}
+                            <small>Open saved project</small>
+                          </span>
+                        </button>
+                      ))}
+                    {!saved.length && (
+                      <p className="collection-description">
+                        No saved projects yet. Create a network with New
+                        project, then Save it here.
+                      </p>
+                    )}
+                    {!!saved.length &&
+                      !saved.some((p) =>
+                        p.name
+                          .toLocaleLowerCase()
+                          .includes(search.toLocaleLowerCase()),
+                      ) && (
+                        <p className="collection-description" role="status">
+                          No saved projects match “{search}”.
+                        </p>
+                      )}
+                    <button
+                      className="browse-projects"
+                      onClick={() => {
+                        setProjectTab("projects");
+                        setModal("projects");
+                      }}
+                    >
+                      <FolderOpen size={14} aria-hidden="true" />
+                      Manage projects
+                    </button>
+                  </div>
+                  <div className="library-group">
+                    <h3>Reference architectures</h3>
+                    {templates
+                      .filter(
+                        (t) =>
+                          t.id !== "blank" &&
+                          (t.name + " " + t.description)
+                            .toLocaleLowerCase()
+                            .includes(search.toLocaleLowerCase()),
+                      )
+                      .map((t) => (
+                        <ReferenceCard
+                          key={t.id}
+                          project={t}
+                          compact
+                          onView={() => viewReference(t)}
+                          onUse={() => startNewProject(t.id)}
+                        />
+                      ))}
+                    <button
+                      className="browse-projects"
+                      onClick={() => {
+                        setProjectTab("examples");
+                        setModal("projects");
+                      }}
+                    >
+                      Browse all examples{" "}
+                      <ArrowUpRight size={14} aria-hidden="true" />
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          </>
+        )}
         <div className="sidebar-bottom">
           <button
             aria-label="Open project settings"
@@ -2625,6 +2755,15 @@ function Workbench({
               PyTorch code
             </button>
             <button
+              className={tab === "training" ? "active" : ""}
+              aria-label="Training"
+              aria-current={tab === "training" ? "page" : undefined}
+              onClick={() => setTab("training")}
+            >
+              <Activity size={15} />
+              Training
+            </button>
+            <button
               className={tab === "sources" ? "active" : ""}
               aria-label="Sources"
               aria-current={tab === "sources" ? "page" : undefined}
@@ -2651,1179 +2790,1314 @@ function Workbench({
             </button>
           </div>
         </nav>
-        <div className={"editor-area " + (splitView ? "has-comparison" : "")}>
-          <div
-            className={"canvas-comparison " + (splitView ? "is-split" : "")}
-            style={comparisonStyle}
-          >
-            <section className="canvas-section" aria-label="Editable graph">
-              {splitView && (
-                <div className="editable-pane-heading">
-                  <span>Editing</span>
-                  <strong>{project.name}</strong>
-                </div>
-              )}
-              <div className="canvas-toolbar">
-                <div className="breadcrumbs">
-                  {path.length > 0 && (
-                    <button
-                      className="graph-up-button"
-                      aria-label="Up one level"
-                      title="Return to the enclosing graph"
-                      onClick={goUp}
-                    >
-                      <ArrowUp size={15} />
-                      <span>Up</span>
-                    </button>
-                  )}
-
-                  <button
-                    title="Top level model graph"
-                    onClick={() => {
-                      setPath([]);
-                      setSelection(null);
-                      setTimeout(() => fitGraph(), 80);
-                    }}
-                  >
-                    <Box size={14} />
-                    {path.length ? "Model" : "Model root"}
-                  </button>
-                  {crumbs.map((c, i) => (
-                    <React.Fragment key={i}>
-                      <ChevronRight size={12} />
+        {tab === "training" ? (
+          <TrainingWorkspace key={project.id} project={project} />
+        ) : (
+          <div className={"editor-area " + (splitView ? "has-comparison" : "")}>
+            <div
+              className={"canvas-comparison " + (splitView ? "is-split" : "")}
+              style={comparisonStyle}
+            >
+              <section className="canvas-section" aria-label="Editable graph">
+                {splitView && (
+                  <div className="editable-pane-heading">
+                    <span>Editing</span>
+                    <strong>{project.name}</strong>
+                  </div>
+                )}
+                <div className="canvas-toolbar">
+                  <div className="breadcrumbs">
+                    {path.length > 0 && (
                       <button
-                        onClick={() => {
-                          setPath(path.slice(0, i + 1));
-                          setSelection(null);
-                          setTimeout(() => fitGraph(), 80);
-                        }}
+                        className="graph-up-button"
+                        aria-label="Up one level"
+                        title="Return to the enclosing graph"
+                        onClick={goUp}
                       >
-                        {c}
+                        <ArrowUp size={15} />
+                        <span>Up</span>
                       </button>
-                    </React.Fragment>
-                  ))}
-                </div>
-                <div className="graph-actions">
-                  <button
-                    aria-label="Undo (Ctrl+Z)"
-                    title="Undo (Ctrl+Z)"
-                    disabled={!history.length}
-                    onClick={undo}
-                  >
-                    <Undo2 size={15} />
-                  </button>
-                  <button
-                    aria-label="Redo"
-                    title="Redo"
-                    disabled={!future.length}
-                    onClick={redo}
-                  >
-                    <Redo2 size={15} />
-                  </button>
-                  <i />
-                  <button
-                    aria-label="Create reusable block (Ctrl+G)"
-                    title="Create reusable block (Ctrl+G)"
-                    onClick={groupSelection}
-                  >
-                    <Box size={15} />
-                  </button>
-                  <button
-                    aria-label="Graph variables"
-                    className="variables-button"
-                    title="Graph variables: define values used by $name bindings"
-                    onClick={() => setModal("variables")}
-                  >
-                    <Braces size={15} />
-                    <span className="variables-button-label">Variables</span>
-                  </button>
-                  <button
-                    aria-label="Auto arrange"
-                    title="Auto arrange: reduce crossings and reserve label space"
-                    className="auto-arrange-button"
-                    disabled={arranging}
-                    onClick={autoLayout}
-                  >
-                    <LayoutGrid size={15} />
-                    <span>{arranging ? "Arranging…" : "Auto arrange"}</span>
-                  </button>
-                  <button
-                    aria-label={
-                      showLabels ? "Hide edge labels" : "Show edge labels"
-                    }
-                    aria-pressed={showLabels}
-                    title="Show all edge labels"
-                    onClick={() => setShowLabels((value) => !value)}
-                  >
-                    <Tags size={15} />
-                  </button>
-                  <button
-                    aria-label="Fit graph"
-                    title="Fit graph"
-                    onClick={() =>
-                      fitGraph({
-                        duration: motion(250),
-                      })
-                    }
-                  >
-                    <Maximize2 size={15} />
-                  </button>
-                  <ZoomReadout />
-                </div>
-              </div>
-              {tab === "graph" ? (
-                <div
-                  ref={canvasRef}
-                  className="flow-wrap"
-                  tabIndex={0}
-                  aria-label="Editable graph. Drag to select nodes; Ctrl or Command-click to extend selection. Copy and paste with Ctrl or Command C and V. Hold Space to pan."
-                  onPointerDownCapture={(event) => {
-                    if (
-                      event.target instanceof Element &&
-                      !event.target.closest(
-                        "input,textarea,select,[contenteditable],button",
-                      )
-                    )
-                      event.currentTarget.focus({ preventScroll: true });
-                  }}
-                  onDragOver={(e) => {
-                    e.preventDefault();
-                    e.dataTransfer.dropEffect = "copy";
-                  }}
-                  onDrop={(e) => {
-                    e.preventDefault();
-                    const kind = e.dataTransfer.getData("application/weave");
-                    const entry = catalog.find((c) => c.label === kind);
-                    if (entry) addNode(entry, { x: e.clientX, y: e.clientY });
-                  }}
-                >
-                  <RoutingProvider
-                    nodes={displayNodes}
-                    edges={graph.edges}
-                    layout={graph.layout}
-                    showLabels={showLabels}
-                  >
-                    <ReactFlow
-                      id="editable-flow"
-                      nodes={displayNodes}
-                      edges={displayEdges}
-                      nodeTypes={nodeTypes}
-                      edgeTypes={edgeTypes}
-                      onNodesChange={(changes) => {
-                        changeGraph(
-                          (g) => {
-                            g.nodes = applyNodeChanges(changes, g.nodes);
-                            if (
-                              changes.some((change) => change.type === "select")
-                            ) {
-                              const nodes = g.nodes.filter(
-                                (node) => node.selected,
-                              );
-                              setSelection((current) =>
-                                nodes.some((node) => node.id === current)
-                                  ? current
-                                  : (nodes.at(-1)?.id ?? null),
-                              );
-                              if (nodes.length) setSelectedEdge(null);
-                            }
-                          },
-                          changes.some((c) => c.type === "remove"),
-                          changes.some((c) =>
-                            ["remove", "add", "position"].includes(c.type),
-                          ),
-                        );
+                    )}
+
+                    <button
+                      title="Top level model graph"
+                      onClick={() => {
+                        setPath([]);
+                        setSelection(null);
+                        setTimeout(() => fitGraph(), 80);
                       }}
-                      onEdgesChange={(changes) =>
-                        changeGraph(
-                          (g) => {
-                            g.edges = applyEdgeChanges(
-                              changes.filter(
-                                (c) =>
-                                  !("id" in c) || !c.id.startsWith("weights:"),
-                              ),
-                              g.edges,
-                            );
-                          },
-                          changes.some((c) => c.type === "remove"),
-                          changes.some((c) =>
-                            ["remove", "add", "replace"].includes(c.type),
-                          ),
-                        )
+                    >
+                      <Box size={14} />
+                      {path.length ? "Model" : "Model root"}
+                    </button>
+                    {crumbs.map((c, i) => (
+                      <React.Fragment key={i}>
+                        <ChevronRight size={12} />
+                        <button
+                          onClick={() => {
+                            setPath(path.slice(0, i + 1));
+                            setSelection(null);
+                            setTimeout(() => fitGraph(), 80);
+                          }}
+                        >
+                          {c}
+                        </button>
+                      </React.Fragment>
+                    ))}
+                  </div>
+                  <div className="graph-actions">
+                    <button
+                      aria-label="Undo (Ctrl+Z)"
+                      title="Undo (Ctrl+Z)"
+                      disabled={!history.length}
+                      onClick={undo}
+                    >
+                      <Undo2 size={15} />
+                    </button>
+                    <button
+                      aria-label="Redo"
+                      title="Redo"
+                      disabled={!future.length}
+                      onClick={redo}
+                    >
+                      <Redo2 size={15} />
+                    </button>
+                    <i />
+                    <button
+                      aria-label="Create reusable block (Ctrl+G)"
+                      title="Create reusable block (Ctrl+G)"
+                      onClick={groupSelection}
+                    >
+                      <Box size={15} />
+                    </button>
+                    <button
+                      aria-label="Graph variables"
+                      className="variables-button"
+                      title="Graph variables: define values used by $name bindings"
+                      onClick={() => setModal("variables")}
+                    >
+                      <Braces size={15} />
+                      <span className="variables-button-label">Variables</span>
+                    </button>
+                    <button
+                      aria-label="Auto arrange"
+                      title="Auto arrange: reduce crossings and reserve label space"
+                      className="auto-arrange-button"
+                      disabled={arranging}
+                      onClick={autoLayout}
+                    >
+                      <LayoutGrid size={15} />
+                      <span>{arranging ? "Arranging…" : "Auto arrange"}</span>
+                    </button>
+                    <button
+                      aria-label={
+                        showLabels ? "Hide edge labels" : "Show edge labels"
                       }
-                      onConnect={(connection) =>
-                        changeGraph((g) => {
-                          g.edges = addEdge(
-                            { ...connection, id: uid(), type: "smoothstep" },
-                            g.edges,
-                          );
+                      aria-pressed={showLabels}
+                      title="Show all edge labels"
+                      onClick={() => setShowLabels((value) => !value)}
+                    >
+                      <Tags size={15} />
+                    </button>
+                    <button
+                      aria-label={
+                        showAnnotations
+                          ? "Hide design notes"
+                          : "Show design notes"
+                      }
+                      title={
+                        showAnnotations
+                          ? "Hide design notes"
+                          : "Show design notes"
+                      }
+                      aria-pressed={showAnnotations}
+                      onClick={() => setShowAnnotations((value) => !value)}
+                    >
+                      <MessageSquareText size={15} aria-hidden="true" />
+                    </button>
+                    <button
+                      aria-label="Fit graph"
+                      title="Fit graph"
+                      onClick={() =>
+                        fitGraph({
+                          duration: motion(250),
                         })
                       }
-                      onConnectEnd={(event, state) => {
-                        if (
-                          state.isValid ||
-                          state.toNode ||
-                          state.fromHandle?.type !== "source" ||
-                          !state.fromNode ||
-                          (state.fromHandle.id && state.fromHandle.id !== "out")
-                        )
-                          return;
-                        const point =
-                          "changedTouches" in event
-                            ? event.changedTouches[0]
-                            : event;
-                        const bounds =
-                          canvasRef.current?.getBoundingClientRect();
-                        if (
-                          !point ||
-                          !bounds ||
-                          point.clientX < bounds.left ||
-                          point.clientX > bounds.right ||
-                          point.clientY < bounds.top ||
-                          point.clientY > bounds.bottom
-                        )
-                          return;
-                        const target = document.elementFromPoint(
-                          point.clientX,
-                          point.clientY,
-                        );
-                        if (
-                          target?.closest(
-                            ".react-flow__controls,.react-flow__panel,.react-flow__minimap,button,input",
-                          )
-                        )
-                          return;
-                        setConnectionPicker({
-                          projectId: project.id,
-                          scope: path.join("/"),
-                          source: state.fromNode.id,
-                          sourceHandle: state.fromHandle.id ?? "out",
-                          position: { x: point.clientX, y: point.clientY },
-                          bounds: {
-                            left: bounds.left,
-                            top: bounds.top,
-                            right: bounds.right,
-                            bottom: bounds.bottom,
-                          },
-                        });
-                      }}
-                      onNodeClick={(_, n) => {
-                        const nodes = graphAt(
-                          ref.current,
-                          viewPath.current,
-                        ).nodes.filter((node) => node.selected);
-                        setSelection(
-                          nodes.some((node) => node.id === n.id)
-                            ? n.id
-                            : (nodes.at(-1)?.id ?? null),
-                        );
-                        setSelectedEdge(null);
-                        if (window.innerWidth <= 760)
-                          setMobilePanel("properties");
-                      }}
-                      onNodeDoubleClick={(_, n) => {
-                        if (n.data.body) open(n.id);
-                      }}
-                      onEdgeClick={(_, edge) => {
-                        if (edge.id.startsWith("weights:")) return;
-                        setSelection(null);
-                        setSelectedEdge(edge.id);
-                        if (window.innerWidth <= 760)
-                          setMobilePanel("properties");
-                      }}
-                      onPaneClick={() => {
-                        setSelection(null);
-                        setSelectedEdge(null);
-                      }}
-                      onNodeDragStart={() => {
-                        setHistory((h) => [...h.slice(-39), copy(project)]);
-                        setFuture([]);
-                      }}
-                      onBeforeDelete={async ({ nodes, edges }) => {
-                        const nodeIds = new Set(nodes.map((node) => node.id));
-                        const edgeIds = new Set(edges.map((edge) => edge.id));
-                        changeGraph((graph) => {
-                          graph.nodes = graph.nodes.filter(
-                            (node) => !nodeIds.has(node.id),
-                          );
-                          graph.edges = graph.edges.filter(
-                            (edge) =>
-                              !edgeIds.has(edge.id) &&
-                              !nodeIds.has(edge.source) &&
-                              !nodeIds.has(edge.target),
-                          );
-                        });
-                        setSelection(null);
-                        setSelectedEdge(null);
-                        return false;
-                      }}
-                      fitView={window.innerWidth > 760 && !splitView}
-                      fitViewOptions={{
-                        padding: canvasFitPadding(canvasRef.current),
-                      }}
-                      minZoom={0.04}
-                      maxZoom={1.7}
-                      deleteKeyCode={["Backspace", "Delete"]}
-                      selectionKeyCode="Shift"
-                      multiSelectionKeyCode={["Control", "Meta", "Shift"]}
-                      selectionOnDrag
-                      selectionMode={SelectionMode.Partial}
-                      panOnDrag={[1, 2]}
-                      panActivationKeyCode="Space"
-                      proOptions={{ hideAttribution: true }}
                     >
-                      <Background
-                        variant={BackgroundVariant.Dots}
-                        gap={22}
-                        size={1}
-                        color="var(--graph-dots, #ced6cc)"
-                      />
-                      <Controls
-                        showInteractive={false}
+                      <Maximize2 size={15} />
+                    </button>
+                    <ZoomReadout />
+                  </div>
+                </div>
+                {tab === "graph" ? (
+                  <div
+                    ref={canvasRef}
+                    className="flow-wrap"
+                    tabIndex={0}
+                    aria-label="Editable graph. Drag to select nodes; Ctrl or Command-click to extend selection. Copy and paste with Ctrl or Command C and V. Hold Space to pan."
+                    onPointerDownCapture={(event) => {
+                      if (
+                        event.target instanceof Element &&
+                        !event.target.closest(
+                          "input,textarea,select,[contenteditable],button",
+                        )
+                      )
+                        event.currentTarget.focus({ preventScroll: true });
+                    }}
+                    onDragOver={(e) => {
+                      e.preventDefault();
+                      e.dataTransfer.dropEffect = "copy";
+                    }}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      const kind = e.dataTransfer.getData("application/weave");
+                      const entry = catalog.find((c) => c.label === kind);
+                      if (entry) addNode(entry, { x: e.clientX, y: e.clientY });
+                    }}
+                  >
+                    <RoutingProvider
+                      nodes={displayNodes}
+                      edges={graph.edges}
+                      layout={graph.layout}
+                      showLabels={showLabels}
+                    >
+                      <ReactFlow
+                        id="editable-flow"
+                        nodes={displayNodes}
+                        edges={displayEdges}
+                        nodeTypes={nodeTypes}
+                        edgeTypes={edgeTypes}
+                        onNodesChange={(changes) => {
+                          changeGraph(
+                            (g) => {
+                              g.nodes = applyNodeChanges(changes, g.nodes);
+                              if (
+                                changes.some(
+                                  (change) => change.type === "select",
+                                )
+                              ) {
+                                const nodes = g.nodes.filter(
+                                  (node) => node.selected,
+                                );
+                                setSelection((current) =>
+                                  nodes.some((node) => node.id === current)
+                                    ? current
+                                    : (nodes.at(-1)?.id ?? null),
+                                );
+                                if (nodes.length) setSelectedEdge(null);
+                              }
+                            },
+                            changes.some((c) => c.type === "remove"),
+                            changes.some((c) =>
+                              ["remove", "add", "position"].includes(c.type),
+                            ),
+                          );
+                        }}
+                        onEdgesChange={(changes) =>
+                          changeGraph(
+                            (g) => {
+                              g.edges = applyEdgeChanges(
+                                changes.filter(
+                                  (c) =>
+                                    !("id" in c) ||
+                                    !c.id.startsWith("weights:"),
+                                ),
+                                g.edges,
+                              );
+                            },
+                            changes.some((c) => c.type === "remove"),
+                            changes.some((c) =>
+                              ["remove", "add", "replace"].includes(c.type),
+                            ),
+                          )
+                        }
+                        onConnect={(connection) =>
+                          changeGraph((g) => {
+                            g.edges = addEdge(
+                              { ...connection, id: uid(), type: "smoothstep" },
+                              g.edges,
+                            );
+                          })
+                        }
+                        onConnectEnd={(event, state) => {
+                          if (
+                            state.isValid ||
+                            state.toNode ||
+                            state.fromHandle?.type !== "source" ||
+                            !state.fromNode ||
+                            (state.fromHandle.id &&
+                              state.fromHandle.id !== "out")
+                          )
+                            return;
+                          const point =
+                            "changedTouches" in event
+                              ? event.changedTouches[0]
+                              : event;
+                          const bounds =
+                            canvasRef.current?.getBoundingClientRect();
+                          if (
+                            !point ||
+                            !bounds ||
+                            point.clientX < bounds.left ||
+                            point.clientX > bounds.right ||
+                            point.clientY < bounds.top ||
+                            point.clientY > bounds.bottom
+                          )
+                            return;
+                          const target = document.elementFromPoint(
+                            point.clientX,
+                            point.clientY,
+                          );
+                          if (
+                            target?.closest(
+                              ".react-flow__controls,.react-flow__panel,.react-flow__minimap,button,input",
+                            )
+                          )
+                            return;
+                          setConnectionPicker({
+                            projectId: project.id,
+                            scope: path.join("/"),
+                            source: state.fromNode.id,
+                            sourceHandle: state.fromHandle.id ?? "out",
+                            position: { x: point.clientX, y: point.clientY },
+                            bounds: {
+                              left: bounds.left,
+                              top: bounds.top,
+                              right: bounds.right,
+                              bottom: bounds.bottom,
+                            },
+                          });
+                        }}
+                        onNodeClick={(_, n) => {
+                          const nodes = graphAt(
+                            ref.current,
+                            viewPath.current,
+                          ).nodes.filter((node) => node.selected);
+                          setSelection(
+                            nodes.some((node) => node.id === n.id)
+                              ? n.id
+                              : (nodes.at(-1)?.id ?? null),
+                          );
+                          setSelectedEdge(null);
+                          if (window.innerWidth <= 760)
+                            setMobilePanel("properties");
+                        }}
+                        onNodeDoubleClick={(_, n) => {
+                          if (n.data.body) open(n.id);
+                        }}
+                        onEdgeClick={(_, edge) => {
+                          if (edge.id.startsWith("weights:")) return;
+                          setSelection(null);
+                          setSelectedEdge(edge.id);
+                          if (window.innerWidth <= 760)
+                            setMobilePanel("properties");
+                        }}
+                        onPaneClick={() => {
+                          setSelection(null);
+                          setSelectedEdge(null);
+                        }}
+                        onNodeDragStart={() => {
+                          setHistory((h) => [...h.slice(-39), copy(project)]);
+                          setFuture([]);
+                        }}
+                        onBeforeDelete={async ({ nodes, edges }) => {
+                          const nodeIds = new Set(nodes.map((node) => node.id));
+                          const edgeIds = new Set(edges.map((edge) => edge.id));
+                          changeGraph((graph) => {
+                            graph.nodes = graph.nodes.filter(
+                              (node) => !nodeIds.has(node.id),
+                            );
+                            graph.edges = graph.edges.filter(
+                              (edge) =>
+                                !edgeIds.has(edge.id) &&
+                                !nodeIds.has(edge.source) &&
+                                !nodeIds.has(edge.target),
+                            );
+                          });
+                          setSelection(null);
+                          setSelectedEdge(null);
+                          return false;
+                        }}
+                        fitView={window.innerWidth > 760 && !splitView}
                         fitViewOptions={{
                           padding: canvasFitPadding(canvasRef.current),
                         }}
-                      />
-                      <MiniMap
-                        nodeColor={(n) =>
-                          ({
-                            mint: "#8ab7a2",
-                            violet: "#afa1ce",
-                            blue: "#8cabc8",
-                            amber: "#ceb47c",
-                            coral: "#d49a8a",
-                            neutral: "#b2beb3",
-                            red: "#b86767",
-                          })[family(n.data.kind as string)] || "#b2beb3"
-                        }
-                        maskColor="var(--graph-minimap-mask, rgba(247,249,245,.7))"
-                        pannable
-                        zoomable
-                      />
-                      <Panel
-                        position="top-left"
-                        className="variables-canvas-panel"
+                        minZoom={0.04}
+                        maxZoom={1.7}
+                        deleteKeyCode={["Backspace", "Delete"]}
+                        selectionKeyCode="Shift"
+                        multiSelectionKeyCode={["Control", "Meta", "Shift"]}
+                        selectionOnDrag
+                        selectionMode={SelectionMode.Partial}
+                        panOnDrag={[1, 2]}
+                        panActivationKeyCode="Space"
+                        proOptions={{ hideAttribution: true }}
                       >
-                        <GraphVariableCard
-                          values={variableScope.own}
-                          inherited={variableScope.inherited}
-                          nested={path.length > 0}
-                          onChange={updateGraphVariables}
-                          onOpen={() => setModal("variables")}
+                        <Background
+                          variant={BackgroundVariant.Dots}
+                          gap={22}
+                          size={1}
+                          color="var(--graph-dots, #ced6cc)"
                         />
-                      </Panel>
-                      <Panel position="bottom-center">
-                        <GraphNavigator
-                          graph={graph}
-                          selection={selection}
-                          onFocus={setSelection}
-                          compact={splitView}
-                          fitPadding={() => canvasFitPadding(canvasRef.current)}
+                        <Controls
+                          showInteractive={false}
+                          fitViewOptions={{
+                            padding: canvasFitPadding(canvasRef.current),
+                          }}
                         />
-                      </Panel>
-                    </ReactFlow>
-                  </RoutingProvider>
-                </div>
-              ) : tab === "code" ? (
-                <div className="code-view">
-                  <div className="code-heading">
-                    <span>
-                      <span className="file-dot" />
-                      model.py <small>Generated from this graph</small>
-                    </span>
-                    <button
-                      className="subtle-button"
-                      onClick={() => {
-                        copyText(source)
-                          .then(() => notify("Code copied"))
-                          .catch(() =>
-                            notify("Use Export to download the code"),
-                          );
-                      }}
-                    >
-                      <Copy size={14} />
-                      Copy code
-                    </button>
-                  </div>
-                  <pre
-                    tabIndex={0}
-                    role="region"
-                    aria-label="Generated PyTorch code"
-                  >
-                    {source.split("\n").map((line, i) => (
-                      <div key={i}>
-                        <span className="line-number">{i + 1}</span>
-                        <code
-                          className={
-                            line.trim().startsWith("#") ? "comment" : ""
+                        <MiniMap
+                          nodeColor={(n) =>
+                            ({
+                              mint: "#8ab7a2",
+                              violet: "#afa1ce",
+                              blue: "#8cabc8",
+                              amber: "#ceb47c",
+                              coral: "#d49a8a",
+                              neutral: "#b2beb3",
+                              red: "#b86767",
+                            })[family(n.data.kind as string)] || "#b2beb3"
                           }
+                          maskColor="var(--graph-minimap-mask, rgba(247,249,245,.7))"
+                          pannable
+                          zoomable
+                        />
+                        <GraphAnnotations
+                          nodes={graph.nodes}
+                          visible={showAnnotations}
+                          onEdit={(id) => {
+                            setSelection(id);
+                            if (window.innerWidth <= 760)
+                              setMobilePanel("properties");
+                          }}
+                        />
+                        <Panel
+                          position="top-left"
+                          className="variables-canvas-panel"
                         >
-                          {line || " "}
-                        </code>
-                      </div>
-                    ))}
-                  </pre>
-                  <div className="code-note">
-                    Export includes runtime operations, tokenizer files, project
-                    JSON, dependencies, and a runnable example.
+                          <GraphVariableCard
+                            values={variableScope.own}
+                            inherited={variableScope.inherited}
+                            nested={path.length > 0}
+                            onChange={updateGraphVariables}
+                            onOpen={() => setModal("variables")}
+                          />
+                        </Panel>
+                        <Panel position="bottom-center">
+                          <GraphNavigator
+                            graph={graph}
+                            selection={selection}
+                            onFocus={setSelection}
+                            compact={splitView}
+                            fitPadding={() =>
+                              canvasFitPadding(canvasRef.current)
+                            }
+                          />
+                        </Panel>
+                      </ReactFlow>
+                    </RoutingProvider>
                   </div>
-                </div>
-              ) : (
-                <div className="references-view">
-                  <span className="eyebrow">ARCHITECTURE PROVENANCE</span>
-                  <h1>Sources & implementation notes</h1>
-                  <p>
-                    Reference examples retain their published settings. Read the
-                    notes for computational differences and unavailable
-                    operations.
-                  </p>
-                  {project.references?.length ? (
-                    project.references.map((r, i: number) => (
-                      <article key={i}>
-                        <ExternalLink size={20} />
-                        <div>
-                          <h3>{r.title}</h3>
-                          <a href={r.url} target="_blank" rel="noreferrer">
-                            View upstream source <ArrowUpRight size={13} />
-                          </a>
-                          <code>{r.revision}</code>
-                          <p>{r.notes}</p>
-                          {r.config && (
-                            <details>
-                              <summary>Published configuration</summary>
-                              <pre
-                                tabIndex={0}
-                                role="region"
-                                aria-label={`Configuration for ${r.title}`}
-                              >
-                                {JSON.stringify(r.config, null, 2)}
-                              </pre>
-                            </details>
-                          )}
-                        </div>
-                      </article>
-                    ))
-                  ) : (
-                    <div className="empty-reference">
-                      <GitBranch size={30} />
-                      <h3>Built from composable primitives</h3>
-                      <p>
-                        This is a design example rather than a reproduction of a
-                        published checkpoint. All weights are randomly
-                        initialized on export.
-                      </p>
+                ) : tab === "code" ? (
+                  <div className="code-view">
+                    <div className="code-heading">
+                      <span>
+                        <span className="file-dot" />
+                        model.py <small>Generated from this graph</small>
+                      </span>
+                      <button
+                        className="subtle-button"
+                        onClick={() => {
+                          copyText(source)
+                            .then(() => notify("Code copied"))
+                            .catch(() =>
+                              notify("Use Export to download the code"),
+                            );
+                        }}
+                      >
+                        <Copy size={14} />
+                        Copy code
+                      </button>
                     </div>
-                  )}
-                </div>
-              )}
-              <div
-                className="validation-bar"
-                aria-live="polite"
-                aria-atomic="true"
-              >
-                <button
-                  onClick={() => setChecksOpen(!checksOpen)}
-                  className={report?.valid ? "valid" : "invalid"}
+                    <pre
+                      tabIndex={0}
+                      role="region"
+                      aria-label="Generated PyTorch code"
+                    >
+                      {source.split("\n").map((line, i) => (
+                        <div key={i}>
+                          <span className="line-number">{i + 1}</span>
+                          <code
+                            className={
+                              line.trim().startsWith("#") ? "comment" : ""
+                            }
+                          >
+                            {line || " "}
+                          </code>
+                        </div>
+                      ))}
+                    </pre>
+                    <div className="code-note">
+                      Export includes runtime operations, tokenizer files,
+                      project JSON, dependencies, and a runnable example.
+                    </div>
+                  </div>
+                ) : (
+                  <div className="references-view">
+                    <span className="eyebrow">ARCHITECTURE PROVENANCE</span>
+                    <h1>Sources & implementation notes</h1>
+                    <p>
+                      Reference examples retain their published settings. Read
+                      the notes for computational differences and unavailable
+                      operations.
+                    </p>
+                    {project.references?.length ? (
+                      project.references.map((r, i: number) => (
+                        <article key={i}>
+                          <ExternalLink size={20} />
+                          <div>
+                            <h3>{r.title}</h3>
+                            <a href={r.url} target="_blank" rel="noreferrer">
+                              View upstream source <ArrowUpRight size={13} />
+                            </a>
+                            <code>{r.revision}</code>
+                            <p>{r.notes}</p>
+                            {r.config && (
+                              <details>
+                                <summary>Published configuration</summary>
+                                <pre
+                                  tabIndex={0}
+                                  role="region"
+                                  aria-label={`Configuration for ${r.title}`}
+                                >
+                                  {JSON.stringify(r.config, null, 2)}
+                                </pre>
+                              </details>
+                            )}
+                          </div>
+                        </article>
+                      ))
+                    ) : (
+                      <div className="empty-reference">
+                        <GitBranch size={30} />
+                        <h3>Built from composable primitives</h3>
+                        <p>
+                          This is a design example rather than a reproduction of
+                          a published checkpoint. All weights are randomly
+                          initialized on export.
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                )}
+                <div
+                  className="validation-bar"
+                  aria-live="polite"
+                  aria-atomic="true"
                 >
-                  {report?.valid ? (
-                    <CheckCircle2 size={14} />
-                  ) : (
-                    <CircleAlert size={14} />
-                  )}{" "}
-                  {report
-                    ? report.valid
-                      ? "Shapes compatible"
-                      : report.errors.length + " graph issues"
-                    : "Checking graph…"}
-                  <ChevronDown size={12} />
-                </button>
-                {!!report?.warnings.length && (
                   <button
-                    className="advice-count"
                     onClick={() => setChecksOpen(!checksOpen)}
-                    aria-expanded={checksOpen}
+                    className={report?.valid ? "valid" : "invalid"}
                   >
-                    <Sparkles size={14} />
-                    {report.warnings.length} design note
-                    {report.warnings.length === 1 ? "" : "s"}
+                    {report?.valid ? (
+                      <CheckCircle2 size={14} />
+                    ) : (
+                      <CircleAlert size={14} />
+                    )}{" "}
+                    {report
+                      ? report.valid
+                        ? "Shapes compatible"
+                        : report.errors.length + " graph issues"
+                      : "Checking graph…"}
+                    <ChevronDown size={12} />
+                  </button>
+                  {!!report?.warnings.length && (
+                    <button
+                      className="advice-count"
+                      onClick={() => setChecksOpen(!checksOpen)}
+                      aria-expanded={checksOpen}
+                    >
+                      <Sparkles size={14} />
+                      {report.warnings.length} design note
+                      {report.warnings.length === 1 ? "" : "s"}
+                    </button>
+                  )}
+                  <span>
+                    {graph.nodes.length} nodes <i>·</i> {graph.edges.length}{" "}
+                    connections
+                  </span>
+                  <span className="parameters-total">
+                    {format(report?.parameters || 0)} parameters <i>·</i>{" "}
+                    float32
+                  </span>
+                </div>
+                {checksOpen && (
+                  <div className="checks-drawer">
+                    <div>
+                      <strong>Graph validation</strong>
+                      <button
+                        aria-label="Close validation issues"
+                        onClick={() => setChecksOpen(false)}
+                      >
+                        <X size={15} />
+                      </button>
+                    </div>
+                    {report?.valid && (
+                      <p className="valid">
+                        <CheckCircle2 size={15} />
+                        All connected tensor shapes are compatible.
+                      </p>
+                    )}
+                    {report?.errors.map((e: ValidationIssue, i: number) => (
+                      <button
+                        className="check-error"
+                        key={i}
+                        onClick={() => focusError(e)}
+                      >
+                        <CircleAlert size={15} />
+                        <span>
+                          <b>
+                            {e.node || "Model"}
+                            {e.port ? ` · input ${e.port}` : ""}
+                          </b>
+                          {e.message}
+                        </span>
+                        <ArrowUpRight size={14} />
+                      </button>
+                    ))}
+                    {!!report?.warnings.length && (
+                      <>
+                        <h2>Design notes</h2>
+                        <p>
+                          Suggestions to consider. These never block export.
+                        </p>
+                        {report.warnings.map((issue, i) => (
+                          <DesignAdvice
+                            key={`${issue.node}-${issue.code}-${i}`}
+                            issue={issue}
+                            onLocate={focusError}
+                          />
+                        ))}
+                      </>
+                    )}
+                  </div>
+                )}
+              </section>
+              {splitView && (
+                <>
+                  <SplitDivider value={splitRatio} onChange={setSplitRatio} />
+                  <ReferencePane
+                    templates={templates}
+                    saved={saved}
+                    choice={referenceChoice}
+                    onChoose={(value) => {
+                      setReferenceChoice(value);
+                      setReferenceLocation({ blocks: [], node: null });
+                    }}
+                    location={referenceLocation}
+                    onNavigate={navigateReference}
+                    onInspect={setReferenceInspection}
+                    onActivate={() => {
+                      if (window.innerWidth <= 760)
+                        setMobilePanel("properties");
+                    }}
+                    onUseExample={(p) => startNewProject(p.id)}
+                    nodeTypes={nodeTypes}
+                    onClose={closeSplitView}
+                  />
+                </>
+              )}
+            </div>
+            <aside
+              className={
+                "inspector " + (mobilePanel === "properties" ? "is-open" : "")
+              }
+              aria-label="Property inspector"
+              data-reference-pane={referenceDetails ? "true" : undefined}
+              onKeyDownCapture={(event) => {
+                if (referenceDetails && isGraphEditShortcut(event)) {
+                  event.preventDefault();
+                  event.stopPropagation();
+                }
+              }}
+            >
+              <div className="inspector-heading">
+                <span>
+                  <Settings2 size={15} />
+                  {referenceDetails
+                    ? "Reference properties"
+                    : selected
+                      ? selectedCount > 1
+                        ? `${selectedCount} blocks selected`
+                        : "Block properties"
+                      : connection
+                        ? "Connection properties"
+                        : "Graph overview"}
+                </span>
+                <button
+                  className="drawer-close"
+                  aria-label="Close properties"
+                  onClick={() => setMobilePanel(null)}
+                >
+                  <X size={20} />
+                </button>
+                {(selected || referenceDetails) && (
+                  <button
+                    aria-label="Close inspector selection"
+                    title="Close inspector selection"
+                    onClick={() => {
+                      setSelection(null);
+                      change(
+                        (project) => clearGraphSelection(project.graph),
+                        false,
+                        false,
+                      );
+                      setReferenceLocation((previous) => ({
+                        ...previous,
+                        node: null,
+                      }));
+                    }}
+                  >
+                    <X size={14} />
                   </button>
                 )}
-                <span>
-                  {graph.nodes.length} nodes <i>·</i> {graph.edges.length}{" "}
-                  connections
-                </span>
-                <span className="parameters-total">
-                  {format(report?.parameters || 0)} parameters <i>·</i> float32
-                </span>
               </div>
-              {checksOpen && (
-                <div className="checks-drawer">
-                  <div>
-                    <strong>Graph validation</strong>
-                    <button
-                      aria-label="Close validation issues"
-                      onClick={() => setChecksOpen(false)}
+              <div className="inspector-scroll">
+                {referenceDetails ? (
+                  <ReferenceInspector inspection={referenceDetails} />
+                ) : selected ? (
+                  <>
+                    {selectedCount > 1 && (
+                      <p className="inspector-description">
+                        Copy, duplicate and delete apply to all {selectedCount}{" "}
+                        selected blocks. Properties below edit{" "}
+                        {selected.data.label}.
+                      </p>
+                    )}
+                    <div
+                      className={
+                        "selected-block-icon " + family(selected.data.kind)
+                      }
                     >
-                      <X size={15} />
-                    </button>
-                  </div>
-                  {report?.valid && (
-                    <p className="valid">
-                      <CheckCircle2 size={15} />
-                      All connected tensor shapes are compatible.
+                      {React.createElement(
+                        icons[selected.data.kind] || Shapes,
+                        {
+                          size: 24,
+                        },
+                      )}
+                    </div>
+                    <span className="eyebrow">
+                      {selected.data.kind.replaceAll("_", " ")}
+                    </span>
+                    <input
+                      className="inspector-name"
+                      aria-label="Block name"
+                      value={selected.data.label}
+                      onChange={(e) =>
+                        updateNode((n) => {
+                          n.data.label = e.target.value;
+                        })
+                      }
+                    />
+                    <p className="inspector-description">
+                      {selected.data.description ||
+                        catalog.find((c) => c.kind === selected.data.kind)
+                          ?.description ||
+                        "Editable composite computation."}
                     </p>
-                  )}
-                  {report?.errors.map((e: ValidationIssue, i: number) => (
+                    <label className="property-field">
+                      <span>Design note</span>
+                      <textarea
+                        aria-label="Design note"
+                        placeholder="Add a note about this block or why you chose it"
+                        value={selected.data.annotation ?? ""}
+                        onChange={(event) =>
+                          updateNode((node) => {
+                            node.data.annotation = event.target.value;
+                          })
+                        }
+                      />
+                      <small className="field-help">
+                        Notes appear on the canvas, are saved with the graph,
+                        and do not affect computation.
+                      </small>
+                    </label>
+                    {selected.data.annotation?.trim() && (
+                      <label className="property-field">
+                        <span>Design note source URL (optional)</span>
+                        <input
+                          aria-label="Design note source URL"
+                          type="url"
+                          value={selected.data.annotationSource ?? ""}
+                          onChange={(event) =>
+                            updateNode((node) => {
+                              node.data.annotationSource = event.target.value;
+                            })
+                          }
+                          placeholder="https://…"
+                        />
+                      </label>
+                    )}
+                    {["attention", "cross_attention"].includes(
+                      selected.data.kind,
+                    ) && (
+                      <button
+                        className="inspect-open"
+                        onClick={async () => {
+                          try {
+                            const body = graphSchema.parse(
+                              await api("/attention/expand", {
+                                project,
+                                path,
+                                node_id: selected.id,
+                              }),
+                            );
+                            updateNode((n) => {
+                              n.data.kind = "block";
+                              n.data.body = body;
+                              n.data.params = {};
+                              n.data.description =
+                                "Editable Q/K/V projections, head transforms, positions and attention computation.";
+                            });
+                            open(selected.id);
+                          } catch (e) {
+                            notify(String(e));
+                          }
+                        }}
+                      >
+                        Edit attention internals
+                        <ArrowUpRight size={15} />
+                      </button>
+                    )}
+                    {selected.data.body && (
+                      <button
+                        className="inspect-open"
+                        onClick={() => open(selected.id)}
+                      >
+                        Open internal graph
+                        <ArrowUpRight size={15} />
+                      </button>
+                    )}
+                    {selected.data.kind === "loop" && (
+                      <button className="inspect-open" onClick={unrollSelected}>
+                        Expand into editable applications{" "}
+                        <GitBranch size={15} />
+                      </button>
+                    )}
+                    {supportsWeightSharing(selected.data) && (
+                      <button
+                        className="inspect-open"
+                        onClick={duplicateShared}
+                      >
+                        Add application with shared weights <Copy size={15} />
+                      </button>
+                    )}
                     <button
-                      className="check-error"
-                      key={i}
-                      onClick={() => focusError(e)}
+                      className="save-library"
+                      onClick={() =>
+                        fitGraph({
+                          nodes: [{ id: selected.id }],
+                          duration: motion(250),
+                        })
+                      }
                     >
-                      <CircleAlert size={15} />
-                      <span>
-                        <b>
-                          {e.node || "Model"}
-                          {e.port ? ` · input ${e.port}` : ""}
-                        </b>
-                        {e.message}
-                      </span>
-                      <ArrowUpRight size={14} />
+                      <Maximize2 size={13} /> Zoom to this node
                     </button>
-                  ))}
-                  {!!report?.warnings.length && (
-                    <>
-                      <h2>Design notes</h2>
-                      <p>Suggestions to consider. These never block export.</p>
-                      {report.warnings.map((issue, i) => (
+                    {selected.data.kind === "input" &&
+                      (selected.data.tokenizer ||
+                        ((selected.data.params.dtype ?? "int64") === "int64" &&
+                          (selected.data.params.shape ?? ["B", "T"]).length ===
+                            2)) && (
+                        <section
+                          className="input-tokenizer-settings"
+                          aria-label="Input tokenizer"
+                        >
+                          <div className="section-label">Tokenizer</div>
+                          <button
+                            className="tokenizer-chip"
+                            disabled={
+                              path.length > 0 &&
+                              !!selectedTokenizer &&
+                              !selected.data.tokenizer
+                            }
+                            onClick={() => {
+                              setTokenizerTarget(prefix + selected.id);
+                              setTokError("");
+                              setTokPreview(null);
+                              setTokSource(selected.data.tokenizer?.repo ?? "");
+                              setTokRevision("");
+                              setModal("tokenizer");
+                            }}
+                          >
+                            <Database size={14} />
+                            <span>
+                              {selectedTokenizer?.repo ||
+                                selectedTokenizer?.class ||
+                                "Select tokenizer"}
+                            </span>
+                            {selected.data.tokenizer && (
+                              <small>
+                                {format(selected.data.tokenizer.capacity)} vocab
+                              </small>
+                            )}
+                            <ChevronRight size={14} />
+                          </button>
+                          {selectedTokenizer && (
+                            <div className="stat-row">
+                              <span>Vocabulary capacity</span>
+                              <b>
+                                {selectedTokenizer.capacity.toLocaleString()}
+                              </b>
+                            </div>
+                          )}
+                          {!selected.data.tokenizer && selectedTokenizer && (
+                            <p className="field-help">
+                              Inherited from the connected input ·{" "}
+                              {format(selectedTokenizer.capacity)} token IDs.
+                              Configure the originating token input to change
+                              it.
+                            </p>
+                          )}
+                          {selected.data.tokenizer && (
+                            <button
+                              className="small-button"
+                              onClick={() =>
+                                updateNode((node) => {
+                                  delete node.data.tokenizer;
+                                })
+                              }
+                            >
+                              Remove tokenizer
+                            </button>
+                          )}
+                          <p className="field-help">
+                            The tokenizer defines token IDs and vocabulary size.
+                            Embedding width is configured on each embedding
+                            block.
+                          </p>
+                        </section>
+                      )}
+                    {transformer && (
+                      <label className="property-field">
+                        <span>Attention type</span>
+                        <select
+                          aria-label="Attention type"
+                          value={attentionVariant(
+                            selected.data,
+                            fieldVariables,
+                          )}
+                          onChange={(event) => {
+                            if (isAttentionVariant(event.target.value)) {
+                              const variant = event.target.value;
+                              updateNode((node) =>
+                                setAttentionVariant(
+                                  node.data,
+                                  variant,
+                                  fieldVariables,
+                                  uid,
+                                ),
+                              );
+                            }
+                          }}
+                        >
+                          {attentionVariants.map((variant) => (
+                            <option key={variant.id} value={variant.id}>
+                              {variant.label}
+                            </option>
+                          ))}
+                        </select>
+                        <small className="field-help">
+                          Changes the editable attention graph inside this
+                          container. Other layers are preserved.
+                        </small>
+                      </label>
+                    )}
+                    <div className="section-label">Configuration</div>
+                    {selected.data.kind === "moe" && (
+                      <label className="property-field">
+                        <span>Router scoring</span>
+                        <select
+                          aria-label="Router scoring"
+                          value={
+                            typeof selected.data.params.router === "string"
+                              ? selected.data.params.router
+                              : "softmax"
+                          }
+                          onChange={(event) =>
+                            updateNode((n) => {
+                              n.data.params.router = event.target.value;
+                            })
+                          }
+                        >
+                          <option value="softmax">Softmax top-k</option>
+                          <option value="sigmoid">Sigmoid top-k</option>
+                        </select>
+                        <small className="field-help">
+                          Both route each token to the top-k experts. Choose how
+                          the router scores them.
+                        </small>
+                      </label>
+                    )}
+                    {selected.data.kind === "attention_pattern" &&
+                      selected.data.params.pattern === "custom" &&
+                      selected.data.params.matrix && (
+                        <MaskMatrixEditor
+                          matrix={selected.data.params.matrix}
+                          onChange={(matrix) =>
+                            updateNode((n) => {
+                              n.data.params.matrix = matrix;
+                            })
+                          }
+                        />
+                      )}
+                    {Object.entries(transformer ?? selected.data.params ?? {})
+                      .filter(
+                        ([k]) =>
+                          k !== "source" &&
+                          !(k === "router" && selected.data.kind === "moe") &&
+                          !(
+                            k === "experts" &&
+                            ["moe_router", "moe_combine"].includes(
+                              selected.data.kind,
+                            )
+                          ) &&
+                          (selected.data.kind !== "attention_pattern" ||
+                            visiblePatternField(selected.data.params, k)) &&
+                          (!selected.data.iteration ||
+                            !["iterations", "shared"].includes(k)),
+                      )
+                      .map(([k, v]) => (
+                        <React.Fragment key={k}>
+                          <Field
+                            name={k}
+                            value={v ?? null}
+                            help={settingHelp(selected.data.kind, k)}
+                            disabledReason={
+                              generalFieldDisabledReason(
+                                selected.data.kind,
+                                k,
+                                selected.data.params,
+                              ) ??
+                              (transformer ||
+                              ["attention", "cross_attention", "rope"].includes(
+                                selected.data.kind,
+                              )
+                                ? attentionFieldDisabledReason(
+                                    k,
+                                    previewParameters(
+                                      transformer ?? selected.data.params,
+                                      fieldVariables,
+                                    ),
+                                    transformer
+                                      ? attentionVariant(
+                                          selected.data,
+                                          fieldVariables,
+                                        )
+                                      : undefined,
+                                  )
+                                : undefined)
+                            }
+                            onChange={(next) =>
+                              updateNode((n) => {
+                                if (n.data.kind === "moe" && k === "experts") {
+                                  resizeExperts(n.data, next);
+                                  return;
+                                }
+                                if (
+                                  transformer &&
+                                  transformerSettingKeys.has(k)
+                                ) {
+                                  setTransformerSetting(
+                                    n.data,
+                                    k,
+                                    next,
+                                    fieldVariables,
+                                  );
+                                  return;
+                                }
+                                n.data.params = parametersSchema.parse({
+                                  ...n.data.params,
+                                  [k]: next,
+                                });
+                                if (k === "pattern")
+                                  n.data.params = changePattern(
+                                    n.data.params,
+                                    next,
+                                  );
+                              })
+                            }
+                          />
+                          {k === "width" && (
+                            <p className="field-help">
+                              Model width: the number of features in each token
+                              representation. Connected layers must agree on
+                              this size.
+                            </p>
+                          )}
+                          {k === "hidden" && selected.data.kind === "ffn" && (
+                            <p className="field-help">
+                              Feed-forward hidden width: the intermediate number
+                              of features inside the FFN. The FFN projects back
+                              to the model width afterwards.
+                            </p>
+                          )}
+                          {typeof v === "string" && v.startsWith("$") && (
+                            <p className="binding-resolution field-help">
+                              {v} ={" "}
+                              {bindingValue(v, fieldVariables) ??
+                                "undefined · add it in Graph variables"}
+                            </p>
+                          )}
+                        </React.Fragment>
+                      ))}
+                    {selected.data.kind === "moe" && (
+                      <p className="field-help">
+                        Open experts to edit their individual graphs. The router
+                        selects tokens and the combine sums their weighted
+                        outputs. Expert count is a fixed integer; other settings
+                        can use variables.
+                      </p>
+                    )}
+                    {["moe_router", "moe_combine"].includes(
+                      selected.data.kind,
+                    ) && (
+                      <p className="field-help">
+                        Expert count is controlled by the outer Mixture of
+                        experts block. Edit the graph inside each expert.
+                      </p>
+                    )}
+                    {selected.data.kind === "attention_pattern" && (
+                      <p className="field-help">
+                        Connect features to a, and optionally key features to b.
+                        The output is an attention pattern. Connect it to
+                        attention’s optional mask port; combine patterns with
+                        union or intersection. Custom matrices require fixed
+                        sequence lengths. Content top-k selects from features
+                        and computes dense routing scores.
+                      </p>
+                    )}
+                    {["attention", "cross_attention", "sdpa"].includes(
+                      selected.data.kind,
+                    ) && (
+                      <p className="field-help">
+                        Dense uses PyTorch SDPA on CPU or GPU. Auto uses
+                        compiled FlexAttention on CUDA; flex requires a
+                        compatible GPU. A pattern defines permitted positions
+                        independently of the backend.
+                      </p>
+                    )}
+                    {selected.data.kind === "head" && (
+                      <Field
+                        name="tie"
+                        value={selected.data.params.tie || ""}
+                        onChange={(v) =>
+                          updateNode((n) => {
+                            if (v) n.data.params.tie = v;
+                            else delete n.data.params.tie;
+                          })
+                        }
+                      />
+                    )}
+                    {selected.data.iteration && (
+                      <>
+                        <div className="section-label">
+                          Application schedule
+                        </div>
+                        <p className="field-help">
+                          Zero-based step and total are passed to sampling
+                          operations. Shared applications may use different
+                          schedules.
+                        </p>
+                        {(["index", "total"] as const).map((key) => (
+                          <Field
+                            key={key}
+                            name={"schedule " + key}
+                            value={selected.data.iteration![key]}
+                            onChange={(value) =>
+                              updateNode((n) => {
+                                if (n.data.iteration)
+                                  n.data.iteration[key] = value;
+                              })
+                            }
+                          />
+                        ))}
+                      </>
+                    )}
+                    {supportsWeightSharing(selected.data) && (
+                      <WeightGroupPicker
+                        value={selected.data.share ?? ""}
+                        choices={weightGroupChoices(
+                          allNodes(project),
+                          selected.data,
+                        )}
+                        onChange={(group) =>
+                          updateNode((node) => {
+                            if (group) node.data.share = group;
+                            else makeIndependent(node);
+                          })
+                        }
+                        onCreate={() =>
+                          updateNode((node) => {
+                            makeIndependent(node);
+                            node.data.share = "weights_" + uid();
+                          })
+                        }
+                      />
+                    )}
+                    {selected.data.kind === "custom" && (
+                      <Field
+                        name="source"
+                        value={selected.data.params.source || ""}
+                        onChange={(v) =>
+                          updateNode((n) => {
+                            n.data.params.source = v;
+                          })
+                        }
+                      />
+                    )}
+                    <div className="section-label">Output contract</div>
+                    <div className="shape-card">
+                      <span>Tensor shape</span>
+                      <code>
+                        {report?.shapes[prefix + selected.id]
+                          ? `[${report.shapes[prefix + selected.id]?.shape.join(", ")}]`
+                          : "Unresolved"}
+                      </code>
+                      <small>
+                        {report?.shapes[prefix + selected.id]?.dtype ||
+                          "Connect valid inputs to infer shape"}
+                      </small>
+                    </div>
+                    <div className="stat-row">
+                      <span>Parameters</span>
+                      <b>{format(report?.counts[prefix + selected.id] || 0)}</b>
+                    </div>
+                    {report?.errors
+                      .filter((e) => e.node === prefix + selected.id)
+                      .map((e: ValidationIssue, i: number) => (
+                        <div className="inline-error" key={i}>
+                          <CircleAlert size={15} />
+                          {e.message}
+                        </div>
+                      ))}
+                    {report?.warnings
+                      .filter((issue) => issue.node === prefix + selected.id)
+                      .map((issue, i) => (
                         <DesignAdvice
-                          key={`${issue.node}-${issue.code}-${i}`}
+                          key={`${issue.code}-${i}`}
                           issue={issue}
                           onLocate={focusError}
                         />
                       ))}
-                    </>
-                  )}
-                </div>
-              )}
-            </section>
-            {splitView && (
-              <>
-                <SplitDivider value={splitRatio} onChange={setSplitRatio} />
-                <ReferencePane
-                  templates={templates}
-                  saved={saved}
-                  choice={referenceChoice}
-                  onChoose={(value) => {
-                    setReferenceChoice(value);
-                    setReferenceLocation({ blocks: [], node: null });
-                  }}
-                  location={referenceLocation}
-                  onNavigate={navigateReference}
-                  onInspect={setReferenceInspection}
-                  onActivate={() => {
-                    if (window.innerWidth <= 760) setMobilePanel("properties");
-                  }}
-                  onUseExample={(p) => startNewProject(p.id)}
-                  nodeTypes={nodeTypes}
-                  onClose={closeSplitView}
-                />
-              </>
-            )}
-          </div>
-          <aside
-            className={
-              "inspector " + (mobilePanel === "properties" ? "is-open" : "")
-            }
-            aria-label="Property inspector"
-            data-reference-pane={referenceDetails ? "true" : undefined}
-            onKeyDownCapture={(event) => {
-              if (referenceDetails && isGraphEditShortcut(event)) {
-                event.preventDefault();
-                event.stopPropagation();
-              }
-            }}
-          >
-            <div className="inspector-heading">
-              <span>
-                <Settings2 size={15} />
-                {referenceDetails
-                  ? "Reference properties"
-                  : selected
-                    ? selectedCount > 1
-                      ? `${selectedCount} blocks selected`
-                      : "Block properties"
-                    : connection
-                      ? "Connection properties"
-                      : "Graph overview"}
-              </span>
-              <button
-                className="drawer-close"
-                aria-label="Close properties"
-                onClick={() => setMobilePanel(null)}
-              >
-                <X size={20} />
-              </button>
-              {(selected || referenceDetails) && (
-                <button
-                  aria-label="Close inspector selection"
-                  title="Close inspector selection"
-                  onClick={() => {
-                    setSelection(null);
-                    change(
-                      (project) => clearGraphSelection(project.graph),
-                      false,
-                      false,
-                    );
-                    setReferenceLocation((previous) => ({
-                      ...previous,
-                      node: null,
-                    }));
-                  }}
-                >
-                  <X size={14} />
-                </button>
-              )}
-            </div>
-            <div className="inspector-scroll">
-              {referenceDetails ? (
-                <ReferenceInspector inspection={referenceDetails} />
-              ) : selected ? (
-                <>
-                  {selectedCount > 1 && (
-                    <p className="inspector-description">
-                      Copy, duplicate and delete apply to all {selectedCount}{" "}
-                      selected blocks. Properties below edit{" "}
-                      {selected.data.label}.
-                    </p>
-                  )}
-                  <div
-                    className={
-                      "selected-block-icon " + family(selected.data.kind)
-                    }
-                  >
-                    {React.createElement(icons[selected.data.kind] || Shapes, {
-                      size: 24,
-                    })}
-                  </div>
-                  <span className="eyebrow">
-                    {selected.data.kind.replaceAll("_", " ")}
-                  </span>
-                  <input
-                    className="inspector-name"
-                    aria-label="Block name"
-                    value={selected.data.label}
-                    onChange={(e) =>
-                      updateNode((n) => {
-                        n.data.label = e.target.value;
-                      })
-                    }
-                  />
-                  <p className="inspector-description">
-                    {selected.data.description ||
-                      catalog.find((c) => c.kind === selected.data.kind)
-                        ?.description ||
-                      "Editable composite computation."}
-                  </p>
-                  {["attention", "cross_attention"].includes(
-                    selected.data.kind,
-                  ) && (
-                    <button
-                      className="inspect-open"
-                      onClick={async () => {
-                        try {
-                          const body = graphSchema.parse(
-                            await api("/attention/expand", {
-                              project,
-                              path,
-                              node_id: selected.id,
-                            }),
-                          );
-                          updateNode((n) => {
-                            n.data.kind = "block";
-                            n.data.body = body;
-                            n.data.params = {};
-                            n.data.description =
-                              "Editable Q/K/V projections, head transforms, positions and attention computation.";
-                          });
-                          open(selected.id);
-                        } catch (e) {
-                          notify(String(e));
-                        }
-                      }}
-                    >
-                      Edit attention internals
-                      <ArrowUpRight size={15} />
-                    </button>
-                  )}
-                  {selected.data.body && (
-                    <button
-                      className="inspect-open"
-                      onClick={() => open(selected.id)}
-                    >
-                      Open internal graph
-                      <ArrowUpRight size={15} />
-                    </button>
-                  )}
-                  {selected.data.kind === "loop" && (
-                    <button className="inspect-open" onClick={unrollSelected}>
-                      Expand into editable applications <GitBranch size={15} />
-                    </button>
-                  )}
-                  {supportsWeightSharing(selected.data) && (
-                    <button className="inspect-open" onClick={duplicateShared}>
-                      Add application with shared weights <Copy size={15} />
-                    </button>
-                  )}
-                  <button
-                    className="save-library"
-                    onClick={() =>
-                      fitGraph({
-                        nodes: [{ id: selected.id }],
-                        duration: motion(250),
-                      })
-                    }
-                  >
-                    <Maximize2 size={13} /> Zoom to this node
-                  </button>
-                  {selected.data.kind === "input" &&
-                    (selected.data.tokenizer ||
-                      ((selected.data.params.dtype ?? "int64") === "int64" &&
-                        (selected.data.params.shape ?? ["B", "T"]).length ===
-                          2)) && (
-                      <section
-                        className="input-tokenizer-settings"
-                        aria-label="Input tokenizer"
-                      >
-                        <div className="section-label">Tokenizer</div>
-                        <button
-                          className="tokenizer-chip"
-                          disabled={
-                            path.length > 0 &&
-                            !!selectedTokenizer &&
-                            !selected.data.tokenizer
-                          }
-                          onClick={() => {
-                            setTokenizerTarget(prefix + selected.id);
-                            setTokError("");
-                            setTokPreview(null);
-                            setTokSource(selected.data.tokenizer?.repo ?? "");
-                            setTokRevision("");
-                            setModal("tokenizer");
-                          }}
-                        >
-                          <Database size={14} />
-                          <span>
-                            {selectedTokenizer?.repo ||
-                              selectedTokenizer?.class ||
-                              "Select tokenizer"}
-                          </span>
-                          {selected.data.tokenizer && (
-                            <small>
-                              {format(selected.data.tokenizer.capacity)} vocab
-                            </small>
-                          )}
-                          <ChevronRight size={14} />
-                        </button>
-                        {selectedTokenizer && (
-                          <div className="stat-row">
-                            <span>Vocabulary capacity</span>
-                            <b>{selectedTokenizer.capacity.toLocaleString()}</b>
-                          </div>
-                        )}
-                        {!selected.data.tokenizer && selectedTokenizer && (
-                          <p className="field-help">
-                            Inherited from the connected input ·{" "}
-                            {format(selectedTokenizer.capacity)} token IDs.
-                            Configure the originating token input to change it.
-                          </p>
-                        )}
-                        {selected.data.tokenizer && (
-                          <button
-                            className="small-button"
-                            onClick={() =>
-                              updateNode((node) => {
-                                delete node.data.tokenizer;
-                              })
-                            }
-                          >
-                            Remove tokenizer
-                          </button>
-                        )}
-                        <p className="field-help">
-                          The tokenizer defines token IDs and vocabulary size.
-                          Embedding width is configured on each embedding block.
-                        </p>
-                      </section>
-                    )}
-                  {transformer && (
-                    <label className="property-field">
-                      <span>Attention type</span>
-                      <select
-                        aria-label="Attention type"
-                        value={attentionVariant(selected.data, fieldVariables)}
-                        onChange={(event) => {
-                          if (isAttentionVariant(event.target.value)) {
-                            const variant = event.target.value;
-                            updateNode((node) =>
-                              setAttentionVariant(
-                                node.data,
-                                variant,
-                                fieldVariables,
-                                uid,
-                              ),
-                            );
-                          }
+                    <div className="node-actions">
+                      <button onClick={duplicate}>
+                        <Copy size={14} />
+                        {selectedCount > 1 ? "Duplicate selected" : "Duplicate"}
+                      </button>
+                      <button className="danger" onClick={removeSelected}>
+                        <Trash2 size={14} />
+                        {selectedCount > 1 ? "Delete selected" : "Delete"}
+                      </button>
+                    </div>
+                    {selected.data.body && (
+                      <button
+                        className="save-library"
+                        onClick={() => {
+                          setCustomBlocks((bs) => [...bs, copy(selected.data)]);
+                          notify("Block saved to your library");
                         }}
                       >
-                        {attentionVariants.map((variant) => (
-                          <option key={variant.id} value={variant.id}>
-                            {variant.label}
-                          </option>
-                        ))}
-                      </select>
-                      <small className="field-help">
-                        Changes the editable attention graph inside this
-                        container. Other layers are preserved.
-                      </small>
-                    </label>
-                  )}
-                  <div className="section-label">Configuration</div>
-                  {selected.data.kind === "moe" && (
-                    <label className="property-field">
-                      <span>Router scoring</span>
-                      <select
-                        aria-label="Router scoring"
-                        value={
-                          typeof selected.data.params.router === "string"
-                            ? selected.data.params.router
-                            : "softmax"
-                        }
-                        onChange={(event) =>
-                          updateNode((n) => {
-                            n.data.params.router = event.target.value;
-                          })
-                        }
-                      >
-                        <option value="softmax">Softmax top-k</option>
-                        <option value="sigmoid">Sigmoid top-k</option>
-                      </select>
-                      <small className="field-help">
-                        Both route each token to the top-k experts. Choose how
-                        the router scores them.
-                      </small>
-                    </label>
-                  )}
-                  {selected.data.kind === "attention_pattern" &&
-                    selected.data.params.pattern === "custom" &&
-                    selected.data.params.matrix && (
-                      <MaskMatrixEditor
-                        matrix={selected.data.params.matrix}
-                        onChange={(matrix) =>
-                          updateNode((n) => {
-                            n.data.params.matrix = matrix;
-                          })
-                        }
-                      />
-                    )}
-                  {Object.entries(transformer ?? selected.data.params ?? {})
-                    .filter(
-                      ([k]) =>
-                        k !== "source" &&
-                        !(k === "router" && selected.data.kind === "moe") &&
-                        !(
-                          k === "experts" &&
-                          ["moe_router", "moe_combine"].includes(
-                            selected.data.kind,
-                          )
-                        ) &&
-                        (selected.data.kind !== "attention_pattern" ||
-                          visiblePatternField(selected.data.params, k)) &&
-                        (!selected.data.iteration ||
-                          !["iterations", "shared"].includes(k)),
-                    )
-                    .map(([k, v]) => (
-                      <React.Fragment key={k}>
-                        <Field
-                          name={k}
-                          value={v ?? null}
-                          onChange={(next) =>
-                            updateNode((n) => {
-                              if (n.data.kind === "moe" && k === "experts") {
-                                resizeExperts(n.data, next);
-                                return;
-                              }
-                              if (
-                                transformer &&
-                                transformerSettingKeys.has(k)
-                              ) {
-                                setTransformerSetting(n.data, k, next);
-                                return;
-                              }
-                              n.data.params = parametersSchema.parse({
-                                ...n.data.params,
-                                [k]: next,
-                              });
-                              if (k === "pattern")
-                                n.data.params = changePattern(
-                                  n.data.params,
-                                  next,
-                                );
-                            })
-                          }
-                        />
-                        {typeof v === "string" && v.startsWith("$") && (
-                          <p className="binding-resolution field-help">
-                            {v} ={" "}
-                            {bindingValue(v, fieldVariables) ??
-                              "undefined · add it in Graph variables"}
-                          </p>
-                        )}
-                      </React.Fragment>
-                    ))}
-                  {selected.data.kind === "moe" && (
-                    <p className="field-help">
-                      Open experts to edit their individual graphs. The router
-                      selects tokens and the combine sums their weighted
-                      outputs. Expert count is a fixed integer; other settings
-                      can use variables.
-                    </p>
-                  )}
-                  {["moe_router", "moe_combine"].includes(
-                    selected.data.kind,
-                  ) && (
-                    <p className="field-help">
-                      Expert count is controlled by the outer Mixture of experts
-                      block. Edit the graph inside each expert.
-                    </p>
-                  )}
-                  {selected.data.kind === "attention_pattern" && (
-                    <p className="field-help">
-                      Connect features to a, and optionally key features to b.
-                      The output is an attention pattern. Connect it to
-                      attention’s optional mask port; combine patterns with
-                      union or intersection. Custom matrices require fixed
-                      sequence lengths. Content top-k selects from features and
-                      computes dense routing scores.
-                    </p>
-                  )}
-                  {["attention", "cross_attention", "sdpa"].includes(
-                    selected.data.kind,
-                  ) && (
-                    <p className="field-help">
-                      Dense uses PyTorch SDPA on CPU or GPU. Auto uses compiled
-                      FlexAttention on CUDA; flex requires a compatible GPU. A
-                      pattern defines permitted positions independently of the
-                      backend.
-                    </p>
-                  )}
-                  {selected.data.kind === "head" && (
-                    <Field
-                      name="tie"
-                      value={selected.data.params.tie || ""}
-                      onChange={(v) =>
-                        updateNode((n) => {
-                          if (v) n.data.params.tie = v;
-                          else delete n.data.params.tie;
-                        })
-                      }
-                    />
-                  )}
-                  {selected.data.iteration && (
-                    <>
-                      <div className="section-label">Application schedule</div>
-                      <p className="field-help">
-                        Zero-based step and total are passed to sampling
-                        operations. Shared applications may use different
-                        schedules.
-                      </p>
-                      {(["index", "total"] as const).map((key) => (
-                        <Field
-                          key={key}
-                          name={"schedule " + key}
-                          value={selected.data.iteration![key]}
-                          onChange={(value) =>
-                            updateNode((n) => {
-                              if (n.data.iteration)
-                                n.data.iteration[key] = value;
-                            })
-                          }
-                        />
-                      ))}
-                    </>
-                  )}
-                  {supportsWeightSharing(selected.data) && (
-                    <WeightGroupPicker
-                      value={selected.data.share ?? ""}
-                      choices={weightGroupChoices(
-                        allNodes(project),
-                        selected.data,
-                      )}
-                      onChange={(group) =>
-                        updateNode((node) => {
-                          if (group) node.data.share = group;
-                          else makeIndependent(node);
-                        })
-                      }
-                      onCreate={() =>
-                        updateNode((node) => {
-                          makeIndependent(node);
-                          node.data.share = "weights_" + uid();
-                        })
-                      }
-                    />
-                  )}
-                  {selected.data.kind === "custom" && (
-                    <Field
-                      name="source"
-                      value={selected.data.params.source || ""}
-                      onChange={(v) =>
-                        updateNode((n) => {
-                          n.data.params.source = v;
-                        })
-                      }
-                    />
-                  )}
-                  <div className="section-label">Output contract</div>
-                  <div className="shape-card">
-                    <span>Tensor shape</span>
-                    <code>
-                      {report?.shapes[prefix + selected.id]
-                        ? `[${report.shapes[prefix + selected.id]?.shape.join(", ")}]`
-                        : "Unresolved"}
-                    </code>
-                    <small>
-                      {report?.shapes[prefix + selected.id]?.dtype ||
-                        "Connect valid inputs to infer shape"}
-                    </small>
-                  </div>
-                  <div className="stat-row">
-                    <span>Parameters</span>
-                    <b>{format(report?.counts[prefix + selected.id] || 0)}</b>
-                  </div>
-                  {report?.errors
-                    .filter((e) => e.node === prefix + selected.id)
-                    .map((e: ValidationIssue, i: number) => (
-                      <div className="inline-error" key={i}>
-                        <CircleAlert size={15} />
-                        {e.message}
-                      </div>
-                    ))}
-                  {report?.warnings
-                    .filter((issue) => issue.node === prefix + selected.id)
-                    .map((issue, i) => (
-                      <DesignAdvice
-                        key={`${issue.code}-${i}`}
-                        issue={issue}
-                        onLocate={focusError}
-                      />
-                    ))}
-                  <div className="node-actions">
-                    <button onClick={duplicate}>
-                      <Copy size={14} />
-                      {selectedCount > 1 ? "Duplicate selected" : "Duplicate"}
-                    </button>
-                    <button className="danger" onClick={removeSelected}>
-                      <Trash2 size={14} />
-                      {selectedCount > 1 ? "Delete selected" : "Delete"}
-                    </button>
-                  </div>
-                  {selected.data.body && (
-                    <button
-                      className="save-library"
-                      onClick={() => {
-                        setCustomBlocks((bs) => [...bs, copy(selected.data)]);
-                        notify("Block saved to your library");
-                      }}
-                    >
-                      <Plus size={14} />
-                      Save to block library
-                    </button>
-                  )}
-                </>
-              ) : connection ? (
-                <div className="connection-editor">
-                  <span className="eyebrow">EDIT THE COMPUTATION PATH</span>
-                  <h2>Insert between nodes</h2>
-                  <p>
-                    {
-                      graph.nodes.find((n) => n.id === connection.source)?.data
-                        .label
-                    }{" "}
-                    →{" "}
-                    {
-                      graph.nodes.find((n) => n.id === connection.target)?.data
-                        .label
-                    }
-                  </p>
-                  <div className="shape-card">
-                    <span>Connection contract</span>
-                    <code>
-                      {connectionShape
-                        ? `[${connectionShape.shape.join(", ")}] · ${connectionShape.dtype}`
-                        : "Unresolved"}
-                    </code>
-                  </div>
-                  <p className="inspector-description">
-                    An inserted layer has independent parameters. Existing
-                    shared applications keep their weight group.
-                  </p>
-                  {connectionShape?.dtype === "float32" &&
-                  typeof connectionShape.shape.at(-1) === "number" ? (
-                    <>
-                      <label className="property-field">
-                        <span>Layer to insert</span>
-                        <select
-                          aria-label="Layer to insert"
-                          value={insertKind}
-                          onChange={(e) => {
-                            if (isInsertionKind(e.target.value))
-                              setInsertKind(e.target.value);
-                          }}
-                        >
-                          <option value="linear">Learned linear layer</option>
-                          <option value="adapter">Residual adapter</option>
-                          <option value="ffn">Feed-forward network</option>
-                          <option value="norm">RMSNorm</option>
-                          <option value="transformer">Transformer layer</option>
-                        </select>
-                      </label>
-                      <button
-                        className="inspect-open"
-                        onClick={insertOnConnection}
-                      >
-                        Insert independent layer <Plus size={15} />
+                        <Plus size={14} />
+                        Save to block library
                       </button>
-                    </>
-                  ) : (
+                    )}
+                  </>
+                ) : connection ? (
+                  <div className="connection-editor">
+                    <span className="eyebrow">EDIT THE COMPUTATION PATH</span>
+                    <h2>Insert between nodes</h2>
                     <p>
-                      Connect floating point features with a known width to
-                      insert a learned layer here. Token IDs need an embedding
-                      first.
+                      {
+                        graph.nodes.find((n) => n.id === connection.source)
+                          ?.data.label
+                      }{" "}
+                      →{" "}
+                      {
+                        graph.nodes.find((n) => n.id === connection.target)
+                          ?.data.label
+                      }
                     </p>
-                  )}
-                </div>
-              ) : (
-                <>
-                  <h2>Select a block</h2>
-                  <p className="inspector-description">
-                    Click a block to edit its settings. Click a connection to
-                    insert a layer.
-                  </p>
-                  <div className="section-label">Whole graph</div>
-                  <div className="stat-row">
-                    <span>Trainable parameters</span>
-                    <b>{format(report?.parameters || 0)}</b>
+                    <div className="shape-card">
+                      <span>Connection contract</span>
+                      <code>
+                        {connectionShape
+                          ? `[${connectionShape.shape.join(", ")}] · ${connectionShape.dtype}`
+                          : "Unresolved"}
+                      </code>
+                    </div>
+                    <p className="inspector-description">
+                      An inserted layer has independent parameters. Existing
+                      shared applications keep their weight group.
+                    </p>
+                    {connectionShape?.dtype === "float32" &&
+                    typeof connectionShape.shape.at(-1) === "number" ? (
+                      <>
+                        <label className="property-field">
+                          <span>Layer to insert</span>
+                          <select
+                            aria-label="Layer to insert"
+                            value={insertKind}
+                            onChange={(e) => {
+                              if (isInsertionKind(e.target.value))
+                                setInsertKind(e.target.value);
+                            }}
+                          >
+                            <option value="linear">Learned linear layer</option>
+                            <option value="adapter">Residual adapter</option>
+                            <option value="ffn">Feed-forward network</option>
+                            <option value="norm">RMSNorm</option>
+                            <option value="transformer">
+                              Transformer layer
+                            </option>
+                          </select>
+                        </label>
+                        <button
+                          className="inspect-open"
+                          onClick={insertOnConnection}
+                        >
+                          Insert independent layer <Plus size={15} />
+                        </button>
+                      </>
+                    ) : (
+                      <p>
+                        Connect floating point features with a known width to
+                        insert a learned layer here. Token IDs need an embedding
+                        first.
+                      </p>
+                    )}
                   </div>
-                  <div className="stat-row">
-                    <span>Graph validation</span>
-                    <b className={report?.valid ? "valid" : "invalid"}>
-                      {report?.valid ? "Compatible" : "Needs attention"}
-                    </b>
-                  </div>
-                </>
-              )}
-            </div>
-          </aside>
-        </div>
+                ) : (
+                  <>
+                    <h2>Select a block</h2>
+                    <p className="inspector-description">
+                      Click a block to edit its settings. Click a connection to
+                      insert a layer.
+                    </p>
+                    <div className="section-label">Whole graph</div>
+                    <div className="stat-row">
+                      <span>Trainable parameters</span>
+                      <b>{format(report?.parameters || 0)}</b>
+                    </div>
+                    <div className="stat-row">
+                      <span>Graph validation</span>
+                      <b className={report?.valid ? "valid" : "invalid"}>
+                        {report?.valid ? "Compatible" : "Needs attention"}
+                      </b>
+                    </div>
+                  </>
+                )}
+              </div>
+            </aside>
+          </div>
+        )}
       </main>
       <nav className="mobile-tools" aria-label="Editor panels">
         <button
@@ -3842,6 +4116,10 @@ function Workbench({
         <button
           aria-expanded={mobilePanel === "library" && left === "models"}
           onClick={() => {
+            if (tab === "training") {
+              setModal("projects");
+              return;
+            }
             setLeft("models");
             setSearch("");
             setMobilePanel(
