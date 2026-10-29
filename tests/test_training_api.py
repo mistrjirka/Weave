@@ -68,7 +68,12 @@ def test_stage_plan_preview_monitor_and_snapshot(training_client):
     }
     plan = {"version": 1, "project_id": "training-test", "stages": [stage]}
     assert client.put("/api/training/plans/training-test", json=plan).status_code == 200
-    assert client.get("/api/training/plans/training-test").json() == plan
+    saved_plan = client.get("/api/training/plans/training-test").json()
+    assert saved_plan["project_id"] == plan["project_id"]
+    assert saved_plan["stages"][0]["script"] == stage["script"]
+    assert saved_plan["stages"][0]["config"] == stage["config"]
+    assert Path(saved_plan["stages"][0]["script_path"]).is_file()
+    stage = saved_plan["stages"][0]
     preview = client.post(
         "/api/training/preview", json={"project": tiny_project(), "stage": stage}
     )

@@ -74,7 +74,7 @@
 }
 .training-heading p,
 .training-muted {
-  color: var(--theme-muted, #6b796d);
+  color: var(--theme-muted, #59685d);
   font-size: 12px;
 }
 .training-actions {
@@ -149,7 +149,7 @@
 .training-stage small,
 .training-run small {
   display: block;
-  color: var(--theme-muted, #6b796d);
+  color: var(--theme-muted, #59685d);
   font-size: 11px;
   line-height: 1.6;
 }
@@ -225,7 +225,7 @@
   min-height: 37px;
 }
 .training-workspace small {
-  color: var(--theme-muted, #6b796d);
+  color: var(--theme-muted, #59685d);
   font-size: 11px;
   font-weight: 400;
   line-height: 1.6;
@@ -297,7 +297,7 @@
   border-top: 1px solid var(--line);
 }
 .training-launch > span {
-  color: var(--theme-muted, #6b796d);
+  color: var(--theme-muted, #59685d);
   font-size: 12px;
 }
 .training-launch button {
@@ -408,7 +408,7 @@
 }
 .training-chart figcaption span {
   font-variant-numeric: tabular-nums;
-  color: var(--theme-muted, #6b796d);
+  color: var(--theme-muted, #59685d);
   font-size: 11px;
 }
 .training-chart svg {
@@ -420,7 +420,7 @@
 }
 .training-chart svg text {
   font-size: 10px;
-  fill: var(--theme-muted, #6b796d);
+  fill: var(--theme-muted, #59685d);
 }
 .training-chart-line {
   fill: none;
@@ -551,7 +551,7 @@
 }
 .training-chart-empty {
   padding: 30px;
-  color: var(--theme-muted, #6b796d);
+  color: var(--theme-muted, #59685d);
 }
 @media (min-width: 2200px) {
   .training-workspace {
@@ -722,4 +722,119 @@
 .training-workspace button,
 .training-workspace a {
   touch-action: manipulation;
+}
+.training-server-files {
+  padding: 16px;
+  margin: 14px 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--theme-base, #f7f9f5);
+}
+.training-server-files > div:first-child {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-bottom: 12px;
+}
+.training-server-files > small {
+  display: block;
+  margin-top: 9px;
+}
+.training-server-path {
+  display: grid;
+  grid-template-columns: 90px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  margin: 8px 0;
+}
+.training-server-path > span {
+  font-size: 11px;
+  color: var(--theme-muted, #59685d);
+}
+.training-server-path code {
+  user-select: all;
+  overflow-wrap: anywhere;
+  line-height: 1.6;
+}
+.training-server-path button {
+  font-size: 11px;
+  white-space: nowrap;
+}
+.training-python-environment {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  padding: 12px 0;
+  margin-bottom: 12px;
+  border-bottom: 1px solid var(--line);
+  font-size: 12px;
+}
+.training-python-environment > code {
+  flex-basis: 100%;
+  color: var(--theme-muted, #59685d);
+}
+.training-script-toolbar {
+  display: flex;
+  gap: 9px;
+  align-items: end;
+  flex-wrap: wrap;
+  margin: 14px 0;
+}
+.training-script-toolbar label {
+  font-size: 11px;
+}
+.training-script-toolbar select {
+  min-width: 190px;
+}
+.training-script-toolbar small {
+  margin: auto 0 8px auto;
+}
+.training-code-editor {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+  margin: 12px 0 16px;
+  min-width: 0;
+}
+.training-code-editor:focus-within {
+  outline: 2px solid var(--theme-green-accent, #608d76);
+  outline-offset: 2px;
+}
+.training-code-editor .cm-editor.cm-focused {
+  outline: none;
+}
+.training-code-editor .cm-content {
+  min-height: 100%;
+}
+.training-code-editor .cm-search {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  align-items: center;
+}
+.training-code-editor .cm-search input {
+  width: auto !important;
+}
+.training-code-editor .cm-search label {
+  flex-direction: row;
+  align-items: center;
+}
+.training-code-editor .cm-tooltip-autocomplete {
+  max-width: min(500px, 80vw);
+}
+@media (max-width: 760px) {
+  .training-server-path {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 5px;
+  }
+  .training-server-path > span {
+    grid-column: 1/-1;
+  }
+  .training-script-toolbar small {
+    margin: 6px 0;
+  }
+  .training-code-editor .cm-editor {
+    height: 480px !important;
+  }
 }

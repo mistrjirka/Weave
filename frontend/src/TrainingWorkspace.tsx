@@ -1,5 +1,5 @@
 import "./training.css";
-import { useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { z } from "zod";
 import {
   Activity,
@@ -17,13 +17,19 @@ import {
 } from "lucide-react";
 import type { Project } from "./types";
 import { TrainingChart } from "./TrainingChart";
-import { newId } from "./ui";
+import { newId, copyText } from "./ui";
+import type { PythonEditorHandle } from "./PythonEditor";
+const PythonEditor = lazy(() =>
+  import("./PythonEditor").then((module) => ({ default: module.PythonEditor })),
+);
 import {
   capabilitySchema,
   detailSchema,
   hardwareSchema,
   inspectTrainingModel,
   planSchema,
+  stageSchema,
+  pythonEnvironmentSchema,
   runSchema,
   templateSchema,
   trainingRequest,
@@ -35,6 +41,20 @@ import {
   type TrainingStage,
   type TrainingRun,
 } from "./trainingApi";
+
+const reportingHooks: Record<string, string> = {
+  "Log scalar metrics":
+    '# After an optimizer update; adjust names to your loop.\nrun.log({"train/loss": loss.item()}, step=step, tokens=tokens)\n',
+  "Automatically track optimizer learning rates":
+    "# Inside with Run(), once after constructing the optimizer.\n# Uses the official PyTorch optimizer hook; reports every 10 updates.\nrun.watch_optimizer(optimizer, every=10)\n",
+  "Report console text": 'run.console("Training data prepared")\n',
+  "Save a generated example":
+    "# After generating text with your model.\nrun.sample(prompt=prompt, output=generated_text, checkpoint=checkpoint_path)\n",
+  "Poll stop / snapshot requests":
+    '# Poll at a safe optimizer boundary, then handle these requests.\ncommands = run.poll_commands()\nstop_requested = any(command["kind"] == "stop" for command in commands)\nsnapshot_ids = [command["id"] for command in commands if command["kind"] == "snapshot"]\n',
+  "Publish a completed checkpoint":
+    '# Save weights + optimizer/scheduler/scaler/RNG/data state first.\n# Include snapshot_ids from run.poll_commands() to fulfill UI snapshots.\nrun.checkpoint(checkpoint_path, metadata={"snapshot_requests": snapshot_ids})\n',
+};
 
 const running = new Set(["starting", "running", "evaluating"]);
 const previewSchema = z.object({
@@ -87,9 +107,12 @@ export function TrainingWorkspace({ project }: { project: Project }) {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [token, setToken] = useState("");
+  const [reportBaseURL, setReportBaseURL] = useState(
+    () => `http://localhost:${location.port || "8173"}`,
+  );
   const [busy, setBusy] = useState(false);
   const [loaded, setLoaded] = useState(false);
-  const [editor, setEditor] = useState<"settings" | "script">("settings");
+  const [editor, setEditor] = useState<"settings" | "script">("script");
   const [dashboard, setDashboard] = useState<
     "metrics" | "samples" | "hardware" | "logs" | "checkpoints"
   >("metrics");
@@ -104,10 +127,25 @@ export function TrainingWorkspace({ project }: { project: Project }) {
   );
   const [includeData, setIncludeData] = useState(false);
   const [promptsText, setPromptsText] = useState("");
+  const [savedStages, setSavedStages] = useState<Record<string, TrainingStage>>(
+    {},
+  );
+  const savedStagesRef = useRef<Record<string, TrainingStage>>({});
+  const [pythonEnvironment, setPythonEnvironment] = useState<z.infer<
+    typeof pythonEnvironmentSchema
+  > | null>(null);
+  const [environmentError, setEnvironmentError] = useState("");
+  const codeEditorRef = useRef<PythonEditorHandle>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const datasetRef = useRef<HTMLInputElement>(null);
   const stage = plan.stages.find((s) => s.id === selected) ?? plan.stages[0];
   const config = stage?.config;
+  useEffect(() => {
+    if (detail?.reporting_url)
+      setReportBaseURL(
+        detail.reporting_url.replace(/\/api\/training\/reports\/[^/]+$/, ""),
+      );
+  }, [detail?.run.id, detail?.reporting_url]);
   const cacheKey = `weave:training:${project.id}`;
 
   useEffect(() => {
@@ -150,6 +188,10 @@ export function TrainingWorkspace({ project }: { project: Project }) {
     ])
       .then(([t, p, r, h]) => {
         setTemplates(t);
+        savedStagesRef.current = Object.fromEntries(
+          p.stages.map((item) => [item.id, item]),
+        );
+        setSavedStages(savedStagesRef.current);
         setRuns(r);
         setGPUs(h.gpus);
         const cached = localStorage.getItem(cacheKey);
@@ -165,7 +207,34 @@ export function TrainingWorkspace({ project }: { project: Project }) {
         } catch {
           /* A damaged browser draft must not hide saved stages. */
         }
-        setPlan(recovered ?? p);
+        // Restore draft content while attaching paths created by file migration.
+        setPlan(
+          recovered
+            ? {
+                ...recovered,
+                stages: recovered.stages.map((draft) => {
+                  const disk = savedStagesRef.current[draft.id];
+                  if (!disk) return draft;
+                  return {
+                    ...draft,
+                    script_path: disk.script_path,
+                    config_path: disk.config_path,
+                    script_revision:
+                      draft.script_revision ??
+                      (draft.script === disk.script
+                        ? disk.script_revision
+                        : null),
+                    config_revision:
+                      draft.config_revision ??
+                      (JSON.stringify(draft.config) ===
+                      JSON.stringify(disk.config)
+                        ? disk.config_revision
+                        : null),
+                  };
+                }),
+              }
+            : p,
+        );
         setLoaded(true);
         if (!runId && r[0]) setRunId(r[0].id);
       })
@@ -212,6 +281,70 @@ export function TrainingWorkspace({ project }: { project: Project }) {
   useEffect(() => {
     setPromptsText(JSON.stringify(stage?.config.prompts ?? [], null, 2));
   }, [stage?.id]);
+  useEffect(() => {
+    if (!capabilities?.authenticated) return;
+    const controller = new AbortController();
+    setPythonEnvironment(null);
+    setEnvironmentError("");
+    const executable = config?.python ?? capabilities.python;
+    const timer = window.setTimeout(() => {
+      void trainingRequest(
+        `/environment?python=${encodeURIComponent(executable)}`,
+        pythonEnvironmentSchema,
+        undefined,
+        undefined,
+        controller.signal,
+      )
+        .then(setPythonEnvironment)
+        .catch((e) => {
+          if (!controller.signal.aborted) setEnvironmentError(message(e));
+        });
+    }, 600);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [config?.python, capabilities?.python, capabilities?.authenticated]);
+  useEffect(() => {
+    if (!stage?.script_path || !capabilities?.authenticated) return;
+    const controller = new AbortController();
+    const timer = window.setInterval(() => {
+      void trainingRequest(
+        `/workspaces/${encodeURIComponent(project.id)}/stages/${encodeURIComponent(stage.id)}`,
+        stageSchema,
+        undefined,
+        undefined,
+        controller.signal,
+      )
+        .then((remote) => {
+          if (controller.signal.aborted) return;
+          const previous = savedStagesRef.current[remote.id];
+          setPlan((current) => ({
+            ...current,
+            stages: current.stages.map((item) =>
+              item.id === remote.id &&
+              previous &&
+              item.script === previous.script &&
+              JSON.stringify(item.config) === JSON.stringify(previous.config)
+                ? { ...remote, name: item.name }
+                : item,
+            ),
+          }));
+          savedStagesRef.current = {
+            ...savedStagesRef.current,
+            [remote.id]: remote,
+          };
+          setSavedStages(savedStagesRef.current);
+        })
+        .catch(() => {
+          /* Explicit reload/save surfaces file errors; polling must not erase a draft. */
+        });
+    }, 4000);
+    return () => {
+      window.clearInterval(timer);
+      controller.abort();
+    };
+  }, [stage?.id, stage?.script_path, capabilities?.authenticated, project.id]);
   useEffect(() => {
     if (!runId || !capabilities?.authenticated) {
       setDetail(null);
@@ -305,6 +438,68 @@ export function TrainingWorkspace({ project }: { project: Project }) {
   ) {
     if (config) updateStage({ config: { ...config, [key]: value } });
   }
+  function applySavedStage(saved: TrainingStage, submitted: TrainingStage) {
+    savedStagesRef.current = { ...savedStagesRef.current, [saved.id]: saved };
+    setSavedStages(savedStagesRef.current);
+    setPlan((current) => ({
+      ...current,
+      stages: current.stages.map((item) =>
+        item.id !== saved.id
+          ? item
+          : {
+              ...saved,
+              name: item.name === submitted.name ? saved.name : item.name,
+              script:
+                item.script === submitted.script ? saved.script : item.script,
+              config:
+                JSON.stringify(item.config) === JSON.stringify(submitted.config)
+                  ? saved.config
+                  : item.config,
+            },
+      ),
+    }));
+  }
+  async function saveStageFile(submitted = stage) {
+    if (!submitted) return;
+    const saved = await trainingRequest(
+      `/workspaces/${encodeURIComponent(project.id)}/stages/${encodeURIComponent(submitted.id)}`,
+      stageSchema,
+      { project, stage: submitted },
+      "PUT",
+    );
+    applySavedStage(saved, submitted);
+    setNotice(`Saved server file: ${saved.script_path}`);
+  }
+  async function reloadStageFile() {
+    if (!stage) return;
+    const remote = await trainingRequest(
+      `/workspaces/${encodeURIComponent(project.id)}/stages/${encodeURIComponent(stage.id)}`,
+      stageSchema,
+    );
+    savedStagesRef.current = { ...savedStagesRef.current, [remote.id]: remote };
+    setSavedStages(savedStagesRef.current);
+    setPlan((current) => ({
+      ...current,
+      stages: current.stages.map((item) =>
+        item.id === remote.id ? remote : item,
+      ),
+    }));
+    setNotice("Reloaded train.py and config.json from the server.");
+  }
+  function createStage(next: TrainingStage) {
+    const clean = {
+      ...next,
+      script_path: null,
+      config_path: null,
+      script_revision: null,
+      config_revision: null,
+      workspace_warning: null,
+    };
+    setPlan((current) => ({ ...current, stages: [...current.stages, clean] }));
+    setSelected(clean.id);
+    setEditor("script");
+    void task(() => saveStageFile(clean));
+  }
   function addStage(duplicate = false) {
     if (!templates) return;
     const id = newId();
@@ -320,18 +515,22 @@ export function TrainingWorkspace({ project }: { project: Project }) {
             },
             script: templates.scripts.causal,
           };
-    setPlan((current) => ({ ...current, stages: [...current.stages, next] }));
-    setSelected(id);
-    setEditor("settings");
+    createStage(next);
   }
   async function savePlan() {
-    await trainingRequest(
+    const saved = await trainingRequest(
       `/plans/${encodeURIComponent(project.id)}`,
       planSchema,
       plan,
       "PUT",
     );
-    setNotice("Training stages saved.");
+    for (const item of saved.stages) {
+      const submitted = plan.stages.find((value) => value.id === item.id);
+      if (submitted) applySavedStage(item, submitted);
+    }
+    setNotice(
+      "Saved stages and their train.py / config.json files on the server.",
+    );
   }
   function reorder(direction: number) {
     if (!stage) return;
@@ -352,7 +551,7 @@ export function TrainingWorkspace({ project }: { project: Project }) {
       .parse(prompts);
     const updated = { ...stage, config: { ...stage.config, prompts: checked } };
     updateStage(updated);
-    await trainingRequest(
+    const savedPlan = await trainingRequest(
       `/plans/${encodeURIComponent(project.id)}`,
       planSchema,
       {
@@ -363,8 +562,12 @@ export function TrainingWorkspace({ project }: { project: Project }) {
     );
     const run = await trainingRequest("/runs", runSchema, {
       project,
-      stage: updated,
+      stage: savedPlan.stages.find((item) => item.id === updated.id) ?? updated,
     });
+    for (const saved of savedPlan.stages) {
+      const submitted = plan.stages.find((item) => item.id === saved.id);
+      if (submitted) applySavedStage(saved, submitted);
+    }
     setRuns((current) => [run, ...current]);
     setRunId(run.id);
     setNotice(
@@ -415,6 +618,7 @@ export function TrainingWorkspace({ project }: { project: Project }) {
         {label}
         <input
           type="number"
+          aria-label={label}
           value={config?.[key] ?? 0}
           step={key === "learning_rate" || key === "weight_decay" ? "any" : 1}
           min={
@@ -490,9 +694,8 @@ export function TrainingWorkspace({ project }: { project: Project }) {
           </button>
         </form>
         <p className="training-muted">
-          The code is stored on the Weave host at{" "}
-          <code>{capabilities.token_file}</code>. Training executes your
-          editable Python on that host.
+          This server has optional training authentication enabled. Use the
+          WEAVE_TRAINING_TOKEN supplied by its operator.
         </p>
         {!capabilities.enabled && (
           <p>
@@ -691,7 +894,7 @@ export function TrainingWorkspace({ project }: { project: Project }) {
                     aria-pressed={editor === "settings"}
                     onClick={() => setEditor("settings")}
                   >
-                    Settings
+                    Preset settings
                   </button>
                   <button
                     aria-pressed={editor === "script"}
@@ -701,38 +904,195 @@ export function TrainingWorkspace({ project }: { project: Project }) {
                   </button>
                 </div>
               </div>
+              <div className="training-server-files">
+                <div>
+                  <strong>Editable files on the Weave server</strong>
+                  <small>
+                    These are server paths, not files on your browser’s
+                    computer. Open them in your SSH-connected VS Code. Saving
+                    this file also refreshes generated model.py in the same
+                    directory.
+                  </small>
+                </div>
+                <div className="training-server-path">
+                  <span>Project folder</span>
+                  <code>
+                    {(
+                      stage.script_path ?? savedStages[stage.id]?.script_path
+                    )?.split("/stages/")[0] ?? "Creating project folder…"}
+                  </code>
+                </div>
+                <div className="training-server-path">
+                  <span>Network code</span>
+                  <code>
+                    {(
+                      stage.script_path ?? savedStages[stage.id]?.script_path
+                    )?.replace(/train\.py$/, "model.py") ??
+                      "Save the stage to generate model.py"}
+                  </code>
+                </div>
+                <div className="training-server-path">
+                  <span>Python script</span>
+                  <code>
+                    {stage.script_path ??
+                      savedStages[stage.id]?.script_path ??
+                      "Creating server file…"}
+                  </code>
+                  <button
+                    aria-label="Copy Python script server path"
+                    disabled={
+                      !(stage.script_path ?? savedStages[stage.id]?.script_path)
+                    }
+                    onClick={() =>
+                      void task(async () => {
+                        await copyText(
+                          stage.script_path ??
+                            savedStages[stage.id]?.script_path ??
+                            "",
+                        );
+                        setNotice("Server script path copied.");
+                      })
+                    }
+                  >
+                    Copy path
+                  </button>
+                </div>
+                <div className="training-server-path">
+                  <span>Preset values</span>
+                  <code>
+                    {stage.config_path ??
+                      savedStages[stage.id]?.config_path ??
+                      "Creating config.json…"}
+                  </code>
+                  <button
+                    aria-label="Copy preset config server path"
+                    disabled={
+                      !(stage.config_path ?? savedStages[stage.id]?.config_path)
+                    }
+                    onClick={() =>
+                      void task(async () => {
+                        await copyText(
+                          stage.config_path ??
+                            savedStages[stage.id]?.config_path ??
+                            "",
+                        );
+                        setNotice("Server config path copied.");
+                      })
+                    }
+                  >
+                    Copy path
+                  </button>
+                </div>
+                {savedStages[stage.id] && (
+                  <small>
+                    {stage.script === savedStages[stage.id].script &&
+                    JSON.stringify(config) ===
+                      JSON.stringify(savedStages[stage.id].config)
+                      ? "Browser matches the server files."
+                      : "Browser edits are not saved to the server yet."}
+                  </small>
+                )}
+                {savedStages[stage.id] &&
+                  ((stage.script_revision !==
+                    savedStages[stage.id].script_revision &&
+                    stage.script !== savedStages[stage.id].script) ||
+                    (stage.config_revision !==
+                      savedStages[stage.id].config_revision &&
+                      JSON.stringify(config) !==
+                        JSON.stringify(savedStages[stage.id].config))) && (
+                    <p className="training-alert" role="status">
+                      Files changed on the server while this browser has a
+                      draft. Reload the server files, or duplicate this stage to
+                      preserve your browser draft.
+                    </p>
+                  )}
+                {stage.workspace_warning && (
+                  <p className="training-alert">{stage.workspace_warning}</p>
+                )}
+              </div>
+              <div className="training-python-environment" role="status">
+                {pythonEnvironment ? (
+                  <>
+                    <strong>Python {pythonEnvironment.python_version}</strong>
+                    <span>
+                      PyTorch{" "}
+                      {pythonEnvironment.torch_version ?? "not installed"} ·{" "}
+                      {pythonEnvironment.cuda_available
+                        ? `CUDA ${pythonEnvironment.cuda_version} · ${pythonEnvironment.device_count} GPU(s)`
+                        : "CPU environment"}
+                    </span>
+                    <code>{pythonEnvironment.executable}</code>
+                  </>
+                ) : (
+                  <span>
+                    {environmentError ||
+                      "Detecting the selected server Python environment…"}
+                  </span>
+                )}
+              </div>
               {editor === "script" ? (
                 <>
                   <p className="training-muted">
-                    Your script controls the model, data, loss, and optimizer.
-                    Settings are passed through config.json. Form edits never
-                    overwrite Python.
+                    This Python file controls training. Optional presets write
+                    config.json; your script decides which values to use. Saving
+                    here writes the real server file. Clean files reload
+                    automatically after SSH edits.
                   </p>
-                  <textarea
-                    className="training-script"
-                    aria-label="Training Python script"
-                    spellCheck={false}
-                    value={stage.script}
-                    onChange={(e) => updateStage({ script: e.target.value })}
-                  />
+                  <div className="training-script-toolbar">
+                    <button
+                      disabled={busy}
+                      onClick={() => void task(() => saveStageFile())}
+                    >
+                      <Save size={14} aria-hidden="true" />
+                      Save file
+                    </button>
+                    <button
+                      disabled={busy || !stage.script_path}
+                      onClick={() => void task(reloadStageFile)}
+                    >
+                      Reload server files
+                    </button>
+                    <label>
+                      Insert reporting hook
+                      <select
+                        aria-label="Insert reporting hook"
+                        value=""
+                        onChange={(event) => {
+                          const snippet = reportingHooks[event.target.value];
+                          if (snippet)
+                            codeEditorRef.current?.insertSnippet(snippet);
+                        }}
+                      >
+                        <option value="">Choose a hook…</option>
+                        {Object.keys(reportingHooks).map((key) => (
+                          <option value={key} key={key}>
+                            {key}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <small>Ctrl/Cmd+S save · Ctrl/Cmd+F find</small>
+                  </div>
+                  <Suspense
+                    fallback={<p role="status">Loading Python editor…</p>}
+                  >
+                    <PythonEditor
+                      key={stage.id}
+                      ref={codeEditorRef}
+                      value={stage.script}
+                      onChange={(script) => updateStage({ script })}
+                      onSave={() => void task(() => saveStageFile())}
+                    />
+                  </Suspense>
                   <button
                     onClick={() => {
-                      if (templates) {
-                        const id = newId();
-                        setPlan((current) => ({
-                          ...current,
-                          stages: [
-                            ...current.stages,
-                            {
-                              id,
-                              name: `${stage.name} · fresh template`,
-                              config: structuredClone(config),
-                              script: templates.scripts[config.recipe],
-                            },
-                          ],
-                        }));
-                        setSelected(id);
-                      }
+                      if (templates)
+                        createStage({
+                          id: newId(),
+                          name: `${stage.name} · fresh template`,
+                          config: structuredClone(config),
+                          script: templates.scripts[config.recipe],
+                        });
                     }}
                   >
                     Open fresh template as another stage
@@ -740,6 +1100,11 @@ export function TrainingWorkspace({ project }: { project: Project }) {
                 </>
               ) : (
                 <>
+                  <p className="training-muted">
+                    Optional starter values for config.json on the server. These
+                    do not restrict custom Python or inject hidden training
+                    behavior.
+                  </p>
                   <div className="training-form-grid">
                     <label>
                       Training recipe
@@ -837,12 +1202,14 @@ export function TrainingWorkspace({ project }: { project: Project }) {
                           list="training-checkpoint-paths"
                         />
                         <datalist id="training-checkpoint-paths">
-                          {checkpoints.map((event) => (
-                            <option
-                              key={event.id}
-                              value={String(event.payload.path)}
-                            />
-                          ))}
+                          {checkpoints
+                            .filter((event) => !event.payload.remote)
+                            .map((event) => (
+                              <option
+                                key={event.id}
+                                value={String(event.payload.path)}
+                              />
+                            ))}
                         </datalist>
                         <small>
                           Use “Continue from here” in checkpoint history to
@@ -863,7 +1230,7 @@ export function TrainingWorkspace({ project }: { project: Project }) {
                   </p>
                   <div className="training-form-grid">
                     <label>
-                      Training dataset path
+                      Training dataset path on server
                       <input
                         value={config.dataset}
                         placeholder="/path/to/train.jsonl"
@@ -875,7 +1242,7 @@ export function TrainingWorkspace({ project }: { project: Project }) {
                       </small>
                     </label>
                     <label>
-                      Validation dataset path
+                      Validation dataset path on server
                       <input
                         value={config.eval_dataset}
                         placeholder="Optional held-out dataset"
@@ -989,11 +1356,12 @@ export function TrainingWorkspace({ project }: { project: Project }) {
                         </option>
                       </select>
                       <small>
-                        Remote worker launch is planned for a later version.
+                        Launch yourself on this server or another computer; the
+                        reporting API sends progress back to Weave.
                       </small>
                     </label>
                     <label>
-                      Python interpreter
+                      Python executable on server
                       <input
                         value={config.python}
                         onChange={(e) => setting("python", e.target.value)}
@@ -1441,10 +1809,17 @@ export function TrainingWorkspace({ project }: { project: Project }) {
                   </a>
                 </div>
               </div>
+              <p className="training-muted">
+                Frozen run script on server:{" "}
+                <code>{detail.directory}/train.py</code>. Editing your stage
+                file does not change this run.
+              </p>
               <button
                 onClick={() => {
                   const id = newId();
-                  const checkpoint = checkpoints.at(-1);
+                  const checkpoint = checkpoints
+                    .filter((event) => !event.payload.remote)
+                    .at(-1);
                   const next: TrainingStage = {
                     id,
                     name: `${detail.run.name} · next stage`,
@@ -1458,11 +1833,7 @@ export function TrainingWorkspace({ project }: { project: Project }) {
                         : null,
                     },
                   };
-                  setPlan((current) => ({
-                    ...current,
-                    stages: [...current.stages, next],
-                  }));
-                  setSelected(id);
+                  createStage(next);
                   setNotice(
                     "Created an editable stage from the recorded script and configuration.",
                   );
@@ -1528,6 +1899,98 @@ export function TrainingWorkspace({ project }: { project: Project }) {
                   </button>
                 ))}
               </nav>
+              {detail.run.execution === "monitor" && (
+                <section
+                  className="training-server-files"
+                  aria-label="Independent training reporting"
+                >
+                  <strong>Run independently and report to Weave</strong>
+                  <p>
+                    Download the training package and start it yourself. It
+                    contains the network, training script, configuration and
+                    reporting.json. Reports are sent in the background; a
+                    disconnected server does not stop training.
+                  </p>
+                  <label>
+                    Reporting server URL
+                    <input
+                      type="url"
+                      value={reportBaseURL}
+                      onChange={(event) => setReportBaseURL(event.target.value)}
+                    />
+                    <small>
+                      Localhost works when training and Weave run on the same
+                      computer, or through an SSH tunnel. On another computer,
+                      use this server’s reachable address (for example{" "}
+                      {location.origin}).
+                    </small>
+                  </label>
+                  <button
+                    disabled={busy}
+                    onClick={() =>
+                      void task(async () => {
+                        await trainingRequest(
+                          `/runs/${encodeURIComponent(runId)}/reporting`,
+                          z.object({ url: z.string(), token: z.string() }),
+                          { base_url: reportBaseURL },
+                        );
+                        setNotice(
+                          "Reporting connection saved. Download the training package again to use this address.",
+                        );
+                        setDetail(
+                          await trainingRequest(
+                            `/runs/${encodeURIComponent(runId)}`,
+                            detailSchema,
+                          ),
+                        );
+                      })
+                    }
+                  >
+                    Save reporting address
+                  </button>
+                  <small>
+                    Packaged endpoint: <code>{detail.reporting_url}</code>
+                  </small>
+                  <small>
+                    Connection file on server:{" "}
+                    <code>{detail.directory}/reporting.json</code>. A scoped
+                    reporting key is included automatically; no training login
+                    is needed.
+                  </small>
+                  <details>
+                    <summary>
+                      Launch command, reporting hooks and remote files
+                    </summary>
+                    <pre className="training-log">
+                      python train.py --config config.json
+                    </pre>
+                    <p>
+                      Run from the extracted package folder. Edit config.json
+                      for that computer’s data paths, devices and Python
+                      environment. Custom scripts report loss with run.log();
+                      run.watch_optimizer(optimizer) can track learning rates
+                      automatically. NVIDIA GPU readings are collected when
+                      nvidia-smi is available.
+                    </p>
+                    <p>
+                      Remote checkpoint files and datasets stay on the training
+                      computer. Server snapshots preserve the received history
+                      and packaged code; copy remote weights separately to back
+                      them up.
+                    </p>
+                  </details>
+                  {detail.reporting && (
+                    <small>
+                      Last report received:{" "}
+                      {new Date(
+                        detail.reporting.last_received * 1000,
+                      ).toLocaleString()}
+                      . This is the last report time, not a process liveness
+                      check.
+                    </small>
+                  )}
+                </section>
+              )}
               {detail.run.execution === "monitor" && (
                 <details>
                   <summary>Run this package in your terminal</summary>
@@ -1874,27 +2337,33 @@ export function TrainingWorkspace({ project }: { project: Project }) {
                           )}
                         </small>
                       </div>
-                      <a href={artifactURL(String(event.payload.path))}>
-                        Weights & training state
-                      </a>
-                      <button
-                        onClick={() => {
-                          if (!stage) return;
-                          updateStage({
-                            config: {
-                              ...stage.config,
-                              start_mode: "weights",
-                              parent_run: runId,
-                              parent_checkpoint: String(event.payload.path),
-                            },
-                          });
-                          setNotice(
-                            "Checkpoint selected for this stage. Choose Resume if you want to restore optimizer state too.",
-                          );
-                        }}
-                      >
-                        Continue from here
-                      </button>
+                      {event.payload.remote ? (
+                        <small>File on training computer · not uploaded</small>
+                      ) : (
+                        <>
+                          <a href={artifactURL(String(event.payload.path))}>
+                            Weights & training state
+                          </a>
+                          <button
+                            onClick={() => {
+                              if (!stage) return;
+                              updateStage({
+                                config: {
+                                  ...stage.config,
+                                  start_mode: "weights",
+                                  parent_run: runId,
+                                  parent_checkpoint: String(event.payload.path),
+                                },
+                              });
+                              setNotice(
+                                "Checkpoint selected for this stage. Choose Resume if you want to restore optimizer state too.",
+                              );
+                            }}
+                          >
+                            Continue from here
+                          </button>
+                        </>
+                      )}
                     </article>
                   ))}
                   {!checkpoints.length && (

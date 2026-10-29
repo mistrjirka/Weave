@@ -9,7 +9,6 @@ import io
 import json
 import os
 from pathlib import Path
-import secrets
 import shutil
 import subprocess
 import sys
@@ -87,6 +86,11 @@ class Stage(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     config: TrainingConfig = Field(default_factory=TrainingConfig)
     script: str = Field(max_length=1024 * 1024)
+    script_path: str | None = None
+    config_path: str | None = None
+    script_revision: str | None = None
+    config_revision: str | None = None
+    workspace_warning: str | None = None
 
 
 class Plan(BaseModel):
@@ -212,7 +216,7 @@ def events(directory, *, limit=None, kind=None, after=None):
         if filters:
             query += " WHERE " + " AND ".join(filters)
         query += " ORDER BY seq " + ("ASC" if after is not None else "DESC")
-        if limit:
+        if limit is not None:
             query += " LIMIT ?"
             values.append(limit)
         rows = connection.execute(query, values).fetchall()
@@ -373,18 +377,14 @@ class TrainingService:
         self.root.mkdir(parents=True, exist_ok=True)
         (self.root / "plans").mkdir(exist_ok=True)
         (self.root / "runs").mkdir(exist_ok=True)
+        from .workspaces import WorkspaceStore
+
+        self.workspaces = WorkspaceStore(self.root)
         self.token_path = self.root / "operator.token"
-        if not self.token_path.exists():
-            fd = os.open(self.token_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-            with os.fdopen(fd, "w") as stream:
-                stream.write(secrets.token_urlsafe(32))
 
     @property
     def token(self):
-        return (
-            os.environ.get("WEAVE_TRAINING_TOKEN")
-            or self.token_path.read_text().strip()
-        )
+        return os.environ.get("WEAVE_TRAINING_TOKEN", "")
 
     def run_dir(self, run_id):
         directory = self.root / "runs" / valid_id(run_id)
@@ -408,6 +408,15 @@ class TrainingService:
         info = json.loads((directory / "run.json").read_text())
         if info.get("execution") == "monitor":
             records = [e for e in events(directory) if e.get("channel") == "training"]
+            last_start = max(
+                (
+                    index
+                    for index, event in enumerate(records)
+                    if event["kind"] == "started"
+                ),
+                default=0,
+            )
+            records = records[last_start:]
             if any(e["kind"] == "stopped" for e in records):
                 return {"state": "stopped"}
             finished = [e for e in records if e["kind"] == "finished"]
@@ -456,6 +465,7 @@ class TrainingService:
             shutil.copyfile(
                 HERE.parent.parent / "TRAINING.md", directory / "TRAINING.md"
             )
+            self.workspaces.freeze_extras(project["id"], stage.id, directory)
             files = {"model.py": (directory / "model.py").read_text()}
             metadata = model_metadata(files, project)
             if stage.config.strategy == "split" and not metadata["split_supported"]:
@@ -560,6 +570,8 @@ class TrainingService:
                 )
                 if (
                     not published
+                    or published["payload"].get("remote")
+                    or not checkpoint.is_file()
                     or file_hash(checkpoint) != published["payload"]["sha256"]
                 ):
                     raise ValueError(
@@ -582,6 +594,7 @@ class TrainingService:
                         and artifact.name != "events.jsonl"
                         and artifact.suffix in (".py", ".json", ".md", ".txt", ".log")
                         and not artifact.name.startswith("prepared-")
+                        and artifact.name != "reporting.json"
                     ):
                         shutil.copyfile(artifact, provenance / artifact.name)
                 atomic_json(provenance / "selected-checkpoint.json", published)
@@ -691,7 +704,7 @@ class TrainingService:
                 ),
                 None,
             )
-            if matching:
+            if matching and not matching["payload"].get("remote"):
                 build_snapshot(
                     directory, matching, request["include_data"], request["id"]
                 )
@@ -706,18 +719,29 @@ class TrainingService:
             "time": time.time(),
         }
         atomic_json(directory / "commands" / (identifier + ".json"), command)
-        if kind == "snapshot" and self.status(directory).get("state") in (
-            "completed",
-            "failed",
-            "stopped",
-            "killed",
-            "prepared",
+        remote = (directory / "reporting-status.json").exists() and json.loads(
+            (directory / "reporting-status.json").read_text()
+        ).get("remote")
+        if kind == "snapshot" and (
+            remote
+            or self.status(directory).get("state")
+            in (
+                "completed",
+                "failed",
+                "stopped",
+                "killed",
+                "prepared",
+            )
         ):
-            checkpoints = [e for e in events(directory) if e["kind"] == "checkpoint"]
+            checkpoints = [
+                e
+                for e in events(directory)
+                if e["kind"] == "checkpoint" and not e["payload"].get("remote")
+            ]
             artifact = build_snapshot(
                 directory,
                 checkpoints[-1] if checkpoints else None,
-                include_data,
+                include_data and not remote,
                 identifier,
             )
             return {**command, "artifact": artifact}
@@ -727,6 +751,10 @@ class TrainingService:
 def build_snapshot(
     directory, checkpoint_event=None, include_data=False, identifier=None
 ):
+    if checkpoint_event and checkpoint_event["payload"].get("remote"):
+        raise ValueError(
+            "Remote weights remain on the training computer; copy them to the server before backing them up"
+        )
     identifier = identifier or uuid.uuid4().hex
     relative = f"snapshots/snapshot-{identifier}.zip"
     target = directory / relative
@@ -802,7 +830,13 @@ def build_snapshot(
                             "packages/",
                         )
                     )
-                    or path.name in ("operator.token", "manifest.json")
+                    or path.name
+                    in (
+                        "operator.token",
+                        "manifest.json",
+                        "reporting.json",
+                        ".report-token",
+                    )
                     or path.name.endswith((".pending", ".partial"))
                     or "event-index.sqlite" in path.name
                     or "__pycache__" in path.parts

@@ -1,11 +1,22 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, type APIRequestContext } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
-import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
 
-const token = () =>
-  process.env.WEAVE_TRAINING_TOKEN ??
-  readFileSync("data/training/operator.token", "utf8").trim();
+async function unlockIfConfigured(request: APIRequestContext) {
+  const capabilities = await (
+    await request.get("/api/training/capabilities")
+  ).json();
+  if (capabilities.auth_required) {
+    if (!process.env.WEAVE_TRAINING_TOKEN)
+      throw new Error(
+        "Set WEAVE_TRAINING_TOKEN for tests against an explicitly token-protected server",
+      );
+    await request.post("/api/training/session", {
+      data: { token: process.env.WEAVE_TRAINING_TOKEN },
+    });
+  }
+}
 const project = (id: string) => ({
   version: 1,
   id,
@@ -71,9 +82,7 @@ test("training stages, real run, charts, snapshots, and reload", async ({
 }) => {
   test.setTimeout(120000);
   const id = `project-training-${Date.now()}`;
-  await context.request.post("/api/training/session", {
-    data: { token: token() },
-  });
+  await unlockIfConfigured(context.request);
   await context.request.put(`/api/projects/${id}`, { data: project(id) });
   const dataset = resolve("data", `${id}.jsonl`);
   writeFileSync(
@@ -93,6 +102,9 @@ test("training stages, real run, charts, snapshots, and reload", async ({
     await page
       .getByRole("textbox", { name: "Stage name", exact: true })
       .fill("Pretraining acceptance");
+    await page
+      .getByRole("button", { name: "Preset settings", exact: true })
+      .click();
     await page
       .getByRole("textbox", { name: "Training dataset path", exact: false })
       .fill(dataset);
@@ -224,9 +236,7 @@ test("training workspace fits black theme and phone", async ({
   page,
   context,
 }) => {
-  await context.request.post("/api/training/session", {
-    data: { token: token() },
-  });
+  await unlockIfConfigured(context.request);
   const id = `project-training-responsive-${Date.now()}`;
   await context.request.put(`/api/projects/${id}`, { data: project(id) });
   try {
@@ -234,6 +244,12 @@ test("training workspace fits black theme and phone", async ({
     await page
       .getByRole("button", { name: "Create training stage", exact: true })
       .click();
+    await expect(
+      page.getByRole("textbox", {
+        name: "Training Python script",
+        exact: true,
+      }),
+    ).toBeVisible();
     await page
       .getByRole("combobox", { name: "Color theme", exact: true })
       .selectOption("black");
@@ -267,6 +283,200 @@ test("training workspace fits black theme and phone", async ({
       }),
     ).toBeVisible();
     await page.screenshot({ path: "data/training-phone.png", fullPage: true });
+  } finally {
+    await context.request.delete(`/api/projects/${id}`);
+  }
+});
+
+test("real server scripts sync with SSH edits and use a highlighted Python editor", async ({
+  page,
+  context,
+}) => {
+  test.setTimeout(90000);
+  await unlockIfConfigured(context.request);
+  const id = `project-training-files-${Date.now()}`;
+  await context.request.put(`/api/projects/${id}`, { data: project(id) });
+  try {
+    await page.goto(`/?model=${id}&view=training`);
+    await page
+      .getByRole("button", { name: "Create training stage", exact: true })
+      .click();
+    const editor = page.getByRole("textbox", {
+      name: "Training Python script",
+      exact: true,
+    });
+    await expect(editor).toBeVisible();
+    await expect(page.locator(".training-server-files")).toContainText(
+      "server paths",
+    );
+    await expect(
+      page
+        .locator(".training-server-path")
+        .filter({ has: page.getByText("Python script", { exact: true }) })
+        .locator("code"),
+    ).toContainText("/train.py");
+    const path = (
+      await page
+        .locator(".training-server-path")
+        .filter({ has: page.getByText("Python script", { exact: true }) })
+        .locator("code")
+        .innerText()
+    ).trim();
+    expect(existsSync(path)).toBeTruthy();
+    await expect(page.locator(".cm-gutters")).toBeVisible();
+    expect(await page.locator(".cm-line span").count()).toBeGreaterThan(0);
+    await expect(page.locator(".training-python-environment")).toContainText(
+      /Python \d+\.\d+/,
+      { timeout: 35000 },
+    );
+    await page.screenshot({
+      path: "data/training-script-editor.png",
+      fullPage: true,
+    });
+    await editor.fill("print('browser draft')\n");
+    // Old browser drafts predate on-disk workspace paths. Keep their content.
+    await page.evaluate((projectId) => {
+      const key = `weave:training:${projectId}`;
+      const draft = JSON.parse(localStorage.getItem(key) ?? "{}");
+      for (const item of draft.stages ?? []) {
+        delete item.script_path;
+        delete item.config_path;
+      }
+      localStorage.setItem(key, JSON.stringify(draft));
+    }, id);
+    await page.reload();
+    await expect(editor).toContainText("browser draft");
+    await expect(
+      page.getByRole("button", { name: "Reload server files", exact: true }),
+    ).toBeEnabled();
+    await expect(page.locator(".training-server-files")).toContainText(
+      "not saved",
+    );
+    writeFileSync(path, "print('SSH edit')\n");
+    await expect(page.locator(".training-server-files")).toContainText(
+      "Files changed on the server",
+      { timeout: 12000 },
+    );
+    await page.getByRole("button", { name: "Save file", exact: true }).click();
+    await expect(
+      page.locator(".training-workspace > [role=alert]"),
+    ).toContainText("changed on the server");
+    expect(readFileSync(path, "utf8")).toBe("print('SSH edit')\n");
+    await page
+      .getByRole("button", { name: "Reload server files", exact: true })
+      .click();
+    await expect(editor).toContainText("SSH edit");
+    await editor.fill("print('saved through browser')\n");
+    await editor.press("Control+s");
+    await expect
+      .poll(() => readFileSync(path, "utf8"))
+      .toBe("print('saved through browser')\n");
+    writeFileSync(path, "print('another SSH edit')\n");
+    await expect(editor).toContainText("another SSH edit", { timeout: 12000 });
+    await page
+      .getByRole("combobox", { name: "Insert reporting hook", exact: true })
+      .selectOption("Log scalar metrics");
+    await expect(editor).toContainText("run.log");
+    await editor.press("Control+s");
+    await expect.poll(() => readFileSync(path, "utf8")).toContain("run.log");
+    const configPath = (
+      await page
+        .locator(".training-server-path")
+        .filter({ has: page.getByText("Preset values", { exact: true }) })
+        .locator("code")
+        .innerText()
+    ).trim();
+    const config = JSON.parse(readFileSync(configPath, "utf8"));
+    config.learning_rate = 0.0123;
+    writeFileSync(configPath, JSON.stringify(config));
+    await page
+      .getByRole("button", { name: "Preset settings", exact: true })
+      .click();
+    await page
+      .getByText("Optimizer, schedule, and evaluation", { exact: true })
+      .click();
+    await expect(
+      page.getByRole("spinbutton", { name: "Learning rate", exact: true }),
+    ).toHaveValue("0.0123", { timeout: 12000 });
+  } finally {
+    await context.request.delete(`/api/projects/${id}`);
+  }
+});
+
+test("independent training has a localhost reporting address and an editable connection file", async ({
+  page,
+  context,
+}) => {
+  const id = `project-training-report-${Date.now()}`;
+  await unlockIfConfigured(context.request);
+  await context.request.put(`/api/projects/${id}`, { data: project(id) });
+  try {
+    await page.goto(`/?model=${id}&view=training`);
+    await page
+      .getByRole("button", { name: "Create training stage", exact: true })
+      .click();
+    await page
+      .getByRole("button", { name: "Preset settings", exact: true })
+      .click();
+    await page
+      .getByRole("combobox", { name: "Training recipe" })
+      .selectOption("custom");
+    await page
+      .getByRole("combobox", { name: "Run on" })
+      .selectOption("monitor");
+    await page
+      .getByRole("button", { name: "Prepare training package", exact: true })
+      .click();
+    const reporting = page.getByRole("region", {
+      name: "Independent training reporting",
+    });
+    await expect(reporting).toBeVisible();
+    await expect(
+      reporting.getByRole("textbox", { name: "Reporting server URL" }),
+    ).toHaveValue("http://localhost:8173");
+    await expect(reporting).toContainText("/api/training/reports/run-");
+    await reporting
+      .getByRole("textbox", { name: "Reporting server URL" })
+      .fill("http://10.8.0.8:8173");
+    await reporting
+      .getByRole("button", { name: "Save reporting address", exact: true })
+      .click();
+    await expect(reporting).toContainText(
+      "http://10.8.0.8:8173/api/training/reports/",
+    );
+    const runId = new URL(page.url()).searchParams.get("run");
+    const detail = await (
+      await context.request.get(`/api/training/runs/${runId}`)
+    ).json();
+    const connection = JSON.parse(
+      readFileSync(`${detail.directory}/reporting.json`, "utf8"),
+    );
+    expect(connection.url).toBe(
+      `http://10.8.0.8:8173/api/training/reports/${runId}`,
+    );
+    expect(connection.token.length).toBeGreaterThan(20);
+    await page.reload();
+    await expect(
+      page.getByRole("region", { name: "Independent training reporting" }),
+    ).toContainText(connection.url);
+    const audit = await new AxeBuilder({ page })
+      .include(".training-workspace")
+      .withTags(["wcag2a", "wcag2aa", "wcag21aa"])
+      .analyze();
+    expect(
+      audit.violations.map((item) => ({
+        id: item.id,
+        nodes: item.nodes.map((node) => ({
+          html: node.html,
+          summary: node.failureSummary,
+        })),
+      })),
+    ).toEqual([]);
+    await reporting.scrollIntoViewIfNeeded();
+    await page.screenshot({
+      path: "data/training-independent-reporting.png",
+      fullPage: true,
+    });
   } finally {
     await context.request.delete(`/api/projects/${id}`);
   }

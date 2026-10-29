@@ -41,6 +41,11 @@ export const stageSchema = z.object({
   name: z.string(),
   config: trainingConfigSchema,
   script: z.string(),
+  script_path: z.string().nullable().optional(),
+  config_path: z.string().nullable().optional(),
+  script_revision: z.string().nullable().optional(),
+  config_revision: z.string().nullable().optional(),
+  workspace_warning: z.string().nullable().optional(),
 });
 export type TrainingStage = z.infer<typeof stageSchema>;
 export const planSchema = z.object({
@@ -101,8 +106,17 @@ export const capabilitySchema = z.object({
   enabled: z.boolean(),
   authenticated: z.boolean(),
   python: z.string(),
-  token_file: z.string(),
+  token_file: z.string().nullable(),
+  auth_required: z.boolean().default(false),
   remote_launch: z.boolean(),
+});
+export const pythonEnvironmentSchema = z.object({
+  executable: z.string(),
+  python_version: z.string(),
+  torch_version: z.string().nullable(),
+  cuda_version: z.string().nullable(),
+  cuda_available: z.boolean(),
+  device_count: z.number(),
 });
 export const templateSchema = z.object({
   config: trainingConfigSchema,
@@ -129,6 +143,11 @@ export const detailSchema = z.object({
       process_rss_bytes: z.number().optional(),
     }),
   ),
+  reporting: z
+    .object({ remote: z.boolean(), last_received: z.number() })
+    .nullable()
+    .optional(),
+  reporting_url: z.string().nullable().optional(),
   logs: z.string(),
   evaluation_logs: z.string(),
   diagnostics: z.array(z.string()),

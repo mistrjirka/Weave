@@ -35,7 +35,9 @@ from .service import (
     import_snapshot,
     HERE,
 )
-from .weave_training import atomic_json
+from .workspaces import WorkspaceConflict
+from .environment import inspect_python
+from .reporting import ReportStore, ReportBatch
 from ..compiler import compile_project
 
 
@@ -51,6 +53,7 @@ class Command(BaseModel):
 def router(data):
     service = TrainingService(Path(data) / "training", Path(data) / "tokenizers")
     api = APIRouter(prefix="/api/training")
+    reports = ReportStore()
 
     def same_origin(request):
         origin = request.headers.get("origin")
@@ -59,6 +62,8 @@ def router(data):
 
     def authenticated(request: Request):
         same_origin(request)
+        if not service.token:
+            return
         credential = request.cookies.get("weave_training") or request.headers.get(
             "x-weave-training-token", ""
         )
@@ -84,16 +89,18 @@ def router(data):
         credential = request.cookies.get("weave_training", "")
         return {
             "enabled": os.environ.get("WEAVE_TRAINING_ENABLED") == "1",
-            "authenticated": hmac.compare_digest(credential, service.token),
+            "authenticated": not service.token
+            or hmac.compare_digest(credential, service.token),
+            "auth_required": bool(service.token),
             "python": os.environ.get("WEAVE_TRAINING_PYTHON", os.sys.executable),
-            "token_file": str(service.token_path),
+            "token_file": None,
             "remote_launch": False,
         }
 
     @api.post("/session")
     def login(body: Login, request: Request, response: Response):
         same_origin(request)
-        if not hmac.compare_digest(body.token, service.token):
+        if service.token and not hmac.compare_digest(body.token, service.token):
             raise HTTPException(401, "Invalid training access code")
         response.set_cookie(
             "weave_training",
@@ -172,12 +179,10 @@ def router(data):
 
     @api.get("/plans/{project_id}", dependencies=[Depends(authenticated)])
     def get_plan(project_id: str):
-        path = service.root / "plans" / (safe_id(project_id) + ".json")
-        return (
-            json.loads(path.read_text())
-            if path.exists()
-            else {"version": 1, "project_id": project_id, "stages": []}
-        )
+        try:
+            return service.workspaces.load_plan(safe_id(project_id))
+        except ValueError as exc:
+            raise HTTPException(422, str(exc))
 
     @api.put("/plans/{project_id}", dependencies=[Depends(authenticated)])
     def put_plan(project_id: str, plan: Plan):
@@ -185,17 +190,69 @@ def router(data):
             raise HTTPException(422, "Training plan identity/version mismatch")
         if len({stage.id for stage in plan.stages}) != len(plan.stages):
             raise HTTPException(422, "Stage IDs must be unique")
-        atomic_json(
-            service.root / "plans" / (safe_id(project_id) + ".json"), plan.model_dump()
-        )
-        return plan
+        try:
+            return service.workspaces.save_plan(plan)
+        except WorkspaceConflict as exc:
+            raise HTTPException(409, str(exc))
+        except ValueError as exc:
+            raise HTTPException(422, str(exc))
+
+    @api.get("/environment", dependencies=[Depends(authenticated)])
+    def environment(python: str):
+        if (
+            os.environ.get("WEAVE_TRAINING_ENABLED") != "1"
+            and python != os.sys.executable
+        ):
+            raise HTTPException(
+                403,
+                "Enable local execution before inspecting another Python environment",
+            )
+        try:
+            return inspect_python(python)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc))
+
+    @api.get(
+        "/workspaces/{project_id}/stages/{stage_id}",
+        dependencies=[Depends(authenticated)],
+    )
+    def get_stage_files(project_id: str, stage_id: str):
+        try:
+            return service.workspaces.get_stage(safe_id(project_id), safe_id(stage_id))
+        except FileNotFoundError as exc:
+            raise HTTPException(404, str(exc))
+        except ValueError as exc:
+            raise HTTPException(422, str(exc))
+
+    @api.put(
+        "/workspaces/{project_id}/stages/{stage_id}",
+        dependencies=[Depends(authenticated)],
+    )
+    def save_stage_files(project_id: str, stage_id: str, body: Launch):
+        if body.project.get("id") != project_id or body.stage.id != stage_id:
+            raise HTTPException(
+                422, "Stage and project identities must match their server paths"
+            )
+        try:
+            saved = service.workspaces.save_stage(project_id, body.stage)
+            try:
+                service.workspaces.prepare_model(
+                    body.project, saved, service.tokenizer_root
+                )
+            except ValueError:
+                saved.workspace_warning = "Script saved. Resolve architecture errors, then save again to generate model.py."
+            return saved
+        except WorkspaceConflict as exc:
+            raise HTTPException(409, str(exc))
+        except ValueError as exc:
+            raise HTTPException(422, str(exc))
 
     @api.get("/runs", dependencies=[Depends(authenticated)])
     def get_runs(project_id: str):
         return service.list_runs(project_id)
 
     @api.post("/runs", dependencies=[Depends(authenticated)])
-    def launch(body: Launch):
+    def launch(body: Launch, request: Request):
         if (
             body.stage.config.execution == "local"
             and os.environ.get("WEAVE_TRAINING_ENABLED") != "1"
@@ -205,8 +262,71 @@ def router(data):
                 "Local execution is disabled. Start the server with WEAVE_TRAINING_ENABLED=1.",
             )
         try:
-            return service.launch(body)
+            try:
+                disk_stage = service.workspaces.get_stage(
+                    body.project["id"], body.stage.id
+                )
+                if disk_stage.workspace_warning:
+                    raise ValueError(disk_stage.workspace_warning)
+            except FileNotFoundError:
+                pass
+            body.stage = service.workspaces.save_stage(body.project["id"], body.stage)
+            if body.stage.workspace_warning:
+                raise ValueError(body.stage.workspace_warning)
+            result = service.launch(body)
+            if body.stage.config.execution == "monitor":
+                reports.connection(
+                    service.run_dir(result["id"]),
+                    f"http://localhost:{request.url.port or 8173}",
+                )
+            return result
+        except WorkspaceConflict as exc:
+            raise HTTPException(409, str(exc))
         except (ValueError, FileNotFoundError, SyntaxError) as exc:
+            raise HTTPException(422, str(exc))
+
+    @api.post("/runs/{run_id}/reporting", dependencies=[Depends(authenticated)])
+    def reporting_connection(run_id: str, request: Request, body: dict):
+        directory = run_directory(run_id)
+        if json.loads((directory / "run.json").read_text())["execution"] != "monitor":
+            raise HTTPException(
+                422,
+                "Prepare a terminal / external run to connect an independent script",
+            )
+        base_url = (
+            body.get("base_url") or f"http://localhost:{request.url.port or 8173}"
+        )
+        parsed = urlsplit(base_url)
+        if (
+            parsed.scheme not in ("http", "https")
+            or not parsed.netloc
+            or parsed.username
+            or parsed.password
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise HTTPException(422, "Use an HTTP or HTTPS reporting server URL")
+        return reports.connection(directory, base_url)
+
+    @api.post("/reports/{run_id}")
+    async def ingest_reports(run_id: str, request: Request):
+        # Scoped key permits reporting only, never execution or project editing.
+        content = bytearray()
+        async for chunk in request.stream():
+            content.extend(chunk)
+            if len(content) > 2 * 1024 * 1024:
+                raise HTTPException(413, "Report batch exceeds 2 MB")
+        try:
+            batch = ReportBatch.model_validate_json(content)
+            return await asyncio.to_thread(
+                reports.ingest,
+                run_directory(run_id),
+                request.headers.get("x-weave-report-token", ""),
+                batch,
+            )
+        except PermissionError as exc:
+            raise HTTPException(401, str(exc))
+        except ValueError as exc:
             raise HTTPException(422, str(exc))
 
     @api.get("/runs/{run_id}", dependencies=[Depends(authenticated)])
@@ -246,6 +366,16 @@ def router(data):
                 hw.append(json.loads(line))
             except ValueError:
                 continue
+        reporting_path = directory / "reporting-status.json"
+        reporting = (
+            json.loads(reporting_path.read_text()) if reporting_path.exists() else None
+        )
+        if reporting and reporting.get("remote"):
+            # Render only readings reported by the training computer.
+            hw = [event["payload"] for event in records if event["kind"] == "hardware"]
+            diagnostics.append(
+                "Independent training computer: checkpoint files stay there. Server snapshots contain the report history, not remote weights or datasets."
+            )
         output = directory / "output.log"
 
         def tail(path, limit=65536):
@@ -260,7 +390,18 @@ def router(data):
             "status": status,
             "events": records[-10000:],
             "hardware": hw,
-            "logs": tail(output),
+            "logs": tail(output)
+            + "\n".join(
+                str(event["payload"].get("text", ""))
+                for event in records
+                if event["kind"] == "console"
+            ),
+            "reporting": reporting,
+            "reporting_url": (
+                json.loads((directory / "reporting.json").read_text())["url"]
+                if (directory / "reporting.json").exists()
+                else None
+            ),
             "evaluation_logs": tail(directory / "evaluation.log"),
             "diagnostics": diagnostics,
             "snapshots": snapshots,
@@ -347,7 +488,7 @@ def router(data):
                 if (
                     path.is_file()
                     and path.suffix in (".py", ".json", ".txt", ".md")
-                    and not path.name.startswith("prepared-")
+                    and not path.name.startswith(("prepared-", "."))
                 ):
                     if path.name == "config.json":
                         config = json.loads(path.read_text())

@@ -10,11 +10,33 @@ WEAVE_TRAINING_PYTHON=/absolute/path/to/cuda-environment/bin/python \
 ./scripts/start.sh
 ```
 
-The web application remains on `0.0.0.0:8173`. Unlock Training with the operator code in `data/training/operator.token`, or set `WEAVE_TRAINING_TOKEN` on the server. The browser receives an HttpOnly, same-site session cookie. Training APIs reject cross-origin browser requests. Keep this code private: editable scripts intentionally execute with the server user's permissions; this is a trusted local workbench, not a sandbox for untrusted Python.
+The web application remains on `0.0.0.0:8173`. Training opens without a token by default. Operators can opt into authentication by setting `WEAVE_TRAINING_TOKEN`; existing generated `operator.token` files are no longer used as an implicit access gate. When optional authentication is enabled, the browser uses an HttpOnly, same-site session cookie. Training APIs reject cross-origin browser requests. Editable scripts run with the server user's permissions; this is a trusted local workbench.
+
+## Editable Python files and SSH / VS Code
+
+Each stage has a stable workspace on the **Weave server**:
+
+```text
+data/projects/<project-id>/project.json
+data/projects/<project-id>/stages/<stage-id>/model.py
+data/projects/<project-id>/stages/<stage-id>/train.py
+data/projects/<project-id>/stages/<stage-id>/config.json
+```
+
+The Training tab shows the absolute paths and provides Copy path buttons. Open those paths in an SSH-connected VS Code window or in a terminal on the server. They are not browser downloads or paths on your laptop. `model.py`, tokenizer assets and `weave_training.py` are generated in the same directory when you save the stage file. Generated model/support files follow the graph; put your own helper code in separate Python files.
+
+The default view is the Python script, with CodeMirror syntax highlighting, line numbers, folding, bracket matching, undo, search, and Ctrl/Cmd+S to **Save file**. Optional **Preset settings** write `config.json`; custom scripts decide which settings to consume. The reporting-hook menu inserts editable Python snippets at the cursor. Fresh templates create a new stage instead of overwriting your script.
+
+The selected interpreter's actual Python, PyTorch and CUDA versions are detected and displayed. The executable path is a path on the server. Use these versions when choosing syntax and APIs; scripts do not run in the browser's JavaScript environment.
+
+Browser saves write the real files atomically. Clean browser views poll for SSH edits and reload them. If a server file changes while the browser has an unsaved draft, the UI reports a conflict and stale saves return HTTP 409. Use **Reload server files**, or duplicate the stage to preserve your draft. Scripts remain separately recoverable in browser draft storage. Legacy inline-script stages migrate to files on first load without replacing an existing server file.
+
+Starting training freezes a separate run directory. Subsequent SSH/browser edits to stage files do not change active or historical runs. Extra Python/config helper files in the stage workspace are copied into the frozen run, while graph-owned files are freshly exported from the graph.
+
 
 Install the application's requirements in its web environment. Install PyTorch, Transformers, sentencepiece, jsonschema and optionally pyarrow in the selected training interpreter. The interpreter can differ from the API server's interpreter. CUDA wheels must support the actual GPU architectures. This host's V100 and 2080 Ti were tested with the isolated `data/training-env` environment, PyTorch 2.6.0 + CUDA 12.6. GPU numbering follows `CUDA_DEVICE_ORDER=PCI_BUS_ID`.
 
-A run supervisor is independent of browser connections and API request lifetime. Browser closure and API restarts do not stop a launched job. **Stop safely** requests a checkpoint at an optimizer boundary. **Force stop** terminates the owned process group and cannot save unfinished work. Terminal mode prepares a package and displays a command pointing at its shared run directory; it does not launch a remote worker. Downloaded packages can run independently, but live monitoring requires their reports to be written into the host's run directory.
+A run supervisor is independent of browser connections and API request lifetime. Browser closure and API restarts do not stop a launched job. **Stop safely** requests a checkpoint at an optimizer boundary. **Force stop** terminates the owned process group and cannot save unfinished work. Terminal mode prepares a package and displays a command pointing at its shared run directory; it does not launch a remote worker. Downloaded packages report independently over HTTP using their included reporting.json; terminal jobs using the original shared server run directory continue to write directly to it.
 
 ## Stages and editable recipes
 
@@ -39,9 +61,42 @@ Data can be uploaded (512 MB limit) or referenced by a host path. TXT, JSONL, JS
 
 The built-in recipes support FP32, CUDA FP16 with a gradient scaler, and supported BF16 hardware. Native BF16 is checked on selected GPUs. Split placement currently requires FP32. Capability/runtime errors appear in Logs. Existing loop/shared-weight semantics are retained.
 
+## Independent training computers
+
+Choose **Terminal · prepare package and monitor**, then download **Training package**. Each package includes the generated network, tokenizer assets, train.py, config.json, the portable reporting helper and reporting.json. The visible reporting address defaults to `http://localhost:8173`. This works on the same computer or through an SSH tunnel. For another computer, set the server’s reachable URL in Training, save it, and download the package again. Localhost always refers to the training computer, not the browser computer.
+
+Extract it, edit config.json for that computer’s dataset paths and devices, install its Python dependencies, then run:
+
+```bash
+python train.py --config config.json
+```
+
+The helper detects reporting.json in the working directory, or use `WEAVE_REPORT_CONFIG=/path/to/reporting.json`. A scoped reporting key is generated automatically and included in the file; it grants event reporting and cooperative command polling for that run only. It does not grant launch/project access. Do not publish that connection file. No operator access token is required by default.
+
+HTTP delivery runs in a background thread. Metrics, progress, generated examples, explicit console events, warnings, checkpoint metadata and optional NVIDIA device readings appear in Training. Events remain durable in the training computer’s run directory and are retried; the server deduplicates event IDs. If the script finishes during an outage, resend the local outbox after the server returns:
+
+```bash
+python weave_training.py --sync weave-run --connection reporting.json
+# Built-in templates use the current directory instead of weave-run:
+python weave_training.py --sync . --connection reporting.json
+```
+
+The UI shows the last report time; it does not claim that an interrupted connection means the process stopped. Remote checkpoint bytes and datasets are **not uploaded**. Server snapshots preserve reports and the originally packaged code, without claiming resumable remote weights. Remote provenance events record script/model/config and dataset hashes; modified remote files must be backed up on that computer. Only explicit `run.console(text)` output is forwarded; arbitrary stdout is not intercepted. Commands arrive on a successful report exchange and are acted on only when the script polls and implements them. Force-stop remains a terminal operation.
+
 ## Reporting API
 
-Exports include `weave_training.py`, a standard-library-only helper:
+Exports include `weave_training.py`, a standard-library-only helper. Built-in training templates already report loss and learning rate explicitly. For custom scripts, the optional `run.watch_optimizer(optimizer, every=10)` uses PyTorch’s public `register_step_post_hook` to report each parameter group’s applied learning rate. It removes its hook on context exit. Register once inside the Run context. Loss remains an explicit call: a custom objective may have several components, masked tokens and accumulation, so the optimizer hook cannot reliably infer the meaningful loss. This avoids patching PyTorch internals. See [PyTorch optimizer hook documentation](https://docs.pytorch.org/docs/stable/generated/torch.optim.Optimizer.register_step_post_hook.html).
+
+```python
+with Run() as run:
+    run.watch_optimizer(optimizer, every=10)
+    # In your training loop, after computing/backpropagating the loss:
+    run.log({"train/loss": loss.item()}, step=step)
+```
+
+The editor’s **Insert reporting hook** menu provides these snippets.
+
+Explicit reporting example:
 
 ```python
 from weave_training import Run
