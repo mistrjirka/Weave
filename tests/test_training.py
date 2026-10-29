@@ -377,3 +377,51 @@ def test_event_index_recovers_partial_and_malformed_records(tmp_path):
             '"id":"later","time":1,"kind":"metrics","step":2,"tokens":4,"payload":{"loss":0.5}}\n'
         )
     assert events(tmp_path, after=first[-1]["id"])[-1]["id"] == "later"
+
+
+def test_local_worker_enables_transformers_torch_after_tokenizer_only_api(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("USE_TORCH", "0")
+    monkeypatch.setenv("USE_TF", "0")
+    monkeypatch.setenv("USE_FLAX", "0")
+    service = TrainingService(tmp_path / "training", tmp_path / "tokenizers")
+    script = """from transformers.utils import is_torch_available
+import torch
+from weave_training import Run
+with Run() as run:
+    assert is_torch_available(), "Worker inherited the API's tokenizer-only setting"
+    parameter = torch.nn.Parameter(torch.tensor(2.0))
+    optimizer = torch.optim.SGD([parameter], lr=0.1)
+    loss = parameter.square()
+    loss.backward()
+    optimizer.step()
+    run.log({"train/loss": loss.item(), "parameter": parameter.item()}, step=1)
+"""
+    info = service.launch(
+        Launch(
+            project=tiny_project(),
+            stage=Stage(
+                id="torch-worker",
+                name="Transformers PyTorch discovery",
+                script=script,
+                config=TrainingConfig(
+                    recipe="custom", execution="local", python=sys.executable
+                ),
+            ),
+        )
+    )
+    directory = service.run_dir(info["id"])
+    deadline = time.monotonic() + 60
+    while time.monotonic() < deadline:
+        state = service.status(directory)
+        if state["state"] in ("completed", "failed"):
+            break
+        time.sleep(0.2)
+    assert state["state"] == "completed", (
+        state,
+        (directory / "output.log").read_text(),
+    )
+    record = next(event for event in events(directory) if event["kind"] == "metrics")
+    assert record["payload"]["parameter"] == pytest.approx(1.6)
+    assert "None of PyTorch" not in (directory / "output.log").read_text()

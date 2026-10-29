@@ -23,6 +23,9 @@ def main():
         WEAVE_RUN_DIR=str(directory),
         PYTHONUNBUFFERED="1",
         CUDA_DEVICE_ORDER="PCI_BUS_ID",
+        # The API disables Transformers model imports for tokenizer inspection.
+        # Training/evaluation workers must discover their selected PyTorch runtime.
+        USE_TORCH="1",
     )
     # Operator credentials must never enter an editable training script.
     environment.pop("WEAVE_TRAINING_TOKEN", None)
