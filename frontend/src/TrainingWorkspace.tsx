@@ -43,6 +43,8 @@ import {
 } from "./trainingApi";
 
 const reportingHooks: Record<string, string> = {
+  "Report loss with automatic step tracking":
+    "# Set up once: with Run(optimizer=optimizer, total_steps=total_steps) as run:\n# After optimizer.step() and scheduler.step(), if used:\nrun.log_loss(loss)\n",
   "Log scalar metrics":
     '# After an optimizer update; adjust names to your loop.\nrun.log({"train/loss": loss.item()}, step=step, tokens=tokens)\n',
   "Automatically track optimizer learning rates":

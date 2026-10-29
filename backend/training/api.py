@@ -119,7 +119,22 @@ def router(data):
 
     @api.get("/templates", dependencies=[Depends(authenticated)])
     def templates():
-        custom = '''"""Custom training: keep your own data, loss and optimizer logic."""\nfrom weave_training import Run\n\nwith Run() as run:\n    run.capabilities(metrics=True, samples=False, checkpoint=False, commands=True)\n    # Replace this demonstration with your own PyTorch training loop.\n    for step in range(10):\n        commands = run.poll_commands()\n        if any(command["kind"] == "stop" for command in commands):\n            break\n        run.log({"example/progress": step}, step=step)\n        run.progress(completed=step + 1, total=10)\n    run.warning("This starter reported events only. Add your model, loss, optimizer, and checkpoint save logic.")\n'''
+        custom = '''"""Custom training: keep your own data, loss and optimizer logic.
+
+For your real training loop, the minimal reporting integration is:
+    with Run(optimizer=optimizer, total_steps=total_steps) as run:
+        for batch in loader:
+            optimizer.zero_grad()
+            loss = compute_loss(model, batch)  # Your objective.
+            loss.backward()
+            optimizer.step()
+            run.log_loss(loss)
+
+Steps, learning rates and progress are automatic. This helper has no HTTP
+code for you to maintain and needs no pip-installed Weave package.
+The executable demonstration below only reports events; replace it with
+actual training code when your model/data/optimizer are ready.
+"""\nfrom weave_training import Run\n\nwith Run() as run:\n    run.capabilities(metrics=True, samples=False, checkpoint=False, commands=True)\n    # Replace this demonstration with your own PyTorch training loop.\n    for step in range(10):\n        commands = run.poll_commands()\n        if any(command["kind"] == "stop" for command in commands):\n            break\n        run.log({"example/progress": step}, step=step)\n        run.progress(completed=step + 1, total=10)\n    run.warning("This starter reported events only. Add your model, loss, optimizer, and checkpoint save logic.")\n'''
         return {
             "config": TrainingConfig().model_dump(),
             "scripts": {

@@ -228,3 +228,110 @@ def test_real_http_transport_delivers_finished_run_and_remote_gpu(
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_simple_reporting_preserves_training_and_tracks_real_updates(tmp_path):
+    import torch
+
+    def train(reporting):
+        parameter = torch.nn.Parameter(torch.tensor(2.0))
+        optimizer = torch.optim.SGD([parameter], lr=0.1)
+        scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.5)
+
+        # Simulate a resumed run and gradient accumulation: two backward calls
+        # per optimizer update, with the explicitly chosen aggregate objective.
+        def steps(run=None):
+            for update in range(3):
+                optimizer.zero_grad()
+                losses = []
+                for target in (0.0, 1.0):
+                    loss = (parameter - target).square()
+                    (loss / 2).backward()
+                    losses.append(loss.detach())
+                optimizer.step()
+                scheduler.step()
+                if run:
+                    run.log_loss(sum(losses) / 2, tokens=(update + 1) * 8)
+
+        if reporting:
+            with Run(
+                tmp_path / "simple", optimizer=optimizer, total_steps=8, start_step=5
+            ) as run:
+                steps(run)
+            assert not optimizer._optimizer_step_post_hooks
+        else:
+            steps()
+        return parameter.detach()
+
+    assert torch.equal(train(False), train(True))
+    records = events(tmp_path / "simple")
+    losses = [
+        event
+        for event in records
+        if event["kind"] == "metrics" and "train/loss" in event["payload"]
+    ]
+    assert [event["step"] for event in losses] == [6, 7, 8]
+    assert [event["tokens"] for event in losses] == [8, 16, 24]
+    assert losses[0]["payload"]["train/loss"] == pytest.approx(2.5)
+    rates = [
+        event["payload"]["lr/group_0"]
+        for event in records
+        if event["kind"] == "metrics" and "lr/group_0" in event["payload"]
+    ]
+    assert rates == pytest.approx([0.1, 0.05, 0.025])
+    progress = [event["payload"] for event in records if event["kind"] == "progress"]
+    assert [item["completed"] for item in progress] == [6, 7, 8]
+    assert all(item["total"] == 8 for item in progress)
+    assert not any(event["kind"] == "warning" for event in records)
+
+
+def test_simple_reporting_warns_when_loss_hook_is_forgotten(tmp_path):
+    import torch
+
+    parameter = torch.nn.Parameter(torch.tensor(2.0))
+    optimizer = torch.optim.SGD([parameter], lr=0.1)
+    with Run(tmp_path / "missing", optimizer=optimizer, total_steps=4) as run:
+        # Attaching the same optimizer twice must not double-count updates.
+        run.watch_optimizer(optimizer)
+        for _ in range(4):
+            optimizer.zero_grad()
+            parameter.square().backward()
+            optimizer.step()
+    records = events(tmp_path / "missing")
+    warnings = [event for event in records if event["kind"] == "warning"]
+    assert len(warnings) == 1
+    assert warnings[0]["payload"]["code"] == "missing-loss"
+    assert "run.log_loss(loss)" in warnings[0]["payload"]["message"]
+    assert max(event["step"] for event in records) == 4
+    assert records[-1]["payload"]["success"]
+    assert not optimizer._optimizer_step_post_hooks
+
+
+def test_simple_reporting_interval_first_final_and_early_exit(tmp_path):
+    import torch
+
+    parameter = torch.nn.Parameter(torch.tensor(2.0))
+    optimizer = torch.optim.SGD([parameter], lr=0.1)
+    with Run(
+        tmp_path / "interval", optimizer=optimizer, total_steps=3, log_every=10
+    ) as run:
+        for _ in range(3):
+            optimizer.zero_grad()
+            loss = parameter.square()
+            loss.backward()
+            optimizer.step()
+            run.log_loss(loss)
+    assert [
+        event["step"]
+        for event in events(tmp_path / "interval")
+        if event["kind"] == "metrics" and "train/loss" in event["payload"]
+    ] == [1, 3]
+    with Run(tmp_path / "short", optimizer=optimizer, total_steps=100, log_every=10):
+        optimizer.zero_grad()
+        parameter.square().backward()
+        optimizer.step()
+    assert any(
+        event["kind"] == "warning" and event["payload"]["code"] == "missing-loss"
+        for event in events(tmp_path / "short")
+    )
+    assert not optimizer._optimizer_step_post_hooks

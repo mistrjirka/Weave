@@ -1,5 +1,6 @@
 import { test, expect, type APIRequestContext } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
+import { detailSchema } from "../../frontend/src/trainingApi";
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
 
@@ -477,6 +478,81 @@ test("independent training has a localhost reporting address and an editable con
       path: "data/training-independent-reporting.png",
       fullPage: true,
     });
+  } finally {
+    await context.request.delete(`/api/projects/${id}`);
+  }
+});
+
+test("simple custom reporting infers steps, learning rates and progress", async ({
+  page,
+  context,
+}) => {
+  test.setTimeout(120000);
+  await unlockIfConfigured(context.request);
+  const id = `project-simple-reporting-${Date.now()}`;
+  await context.request.put(`/api/projects/${id}`, { data: project(id) });
+  try {
+    await page.goto(`/?model=${id}&view=training`);
+    await page
+      .getByRole("button", { name: "Create training stage", exact: true })
+      .click();
+    await page
+      .getByRole("button", { name: "Preset settings", exact: true })
+      .click();
+    await page
+      .getByRole("combobox", { name: "Training recipe" })
+      .selectOption("custom");
+    await page.getByRole("checkbox", { name: "CPU", exact: true }).check();
+    await page
+      .getByRole("button", { name: "Python script", exact: true })
+      .click();
+    const editor = page.getByRole("textbox", {
+      name: "Training Python script",
+      exact: true,
+    });
+    await expect(editor).toContainText(
+      "with Run(optimizer=optimizer, total_steps=total_steps)",
+    );
+    await editor.fill(`import torch
+from torch.nn import functional as F
+from model import Model
+from weave_training import Run
+
+torch.set_num_threads(1)
+model = Model()
+optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
+with Run(optimizer=optimizer, total_steps=2) as run:
+    for batch in [torch.tensor([[1, 2, 3, 4]])] * 2:
+        optimizer.zero_grad()
+        logits = model(batch)
+        loss = F.cross_entropy(logits[:, :-1].reshape(-1, 8), batch[:, 1:].reshape(-1))
+        loss.backward()
+        optimizer.step()
+        run.log_loss(loss)
+`);
+    await page.getByRole("button", { name: "Save file", exact: true }).click();
+    await page
+      .getByRole("button", { name: "Start training stage", exact: true })
+      .click();
+    await expect(
+      page.locator(".training-dashboard .training-section-heading").first(),
+    ).toContainText("completed", { timeout: 90000 });
+    const runId = new URL(page.url()).searchParams.get("run");
+    const detail = detailSchema.parse(
+      await (await context.request.get(`/api/training/runs/${runId}`)).json(),
+    );
+    const lossEvents = detail.events.filter(
+      (event) => event.kind === "metrics" && "train/loss" in event.payload,
+    );
+    const lrEvents = detail.events.filter(
+      (event) => event.kind === "metrics" && "lr/group_0" in event.payload,
+    );
+    const progress = detail.events.filter((event) => event.kind === "progress");
+    expect(lossEvents.map((event) => event.step)).toEqual([1, 2]);
+    expect(lrEvents).toHaveLength(2);
+    expect(progress.at(-1)?.payload).toMatchObject({ completed: 2, total: 2 });
+    expect(detail.events.some((event) => event.kind === "warning")).toBeFalsy();
+    await expect(page.locator(".training-chart")).toHaveCount(2);
   } finally {
     await context.request.delete(`/api/projects/${id}`);
   }

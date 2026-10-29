@@ -47,13 +47,37 @@ def file_hash(path):
 
 
 class Run:
-    def __init__(self, directory=None, *, rank=None):
+    def __init__(
+        self,
+        directory=None,
+        *,
+        rank=None,
+        optimizer=None,
+        total_steps=None,
+        start_step=0,
+        log_every=1,
+    ):
         self.directory = Path(
             directory or os.environ.get("WEAVE_RUN_DIR", "weave-run")
         ).resolve()
         self.rank = int(os.environ.get("RANK", "0")) if rank is None else rank
         self.directory.mkdir(parents=True, exist_ok=True)
-        self.step = 0
+        if (
+            start_step < 0
+            or log_every < 1
+            or (total_steps is not None and total_steps < start_step)
+        ):
+            raise ValueError(
+                "Use nonnegative start_step, log_every >= 1, and total_steps >= start_step"
+            )
+        self.step = int(start_step)
+        self.optimizer = optimizer
+        self.total_steps = total_steps
+        self.log_every = int(log_every)
+        self._optimizer_updates = 0
+        self._loss_reported = False
+        self._missing_loss_warned = False
+        self._optimizer_handles = {}
         self.tokens = 0
         self.commands_seen = set()
         self._stream = None
@@ -84,6 +108,15 @@ class Run:
                     },
                 )
         self.emit("started", {"protocol": PROTOCOL_VERSION, "pid": os.getpid()})
+        if self.optimizer is not None:
+            self.watch_optimizer(self.optimizer, every=self.log_every)
+            self.capabilities(
+                metrics=True,
+                samples=False,
+                checkpoint=False,
+                commands=False,
+                optimizer_tracking=True,
+            )
         config_path = Path(os.environ.get("WEAVE_REPORT_CONFIG", "reporting.json"))
         if (
             self.rank == 0
@@ -105,6 +138,12 @@ class Run:
                     ),
                 },
             )
+        if (
+            self.optimizer is not None
+            and self._optimizer_updates
+            and not self._loss_reported
+        ):
+            self._warn_missing_loss()
         self.emit("finished", {"success": exception is None})
         for handle in self._hooks:
             handle.remove()
@@ -150,7 +189,45 @@ class Run:
                 clean[str(key)] = number
             else:
                 self.warning(f"Nonfinite metric: {key}={number}", code="nonfinite")
+        if any("loss" in name.lower() for name in clean):
+            self._loss_reported = True
         self.emit("metrics", clean)
+
+    def log_loss(self, loss, *, tokens=None, metrics=None):
+        """Report the user's chosen scalar objective, using tracked optimizer steps.
+
+        Call after optimizer.step() (and scheduler.step(), if any). No HTTP or
+        tensor/backward patching lives in the user's training loop. Pass a reduced
+        loss for DDP; this helper never guesses cross-rank or token weighting.
+        """
+        if not self._optimizer_handles:
+            raise RuntimeError(
+                "Use Run(optimizer=optimizer) or run.watch_optimizer(optimizer) before log_loss()"
+            )
+        self._loss_reported = True
+        if tokens is not None:
+            self.tokens = int(tokens)
+        if self.rank != 0:
+            return
+        if (
+            self._optimizer_updates != 1
+            and self.step % self.log_every
+            and self.step != self.total_steps
+        ):
+            return
+        # Detach only the reporting value; retain the caller's original tensor.
+        value = loss.detach() if hasattr(loss, "detach") else loss
+        self.log(
+            {**(metrics or {}), "train/loss": value}, step=self.step, tokens=tokens
+        )
+
+    def _warn_missing_loss(self):
+        if not self._missing_loss_warned:
+            self._missing_loss_warned = True
+            self.warning(
+                "Optimizer updates were detected, but no loss has been reported. Add run.log_loss(loss) after the optimizer update, or report your reduced objective with run.log().",
+                code="missing-loss",
+            )
 
     def watch_optimizer(self, optimizer, *, every=1):
         """Read LR through PyTorch's public hook; does not patch optimizer code.
@@ -160,20 +237,40 @@ class Run:
         """
         if every < 1:
             raise ValueError("every must be at least 1")
-        updates = 0
+        if id(optimizer) in self._optimizer_handles:
+            return self._optimizer_handles[id(optimizer)]
+        updates = self.step
 
         def report(current, args, kwargs):
             nonlocal updates
             updates += 1
-            if updates % every == 0:
+            self._optimizer_updates += 1
+            self.step = updates
+            if (
+                self.optimizer is not None
+                and not self._loss_reported
+                and self._optimizer_updates > max(2, self.log_every)
+            ):
+                self._warn_missing_loss()
+            if updates % every == 0 or (
+                self.optimizer is not None
+                and (self._optimizer_updates == 1 or updates == self.total_steps)
+            ):
                 metrics = {
                     f"lr/group_{i}": group["lr"]
                     for i, group in enumerate(current.param_groups)
                 }
                 self.log(metrics, step=updates)
+                if self.total_steps is not None:
+                    self.progress(
+                        completed=updates,
+                        total=self.total_steps,
+                        unit="optimizer steps",
+                    )
 
         handle = optimizer.register_step_post_hook(report)
         self._hooks.append(handle)
+        self._optimizer_handles[id(optimizer)] = handle
         return handle
 
     def console(self, text):
@@ -248,7 +345,7 @@ def instrumentation_warnings(source):
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
     }
     expected = {
-        "log": "No explicit metric logging found.",
+        "log": "No loss or metric reporting found. Use run.log_loss(loss) with Run(optimizer=...), or run.log().",
         "sample": "No generated-sample reporting found.",
         "checkpoint": "No checkpoint reporting found.",
         "poll_commands": "No cooperative stop/snapshot polling found.",
@@ -256,7 +353,7 @@ def instrumentation_warnings(source):
     return [
         {"code": "missing-" + key, "message": message}
         for key, message in expected.items()
-        if key not in methods
+        if key not in methods and not (key == "log" and "log_loss" in methods)
     ]
 
 

@@ -85,16 +85,31 @@ The UI shows the last report time; it does not claim that an interrupted connect
 
 ## Reporting API
 
-Exports include `weave_training.py`, a standard-library-only helper. Built-in training templates already report loss and learning rate explicitly. For custom scripts, the optional `run.watch_optimizer(optimizer, every=10)` uses PyTorch’s public `register_step_post_hook` to report each parameter group’s applied learning rate. It removes its hook on context exit. Register once inside the Run context. Loss remains an explicit call: a custom objective may have several components, masked tokens and accumulation, so the optimizer hook cannot reliably infer the meaningful loss. This avoids patching PyTorch internals. See [PyTorch optimizer hook documentation](https://docs.pytorch.org/docs/stable/generated/torch.optim.Optimizer.register_step_post_hook.html).
+Exports include one local `weave_training.py` helper. There is **no pip-installed Weave package**, no `requests` dependency, and no HTTP code to put in your training loop. The helper uses the Python standard library, a background sender and a durable local event file. `reporting.json` provides the connection automatically. Built-in training templates already contain their metrics, samples, checkpoint and command integration.
+
+For a custom loop, the short integration is:
 
 ```python
-with Run() as run:
-    run.watch_optimizer(optimizer, every=10)
-    # In your training loop, after computing/backpropagating the loss:
-    run.log({"train/loss": loss.item()}, step=step)
+from weave_training import Run
+
+# Construct your own model, optimizer and data loader as usual.
+with Run(optimizer=optimizer, total_steps=total_steps) as run:
+    for batch in loader:
+        optimizer.zero_grad()
+        loss = compute_loss(model, batch)  # Your scalar training objective.
+        loss.backward()
+        optimizer.step()
+        # scheduler.step() goes here if used.
+        run.log_loss(loss)
 ```
 
-The editor’s **Insert reporting hook** menu provides these snippets.
+Step counts, each optimizer parameter group's applied learning rate, and progress are collected automatically through PyTorch's public `register_step_post_hook`. Hooks are removed on context exit. A scheduler's next learning rate is not confused with the rate applied to the update. Gradient accumulation counts optimizer updates, not backward calls. `total_steps` is a reporting target; your loop still controls when training stops. Use `start_step=checkpoint_step` when resuming, and `log_every=10` to reduce reporting frequency (the first and final updates are still reported). An attached optimizer that updates without any loss reporting produces a visible `missing-loss` warning; this is advisory and never aborts training.
+
+`run.log_loss(loss, tokens=total_tokens, metrics={"train/gradient_norm": norm})` can include additional values. Loss remains the one explicit per-update reporting call because only the script knows the correct objective, masks, weighting and accumulation. For DDP, pass the correctly reduced objective or keep the built-in template's explicit aggregate reporting. We do not patch Tensor.backward, optimizer.step, torch.save, or inspect arbitrary local variables. See [PyTorch optimizer hook documentation](https://docs.pytorch.org/docs/stable/generated/torch.optim.Optimizer.register_step_post_hook.html).
+
+GPU sampling (when available), reporting retries, lifecycle and error events are handled by the helper/supervisor. Custom generation, checkpoint contents and safe command handling depend on the script's algorithm; the built-in recipes already implement these. The editor's **Insert reporting hook** menu provides snippets, and static warnings plus the received-event dashboard help catch missing instrumentation.
+
+Existing scripts using `run.log(...)` or `run.watch_optimizer(optimizer, every=10)` continue to work.
 
 Explicit reporting example:
 
