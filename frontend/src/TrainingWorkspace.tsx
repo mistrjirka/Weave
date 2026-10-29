@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import type { Project } from "./types";
 import { TrainingChart } from "./TrainingChart";
+import { newId } from "./ui";
 import {
   capabilitySchema,
   detailSchema,
@@ -306,7 +307,7 @@ export function TrainingWorkspace({ project }: { project: Project }) {
   }
   function addStage(duplicate = false) {
     if (!templates) return;
-    const id = crypto.randomUUID();
+    const id = newId();
     const next: TrainingStage =
       duplicate && stage
         ? { ...structuredClone(stage), id, name: `${stage.name} copy` }
@@ -717,7 +718,7 @@ export function TrainingWorkspace({ project }: { project: Project }) {
                   <button
                     onClick={() => {
                       if (templates) {
-                        const id = crypto.randomUUID();
+                        const id = newId();
                         setPlan((current) => ({
                           ...current,
                           stages: [
@@ -1442,7 +1443,7 @@ export function TrainingWorkspace({ project }: { project: Project }) {
               </div>
               <button
                 onClick={() => {
-                  const id = crypto.randomUUID();
+                  const id = newId();
                   const checkpoint = checkpoints.at(-1);
                   const next: TrainingStage = {
                     id,

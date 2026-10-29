@@ -55,6 +55,16 @@ const project = (id: string) => ({
   },
 });
 
+// Plain LAN HTTP lacks randomUUID even though localhost exposes it.
+test.beforeEach(async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(Crypto.prototype, "randomUUID", {
+      value: undefined,
+      configurable: true,
+    });
+  });
+});
+
 test("training stages, real run, charts, snapshots, and reload", async ({
   page,
   context,
@@ -119,6 +129,23 @@ test("training stages, real run, charts, snapshots, and reload", async ({
       .click();
     await expect(page.locator(".training-stage")).toHaveCount(2);
     await page
+      .getByRole("button", { name: "Add training stage", exact: true })
+      .click();
+    await expect(page.locator(".training-stage")).toHaveCount(3);
+    await page
+      .getByRole("button", { name: "Delete stage", exact: true })
+      .click();
+    await page
+      .getByRole("button", { name: "Python script", exact: true })
+      .click();
+    await page
+      .getByRole("button", {
+        name: "Open fresh template as another stage",
+        exact: true,
+      })
+      .click();
+    await expect(page.locator(".training-stage")).toHaveCount(3);
+    await page
       .getByRole("button", { name: "Start training stage", exact: true })
       .click();
     await expect(
@@ -128,6 +155,10 @@ test("training stages, real run, charts, snapshots, and reload", async ({
       page.locator(".training-dashboard .training-section-heading").first(),
     ).toContainText("completed", { timeout: 60000 });
     await expect(page.locator(".training-chart")).toHaveCount(4);
+    await page
+      .getByRole("button", { name: "Create stage from this run", exact: true })
+      .click();
+    await expect(page.locator(".training-stage")).toHaveCount(4);
     await page.getByRole("button", { name: "Hardware", exact: true }).click();
     await expect(page.locator(".training-dashboard")).toContainText(
       "GPU readings are device-wide",
