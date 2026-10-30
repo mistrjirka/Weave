@@ -335,3 +335,117 @@ def test_simple_reporting_interval_first_final_and_early_exit(tmp_path):
         for event in events(tmp_path / "short")
     )
     assert not optimizer._optimizer_step_post_hooks
+
+
+def test_clean_training_package_runs_offline_from_another_directory(
+    tmp_path, monkeypatch
+):
+    import os
+    import subprocess
+    import sys
+    from backend.training.service import Stage
+
+    monkeypatch.delenv("WEAVE_TRAINING_TOKEN", raising=False)
+    app = FastAPI()
+    app.include_router(router(tmp_path))
+    data = tmp_path / "training-data.jsonl"
+    data.write_text(json.dumps({"input_ids": [1, 2, 3, 4]}) + "\n")
+    template = Path(__file__).parents[1] / "backend/training/template.py"
+    stage = Stage(
+        id="offline-package",
+        name="Offline package",
+        script=template.read_text(),
+        config=TrainingConfig(
+            execution="monitor",
+            dataset=str(data),
+            max_steps=1,
+            batch_size=1,
+            checkpoint_every=1,
+            cpu_threads=1,
+        ),
+    )
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/training/runs",
+            json={"project": tiny_project(), "stage": stage.model_dump()},
+        )
+        assert response.status_code == 200, response.text
+        run_id = response.json()["id"]
+        client.post(
+            f"/api/training/runs/{run_id}/reporting",
+            json={"base_url": "http://127.0.0.1:9"},
+        )
+        package = client.get(f"/api/training/runs/{run_id}/package")
+        assert package.status_code == 200
+    extracted = tmp_path / "downloaded-project"
+    extracted.mkdir()
+    with zipfile.ZipFile(io.BytesIO(package.content)) as archive:
+        assert set(name for name in archive.namelist() if "/" not in name) == {
+            "train.py",
+            "config.json",
+            "reporting.json",
+            "README.md",
+        }
+        assert "weave_support/model.py" in archive.namelist()
+        assert "weave_support/text_training.py" in archive.namelist()
+        assert "weave_support/requirements.txt" in archive.namelist()
+        assert len(archive.read("train.py").splitlines()) < 30
+        archive.extractall(extracted)
+    (extracted / "data.jsonl").write_bytes(data.read_bytes())
+    config = json.loads((extracted / "config.json").read_text())
+    config["dataset"] = "data.jsonl"
+    (extracted / "config.json").write_text(json.dumps(config))
+    environment = dict(os.environ)
+    environment.pop("WEAVE_RUN_DIR", None)
+    environment.pop("WEAVE_REPORT_CONFIG", None)
+    result = subprocess.run(
+        [sys.executable, str(extracted / "train.py")],
+        cwd=tmp_path,
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=90,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    outputs = list((extracted / "runs").glob("run-*"))
+    assert len(outputs) == 1
+    records = events(outputs[0])
+    assert not (extracted / "events.jsonl").exists()
+    assert not (extracted / "checkpoints").exists()
+    assert any(
+        event["kind"] == "metrics" and "train/loss" in event["payload"]
+        for event in records
+    )
+    assert any(event["kind"] == "checkpoint" for event in records)
+    assert records[-1]["kind"] == "finished"
+    assert (
+        json.loads((outputs[0] / "reporting-status.json").read_text())["connected"]
+        is False
+    )
+
+    # All torchrun workers must agree on one generated output directory.
+    config["strategy"] = "ddp"
+    (extracted / "config.json").write_text(json.dumps(config))
+    distributed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "torch.distributed.run",
+            "--standalone",
+            "--nproc_per_node=2",
+            str(extracted / "train.py"),
+        ],
+        cwd=tmp_path,
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert distributed.returncode == 0, distributed.stdout + distributed.stderr
+    outputs = list((extracted / "runs").glob("run-*"))
+    assert len(outputs) == 2  # One single-device run and one shared DDP run.
+    parallel = next(
+        path for path in outputs if (path / "consumed-rank-1.jsonl").exists()
+    )
+    assert (parallel / "consumed-rank-0.jsonl").is_file()
+    assert any(event["kind"] == "checkpoint" for event in events(parallel))

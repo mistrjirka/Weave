@@ -38,6 +38,8 @@ from .service import (
 from .workspaces import WorkspaceConflict
 from .environment import inspect_python
 from .reporting import ReportStore, ReportBatch
+from .layout import PACKAGE, normalize_script
+from ..paths import projects_directory
 from ..compiler import compile_project
 
 
@@ -95,6 +97,7 @@ def router(data):
             "python": os.environ.get("WEAVE_TRAINING_PYTHON", os.sys.executable),
             "token_file": None,
             "remote_launch": False,
+            "projects_directory": str(projects_directory()),
         }
 
     @api.post("/session")
@@ -140,7 +143,7 @@ actual training code when your model/data/optimizer are ready.
             "scripts": {
                 "causal": (HERE / "template.py").read_text(),
                 "sft": (HERE / "template.py").read_text(),
-                "custom": custom,
+                "custom": normalize_script(custom, "custom"),
             },
         }
 
@@ -255,7 +258,7 @@ actual training code when your model/data/optimizer are ready.
                     body.project, saved, service.tokenizer_root
                 )
             except ValueError:
-                saved.workspace_warning = "Script saved. Resolve architecture errors, then save again to generate model.py."
+                saved.workspace_warning = "Script saved. Resolve architecture errors, then save again to generate weave_support/model.py."
             return saved
         except WorkspaceConflict as exc:
             raise HTTPException(409, str(exc))
@@ -499,23 +502,37 @@ actual training code when your model/data/optimizer are ready.
         with zipfile.ZipFile(
             destination, "w", compression=zipfile.ZIP_DEFLATED, allowZip64=True
         ) as archive:
-            for path in directory.iterdir():
-                if (
-                    path.is_file()
-                    and path.suffix in (".py", ".json", ".txt", ".md")
-                    and not path.name.startswith(("prepared-", "."))
-                ):
-                    if path.name == "config.json":
-                        config = json.loads(path.read_text())
-                        if (directory / "starting-weights/parent.pt").is_file():
-                            config["checkpoint"] = "starting-weights/parent.pt"
-                        archive.writestr("config.json", json.dumps(config, indent=2))
-                    else:
-                        archive.write(path, path.name)
-            for folder in ("tokenizers", "licenses", "starting-weights"):
+            extras_path = directory / ".workspace-files.json"
+            editable = ["train.py", "config.json", "reporting.json"]
+            if extras_path.exists():
+                editable.extend(json.loads(extras_path.read_text()))
+            for name in editable:
+                path = inside(directory, name)
+                if not path.is_file() or path.is_symlink():
+                    continue
+                if name == "config.json":
+                    config = json.loads(path.read_text())
+                    if (directory / "starting-weights/parent.pt").is_file():
+                        config["checkpoint"] = "starting-weights/parent.pt"
+                    archive.writestr(name, json.dumps(config, indent=2))
+                else:
+                    archive.write(path, name)
+            for folder in (PACKAGE, "starting-weights"):
                 for path in (directory / folder).rglob("*"):
-                    if path.is_file():
+                    if (
+                        path.is_file()
+                        and not path.is_symlink()
+                        and "__pycache__" not in path.parts
+                        and "migrations" not in path.parts
+                    ):
                         archive.write(path, str(path.relative_to(directory)))
+            lock = directory / "requirements-lock.txt"
+            if lock.is_file():
+                archive.write(lock, PACKAGE + "/requirements-lock.txt")
+            archive.writestr(
+                "README.md",
+                "# Training project\n\nEdit train.py, config.json and your own helpers. weave_support/ contains generated network code, tokenizers, reporting and the standard trainer; it is refreshed by Weave.\n\nInstall dependencies in your chosen Python environment: pip install -r weave_support/requirements.txt (select a suitable PyTorch CUDA wheel for your GPU). Run python train.py --config config.json from this folder. reporting.json supplies the optional reporting connection.\n",
+            )
         return FileResponse(
             destination, filename=run_id + "-training.zip", media_type="application/zip"
         )

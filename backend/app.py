@@ -60,7 +60,9 @@ def save_project(project_id:str,project:dict):
     try:valid_id(project_id)
     except ValueError as exc:raise HTTPException(422,str(exc))
     project['id']=project_id
-    atomic_json(DATA/'projects'/project_id/'project.json', project)
+    from .training.workspaces import WorkspaceStore, WorkspaceConflict
+    try:atomic_json(WorkspaceStore(DATA/'training').project_directory(project_id)/'project.json', project)
+    except WorkspaceConflict as exc:raise HTTPException(409,str(exc))
     with db() as conn:conn.execute('INSERT INTO projects(id,name,document) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,document=excluded.document,updated=CURRENT_TIMESTAMP',(project_id,project.get('name','Untitled'),json.dumps(project)))
     return {'id':project_id,'saved':True}
 

@@ -13,6 +13,7 @@ python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 npm ci
 npm run build
+bash scripts/configure.sh --projects-dir ~/shared/weave-projects
 bash scripts/start.sh
 ```
 
@@ -23,6 +24,8 @@ SSH forwarding is also supported:
 ```bash
 ssh -L 8173:127.0.0.1:8173 USER@SERVER
 ```
+
+Editable projects default to `~/shared/weave-projects`, separately from the installation and internal data. Set this during installation with `scripts/configure.sh --projects-dir /your/projects`, or override it with `WEAVE_PROJECTS_DIR`. The saved local setting is `.weave-config.json`; restart Weave after changing it. Existing project folders migrate from the old data directory without overwriting collisions.
 
 Then open the localhost URL in that computer's browser. `WEAVE_HOST`, `WEAVE_PORT`, and `WEAVE_DATA` configure listening and storage. Set `WEAVE_HOST=127.0.0.1` for localhost-only access. This is a single-user service without built-in authentication.
 
@@ -217,4 +220,4 @@ The block library also includes LayerNorm, GELU, ReLU, dropout, learned position
 
 ## Training workspace
 
-The **Training** tab provides editable multi-stage PyTorch recipes, local launch or terminal monitoring, live metrics, generated examples, GPU monitoring, checkpoint lineage and verified snapshots. Single-device, DDP, supported split-model placement and separate evaluation-GPU strategies are available. Training execution is opt-in; access tokens are optional. Projects have on-disk folders under `data/projects/`, with saved graphs, generated network code and editable training scripts. Training displays SSH-friendly paths, the actual Python/PyTorch versions and a syntax-highlighted editor. Independent scripts can report through the HTTP API using the included connection file; localhost is the default. See [training setup, recipes, limitations, reporting API and backup/restore](TRAINING.md).
+The **Training** tab provides editable multi-stage PyTorch recipes, local launch or terminal monitoring, live metrics, generated examples, GPU monitoring, checkpoint lineage and verified snapshots. Single-device, DDP, supported split-model placement and separate evaluation-GPU strategies are available. Training execution is opt-in; access tokens are optional. Projects have on-disk folders under the configured projects directory (default `~/shared/weave-projects`), with saved graphs and editable training scripts. Generated network code, tokenizers and trainer support live separately under each stage’s `weave_support/` package. The default `train.py` is a short, editable PyTorch loss recipe; the reusable trainer preserves advanced training features. Training displays SSH-friendly paths, the actual Python/PyTorch versions and a syntax-highlighted editor. Independent scripts can report through the HTTP API using the included connection file; localhost is the default. See [training setup, recipes, limitations, reporting API and backup/restore](TRAINING.md).

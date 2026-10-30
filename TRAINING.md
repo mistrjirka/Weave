@@ -1,6 +1,6 @@
 # Training in Weave
 
-Open a project and choose **Training**. Stages and run records are separate from the editable graph: starting a run freezes the graph, variables, generated PyTorch, tokenizer, script, and configuration. Existing projects are not migrated or trained automatically.
+Open a project and choose **Training**. Stages and run records are separate from the editable graph: starting a run freezes the graph, variables, generated PyTorch, tokenizer, script, and configuration. Project graphs are not changed and training never starts automatically.
 
 ## Enable local execution
 
@@ -17,13 +17,23 @@ The web application remains on `0.0.0.0:8173`. Training opens without a token by
 Each stage has a stable workspace on the **Weave server**:
 
 ```text
-data/projects/<project-id>/project.json
-data/projects/<project-id>/stages/<stage-id>/model.py
-data/projects/<project-id>/stages/<stage-id>/train.py
-data/projects/<project-id>/stages/<stage-id>/config.json
+~/shared/weave-projects/<project-id>/project.json
+~/shared/weave-projects/<project-id>/stages/<stage-id>/
+    train.py              # Your short editable recipe or custom training loop
+    config.json           # Your training settings
+    my_helpers.py         # Optional files you create
+    runs/                 # Standalone checkpoints, reports and prepared data
+    weave_support/        # Managed by Weave; inspect rather than edit
+        model.py          # Generated PyTorch network
+        text_training.py  # Reusable accumulation/DDP/evaluation/checkpoint code
+        weave_training.py # Portable reporting helper
+        requirements.txt
+        tokenizers/
 ```
 
-The Training tab shows the absolute paths and provides Copy path buttons. Open those paths in an SSH-connected VS Code window or in a terminal on the server. They are not browser downloads or paths on your laptop. `model.py`, tokenizer assets and `weave_training.py` are generated in the same directory when you save the stage file. Generated model/support files follow the graph; put your own helper code in separate Python files.
+Choose the base folder during installation with `bash scripts/configure.sh --projects-dir ~/shared/weave-projects`, or set `WEAVE_PROJECTS_DIR`. The default is `~/shared/weave-projects`; it is independent of `WEAVE_DATA` and the selected Python environment. Restart Weave after changing it. Existing folders are moved from `data/projects/`; conflicting destinations are reported and never overwritten. Exact unedited long starter scripts become the short recipe. Custom scripts keep their logic and comments; only imports of moved support modules are qualified. Original scripts are preserved under `weave_support/migrations/train.original.py`. Historical run exports are not changed.
+
+The Training tab shows the absolute paths and provides Copy path buttons. Open those paths in an SSH-connected VS Code window or in a terminal on the server. They are not browser downloads or paths on your laptop. `weave_support/model.py`, tokenizer assets, the standard trainer and reporting helper are generated in the managed support folder when you save. Keep your own helper code alongside train.py, outside that folder. New scripts use normal package imports such as `from weave_support.model import Model` and `from weave_support import Run`. There are no sys.path changes or pip-installed Weave packages.
 
 The default view is the Python script, with CodeMirror syntax highlighting, line numbers, folding, bracket matching, undo, search, and Ctrl/Cmd+S to **Save file**. Optional **Preset settings** write `config.json`; custom scripts decide which settings to consume. The reporting-hook menu inserts editable Python snippets at the cursor. Fresh templates create a new stage instead of overwriting your script.
 
@@ -63,7 +73,7 @@ The built-in recipes support FP32, CUDA FP16 with a gradient scaler, and support
 
 ## Independent training computers
 
-Choose **Terminal · prepare package and monitor**, then download **Training package**. Each package includes the generated network, tokenizer assets, train.py, config.json, the portable reporting helper and reporting.json. The visible reporting address defaults to `http://localhost:8173`. This works on the same computer or through an SSH tunnel. For another computer, set the server’s reachable URL in Training, save it, and download the package again. Localhost always refers to the training computer, not the browser computer.
+Choose **Terminal · prepare package and monitor**, then download **Training package**. Each package includes user-editable train.py and config.json, reporting.json and your own helper files; generated code, tokenizers and dependencies are separated under weave_support/. Install dependencies from weave_support/requirements.txt. The visible reporting address defaults to `http://localhost:8173`. This works on the same computer or through an SSH tunnel. For another computer, set the server’s reachable URL in Training, save it, and download the package again. Localhost always refers to the training computer, not the browser computer.
 
 Extract it, edit config.json for that computer’s dataset paths and devices, install its Python dependencies, then run:
 
@@ -71,26 +81,26 @@ Extract it, edit config.json for that computer’s dataset paths and devices, in
 python train.py --config config.json
 ```
 
-The helper detects reporting.json in the working directory, or use `WEAVE_REPORT_CONFIG=/path/to/reporting.json`. A scoped reporting key is generated automatically and included in the file; it grants event reporting and cooperative command polling for that run only. It does not grant launch/project access. Do not publish that connection file. No operator access token is required by default.
+Standalone recipes print their generated `runs/run-<id>/` output folder. UI-launched jobs keep using their frozen server run directory. The helper detects reporting.json beside the source script/configuration, or use `WEAVE_REPORT_CONFIG=/path/to/reporting.json`. A scoped reporting key is generated automatically and included in the file; it grants event reporting and cooperative command polling for that run only. It does not grant launch/project access. Do not publish that connection file. No operator access token is required by default.
 
 HTTP delivery runs in a background thread. Metrics, progress, generated examples, explicit console events, warnings, checkpoint metadata and optional NVIDIA device readings appear in Training. Events remain durable in the training computer’s run directory and are retried; the server deduplicates event IDs. If the script finishes during an outage, resend the local outbox after the server returns:
 
 ```bash
-python weave_training.py --sync weave-run --connection reporting.json
-# Built-in templates use the current directory instead of weave-run:
-python weave_training.py --sync . --connection reporting.json
+python weave_support/weave_training.py --sync weave-run --connection reporting.json
+# Built-in standalone templates print their output folder at startup:
+python weave_support/weave_training.py --sync runs/run-<id> --connection reporting.json
 ```
 
 The UI shows the last report time; it does not claim that an interrupted connection means the process stopped. Remote checkpoint bytes and datasets are **not uploaded**. Server snapshots preserve reports and the originally packaged code, without claiming resumable remote weights. Remote provenance events record script/model/config and dataset hashes; modified remote files must be backed up on that computer. Only explicit `run.console(text)` output is forwarded; arbitrary stdout is not intercepted. Commands arrive on a successful report exchange and are acted on only when the script polls and implements them. Force-stop remains a terminal operation.
 
 ## Reporting API
 
-Exports include one local `weave_training.py` helper. There is **no pip-installed Weave package**, no `requests` dependency, and no HTTP code to put in your training loop. The helper uses the Python standard library, a background sender and a durable local event file. `reporting.json` provides the connection automatically. Built-in training templates already contain their metrics, samples, checkpoint and command integration.
+Exports include a local `weave_support/` package with the portable reporting helper. There is **no pip-installed Weave package**, no `requests` dependency, and no HTTP code to put in your training loop. The helper uses the Python standard library, a background sender and a durable local event file. `reporting.json` provides the connection automatically. Built-in training templates already contain their metrics, samples, checkpoint and command integration.
 
 For a custom loop, the short integration is:
 
 ```python
-from weave_training import Run
+from weave_support import Run
 
 # Construct your own model, optimizer and data loader as usual.
 with Run(optimizer=optimizer, total_steps=total_steps) as run:
@@ -114,7 +124,7 @@ Existing scripts using `run.log(...)` or `run.watch_optimizer(optimizer, every=1
 Explicit reporting example:
 
 ```python
-from weave_training import Run
+from weave_support import Run
 
 with Run() as run:
     run.capabilities(metrics=True, samples=True, checkpoint=True, commands=True)

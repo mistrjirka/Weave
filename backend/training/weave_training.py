@@ -56,10 +56,20 @@ class Run:
         total_steps=None,
         start_step=0,
         log_every=1,
+        source_directory=None,
     ):
         self.directory = Path(
             directory or os.environ.get("WEAVE_RUN_DIR", "weave-run")
         ).resolve()
+        self.source_directory = (
+            Path(source_directory).resolve()
+            if source_directory
+            else (
+                self.directory
+                if (self.directory / "train.py").is_file()
+                else Path.cwd()
+            )
+        )
         self.rank = int(os.environ.get("RANK", "0")) if rank is None else rank
         self.directory.mkdir(parents=True, exist_ok=True)
         if (
@@ -107,7 +117,15 @@ class Run:
                         "packages": packages,
                     },
                 )
-        self.emit("started", {"protocol": PROTOCOL_VERSION, "pid": os.getpid()})
+        self.emit(
+            "started",
+            {
+                "protocol": PROTOCOL_VERSION,
+                "pid": os.getpid(),
+                "directory": str(self.directory),
+                "source_directory": str(self.source_directory),
+            },
+        )
         if self.optimizer is not None:
             self.watch_optimizer(self.optimizer, every=self.log_every)
             self.capabilities(
@@ -117,7 +135,14 @@ class Run:
                 commands=False,
                 optimizer_tracking=True,
             )
-        config_path = Path(os.environ.get("WEAVE_REPORT_CONFIG", "reporting.json"))
+        configured_connection = os.environ.get("WEAVE_REPORT_CONFIG")
+        config_path = (
+            Path(configured_connection)
+            if configured_connection
+            else self.source_directory / "reporting.json"
+        )
+        if not configured_connection and not config_path.is_file():
+            config_path = Path("reporting.json")
         if (
             self.rank == 0
             and config_path.is_file()
@@ -339,6 +364,23 @@ def instrumentation_warnings(source):
                 "message": f"Python syntax error at line {exc.lineno}: {exc.msg}",
             }
         ]
+    delegated = {
+        alias.asname or alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "weave_support.text_training"
+        for alias in node.names
+        if alias.name == "main"
+    }
+    if any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id in delegated
+        for node in ast.walk(tree)
+    ):
+        return (
+            []
+        )  # The shipped trainer implements metrics/samples/checkpoints/commands.
     methods = {
         node.func.attr
         for node in ast.walk(tree)
@@ -515,9 +557,17 @@ class _Reporter:
             return
         self.provenance_sent = True
         files = {}
-        for name in ("train.py", "model.py", "config.json", "environment.json"):
+        source_root = self.run.source_directory
+        for name in (
+            "train.py",
+            "weave_support/model.py",
+            "config.json",
+            "environment.json",
+        ):
             path = (
-                Path(name) if name != "environment.json" else self.run.directory / name
+                source_root / name
+                if name != "environment.json"
+                else self.run.directory / name
             )
             if path.is_file():
                 files[name] = {
@@ -526,12 +576,15 @@ class _Reporter:
                     "bytes": path.stat().st_size,
                 }
         datasets = {}
-        config_path = Path("config.json")
+        config_path = source_root / "config.json"
         if config_path.is_file():
             config = json.loads(config_path.read_text())
             for name in ("dataset", "eval_dataset"):
                 if config.get(name):
-                    path = Path(config[name]).expanduser().resolve()
+                    path = Path(config[name]).expanduser()
+                    if not path.is_absolute():
+                        path = config_path.parent / path
+                    path = path.resolve()
                     if path.is_file():
                         datasets[name] = {
                             "path": str(path),

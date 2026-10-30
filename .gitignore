@@ -17,3 +17,6 @@ playwright-report/
 *.sqlite3
 *.db
 *.log
+
+# Local installation settings
+.weave-config.json

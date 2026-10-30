@@ -5,7 +5,6 @@ from __future__ import annotations
 import ast
 from datetime import datetime, timezone
 import hashlib
-import io
 import json
 import os
 from pathlib import Path
@@ -20,6 +19,7 @@ from pydantic import BaseModel, Field, ConfigDict
 from ..compiler import export_zip
 from ..core import validate_project
 from .weave_training import atomic_json, file_hash, instrumentation_warnings
+from .layout import PACKAGE, normalize_script, write_support
 
 HERE = Path(__file__).parent
 
@@ -91,6 +91,10 @@ class Stage(BaseModel):
     script_revision: str | None = None
     config_revision: str | None = None
     workspace_warning: str | None = None
+    project_path: str | None = None
+    model_path: str | None = None
+    support_path: str | None = None
+    previous_script: str | None = None
 
 
 class Plan(BaseModel):
@@ -437,6 +441,9 @@ class TrainingService:
 
     def launch(self, request):
         project, stage = request.project, request.stage
+        stage = stage.model_copy(
+            update={"script": normalize_script(stage.script, stage.config.recipe)}
+        )
         stage.config.validate_execution()
         report = validate_project(project)
         if not report["valid"]:
@@ -456,17 +463,10 @@ class TrainingService:
                 for info in input_tokenizers(project).values()
             }
             bundle = export_zip(project, tokenizer_dirs=directories)
-            with zipfile.ZipFile(io.BytesIO(bundle)) as archive:
-                archive.extractall(directory)
-            (directory / "requirements.txt").write_text(
-                (directory / "requirements.txt").read_text()
-                + "jsonschema>=4,<5\npyarrow>=18,<27\n"
-            )
-            shutil.copyfile(
-                HERE.parent.parent / "TRAINING.md", directory / "TRAINING.md"
-            )
-            self.workspaces.freeze_extras(project["id"], stage.id, directory)
-            files = {"model.py": (directory / "model.py").read_text()}
+            write_support(directory, bundle)
+            extras = self.workspaces.freeze_extras(project["id"], stage.id, directory)
+            atomic_json(directory / ".workspace-files.json", extras)
+            files = {"model.py": (directory / PACKAGE / "model.py").read_text()}
             metadata = model_metadata(files, project)
             if stage.config.strategy == "split" and not metadata["split_supported"]:
                 raise ValueError(" ".join(metadata["split_reasons"]))
@@ -616,7 +616,7 @@ class TrainingService:
                                     target_trace.write(line)
                             except ValueError:
                                 continue
-                for folder in ("tokenizers", "licenses"):
+                for folder in ("tokenizers", "licenses", PACKAGE):
                     if (parent_directory / folder).exists():
                         shutil.copytree(
                             parent_directory / folder,
@@ -646,7 +646,7 @@ class TrainingService:
                 )
             config.setdefault("checkpoint", None)
             (directory / "train.py").write_text(stage.script)
-            shutil.copyfile(HERE / "weave_training.py", directory / "weave_training.py")
+
             atomic_json(directory / "config.json", config)
             atomic_json(directory / "stage.json", stage.model_dump())
             atomic_json(directory / "datasets.json", datasets)

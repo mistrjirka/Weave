@@ -105,7 +105,7 @@ def test_default_training_has_no_token_and_reports_python(tmp_path, monkeypatch)
         assert response.status_code == 200, response.text
         saved = response.json()
         assert Path(saved["script_path"]).is_file()
-        assert (Path(saved["script_path"]).parent / "model.py").is_file()
+        assert (Path(saved["model_path"])).is_file()
         Path(saved["script_path"]).write_text("print('SSH')\n")
         body["stage"] = saved
         body["stage"]["script"] = "print('stale')\n"
@@ -134,3 +134,149 @@ def test_workspace_helpers_freeze_into_run_and_later_edits_do_not_change_it(tmp_
     Path(saved.script_path).write_text("print('later edit')\n")
     assert (run / "my_helpers.py").read_text() == "VALUE=7\n"
     assert (run / "train.py").read_text() == "print('original')\n"
+
+
+def test_project_root_is_configurable_and_moves_legacy_files(tmp_path, monkeypatch):
+    from backend.paths import projects_directory
+
+    chosen = tmp_path / "chosen-projects"
+    monkeypatch.setenv("WEAVE_PROJECTS_DIR", str(chosen))
+    legacy = tmp_path / "data/projects/project-test/stages/stage-one"
+    legacy.mkdir(parents=True)
+    original = "# My custom training logic must survive.\nfrom weave_training import Run\nprint('mine')\n"
+    (legacy / "train.py").write_text(original)
+    (legacy / "config.json").write_text(stage().config.model_dump_json())
+    (legacy / "runtime.py").write_text("VALUE=7\n")
+    (legacy / ".weave-generated.json").write_text(json.dumps({"files": ["runtime.py"]}))
+    store = WorkspaceStore(tmp_path / "data/training")
+    saved = store.save_stage(
+        "project-test", stage().model_copy(update={"script": original})
+    )
+    assert projects_directory() == chosen
+    assert Path(saved.script_path) == chosen / "project-test/stages/stage-one/train.py"
+    assert "# My custom training logic must survive." in saved.script
+    assert "from weave_support.weave_training import Run" in saved.script
+    assert saved.previous_script == original
+    assert not legacy.exists()
+    directory = Path(saved.script_path).parent
+    assert not (directory / "runtime.py").exists()
+    assert (directory / "weave_support/runtime.py").read_text() == "VALUE=7\n"
+    assert (
+        directory / "weave_support/migrations/train.original.py"
+    ).read_text() == original
+
+
+def test_only_exact_shipped_long_script_is_shortened(tmp_path, monkeypatch):
+    import hashlib
+    from backend.training import layout
+
+    old = "from weave_training import Run\n# Original long template\n"
+    monkeypatch.setattr(
+        layout, "LEGACY_RECIPE_HASHES", {hashlib.sha256(old.encode()).hexdigest()}
+    )
+    store = WorkspaceStore(tmp_path / "training")
+    recipe = stage().model_copy(update={"config": TrainingConfig(), "script": old})
+    saved = store.save_stage("shortened", recipe)
+    assert saved.script == (Path(layout.__file__).parent / "template.py").read_text()
+    assert len(saved.script.splitlines()) < 30
+    assert saved.previous_script == old
+    edited = store.save_stage(
+        "edited", recipe.model_copy(update={"script": old + "print('my edit')\n"})
+    )
+    assert "print('my edit')" in edited.script
+    assert "Original long template" in edited.script
+    assert edited.previous_script == old + "print('my edit')\n"
+
+
+def test_support_package_and_user_files_are_separated(tmp_path):
+    service = TrainingService(tmp_path / "training", tmp_path / "tokenizers")
+    saved = service.workspaces.save_stage("training-test", stage())
+    service.workspaces.prepare_model(tiny_project(), saved, service.tokenizer_root)
+    directory = Path(saved.script_path).parent
+    assert {p.name for p in directory.iterdir() if not p.name.startswith(".")} == {
+        "train.py",
+        "config.json",
+        "weave_support",
+    }
+    assert (directory / "weave_support/model.py").is_file()
+    assert (directory / "weave_support/requirements.txt").is_file()
+    assert "from ." in (directory / "weave_support/model.py").read_text()
+
+
+def test_install_config_and_environment_override(tmp_path, monkeypatch):
+    from backend import paths
+
+    config = tmp_path / ".weave-config.json"
+    monkeypatch.setattr(paths, "INSTALL_SETTINGS", config)
+    monkeypatch.delenv("WEAVE_PROJECTS_DIR", raising=False)
+    assert (
+        paths.projects_directory()
+        == Path("~/shared/weave-projects").expanduser().absolute()
+    )
+    config.write_text(json.dumps({"projects_directory": str(tmp_path / "installed")}))
+    assert paths.projects_directory() == tmp_path / "installed"
+    monkeypatch.setenv("WEAVE_PROJECTS_DIR", str(tmp_path / "override"))
+    assert paths.projects_directory() == tmp_path / "override"
+
+
+def test_generated_custom_block_uses_relative_package_imports(tmp_path):
+    import os
+    import subprocess
+
+    service = TrainingService(tmp_path / "training", tmp_path / "tokenizers")
+    project = tiny_project()
+    project["graph"]["nodes"][2]["data"] = {
+        "kind": "custom",
+        "label": "Custom transform",
+        "params": {
+            "input_shape": ["B", "T", "$width"],
+            "output_shape": ["B", "T", "$width"],
+            "parameter_count": 0,
+            "source": "class CustomBlock(nn.Module):\n    def forward(self, x):\n        return x * 2\n",
+        },
+    }
+    saved = service.workspaces.save_stage("training-test", stage())
+    service.workspaces.prepare_model(project, saved, service.tokenizer_root)
+    directory = Path(saved.script_path).parent
+    assert "from .custom_" in (directory / "weave_support/model.py").read_text()
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import torch; from weave_support.model import Model; m=Model(); y=m(torch.tensor([[1,2,3]])); assert y.shape==(1,3,8); y.sum().backward(); assert any(p.grad is not None for p in m.parameters())",
+        ],
+        cwd=directory,
+        env=os.environ.copy(),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_migration_collision_preserves_both_locations(tmp_path, monkeypatch):
+    monkeypatch.setenv("WEAVE_PROJECTS_DIR", str(tmp_path / "chosen"))
+    legacy = tmp_path / "data/projects/project-test"
+    chosen = tmp_path / "chosen/project-test"
+    legacy.mkdir(parents=True)
+    chosen.mkdir(parents=True)
+    (legacy / "note.txt").write_text("old")
+    (chosen / "note.txt").write_text("new")
+    with pytest.raises(WorkspaceConflict, match="Files were not overwritten"):
+        WorkspaceStore(tmp_path / "data/training").project_directory("project-test")
+    assert (legacy / "note.txt").read_text() == "old"
+    assert (chosen / "note.txt").read_text() == "new"
+
+
+def test_changing_configured_root_preserves_latest_ssh_script(tmp_path, monkeypatch):
+    first = tmp_path / "first-projects"
+    second = tmp_path / "second-projects"
+    monkeypatch.setenv("WEAVE_PROJECTS_DIR", str(first))
+    store = WorkspaceStore(tmp_path / "training")
+    saved = store.save_stage("project-test", stage())
+    Path(saved.script_path).write_text("print('newer SSH edit')\n")
+    monkeypatch.setenv("WEAVE_PROJECTS_DIR", str(second))
+    moved = store.load_plan("project-test").stages[0]
+    assert moved.script == "print('newer SSH edit')\n"
+    assert Path(moved.script_path).is_relative_to(second)
+    assert not (first / "project-test").exists()

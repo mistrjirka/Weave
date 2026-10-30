@@ -46,6 +46,10 @@ export const stageSchema = z.object({
   script_revision: z.string().nullable().optional(),
   config_revision: z.string().nullable().optional(),
   workspace_warning: z.string().nullable().optional(),
+  project_path: z.string().nullable().optional(),
+  model_path: z.string().nullable().optional(),
+  support_path: z.string().nullable().optional(),
+  previous_script: z.string().nullable().optional(),
 });
 export type TrainingStage = z.infer<typeof stageSchema>;
 export const planSchema = z.object({

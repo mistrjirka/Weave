@@ -15,6 +15,16 @@ from threading import RLock
 
 from .service import Stage, Plan, TrainingConfig, valid_id, inside
 from .weave_training import atomic_json, file_hash
+from ..paths import projects_directory
+from .layout import (
+    PACKAGE,
+    normalize_script,
+    rewrite_imports,
+    write_support,
+    write_helpers,
+)
+
+MIGRATION_LOCK = RLock()
 
 
 class WorkspaceConflict(ValueError):
@@ -41,15 +51,120 @@ class WorkspaceStore:
         self.lock = RLock()
 
     def directory(self, project_id, stage_id):
-        destination = self.project_directory(project_id) / "stages" / valid_id(stage_id)
-        legacy = self.root / "workspaces" / valid_id(project_id) / valid_id(stage_id)
-        if legacy.exists() and not destination.exists():
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            shutil.move(str(legacy), str(destination))
-        return destination
+        with MIGRATION_LOCK:
+            destination = (
+                self.project_directory(project_id) / "stages" / valid_id(stage_id)
+            )
+            legacy = (
+                self.root / "workspaces" / valid_id(project_id) / valid_id(stage_id)
+            )
+            if legacy.exists() and not destination.exists():
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(legacy), str(destination))
+            manifest = destination / ".weave-generated.json"
+            if manifest.exists():
+                names = json.loads(manifest.read_text())["files"]
+                modules = {Path(name).stem for name in names if name.endswith(".py")}
+                for name in names:
+                    if name.startswith(PACKAGE + "/"):
+                        continue
+                    source = inside(destination, name)
+                    if not source.is_file():
+                        continue
+                    target = inside(destination / PACKAGE, name)
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    if target.exists():
+                        # Preserve the older file rather than overwrite a newer generation.
+                        target = inside(
+                            destination / PACKAGE / "migrations" / "old-generated", name
+                        )
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.move(str(source), str(target))
+                    if target.suffix == ".py":
+                        target.write_text(
+                            rewrite_imports(target.read_text(), ".", modules)
+                        )
+                # Moving generated files can leave empty asset directories behind.
+                # Remove only empty directories; retain any user-added files.
+                for folder in (destination / "tokenizers", destination / "licenses"):
+                    if folder.exists():
+                        for child in sorted(
+                            (p for p in folder.rglob("*") if p.is_dir()),
+                            key=lambda p: len(p.parts),
+                            reverse=True,
+                        ):
+                            try:
+                                child.rmdir()
+                            except OSError:
+                                pass
+                        try:
+                            folder.rmdir()
+                        except OSError:
+                            pass
+                if any(not name.startswith(PACKAGE + "/") for name in names):
+                    write_helpers(destination / PACKAGE)
+                    atomic_json(
+                        manifest,
+                        {
+                            "files": [
+                                (
+                                    name
+                                    if name.startswith(PACKAGE + "/")
+                                    else PACKAGE + "/" + name
+                                )
+                                for name in names
+                            ]
+                        },
+                    )
+            return destination
 
     def project_directory(self, project_id):
-        return self.root.parent / "projects" / valid_id(project_id)
+        with MIGRATION_LOCK:
+            root = projects_directory()
+            destination = root / valid_id(project_id)
+            registry = self.root / "project-locations.json"
+            previous = (
+                json.loads(registry.read_text())["roots"] if registry.exists() else []
+            )
+            candidates = [
+                self.root.parent / "projects",
+                *(Path(value) for value in previous),
+            ]
+            sources = []
+            for location in candidates:
+                source = location / project_id
+                if (
+                    source.resolve() != destination.resolve()
+                    and source.exists()
+                    and source.resolve() not in {item.resolve() for item in sources}
+                ):
+                    sources.append(source)
+            if sources and (destination.exists() or len(sources) > 1):
+                locations = ", ".join(str(value) for value in [*sources, destination])
+                raise WorkspaceConflict(
+                    f"Both project locations exist: {locations}. Files were not overwritten; move the older folder aside after comparing them."
+                )
+            if sources:
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(sources[0]), str(destination))
+            if str(root) not in previous:
+                atomic_json(registry, {"roots": [*previous, str(root)]})
+            return destination
+
+    def normalize_existing_script(self, directory, recipe):
+        path = directory / "train.py"
+        if not path.exists():
+            return
+        if path.stat().st_size > 1024 * 1024:
+            raise ValueError("Training script exceeds the 1 MB editor limit")
+        old = path.read_text()
+        new = normalize_script(old, recipe)
+        if old != new:
+            backup = directory / PACKAGE / "migrations" / "train.original.py"
+            if not backup.exists():
+                atomic_text(backup, old)
+            write_helpers(directory / PACKAGE)
+            atomic_text(path, new)
 
     def plan_path(self, project_id):
         return self.root / "plans" / (valid_id(project_id) + ".json")
@@ -66,7 +181,13 @@ class WorkspaceStore:
         directory = self.directory(project_id, stage.id)
         script = directory / "train.py"
         config_path = directory / "config.json"
+        self.normalize_existing_script(directory, stage.config.recipe)
         result = stage.model_copy(deep=True)
+        result.project_path = str(self.project_directory(project_id))
+        result.model_path = str(directory / PACKAGE / "model.py")
+        result.support_path = str(directory / PACKAGE)
+        backup = directory / PACKAGE / "migrations" / "train.original.py"
+        result.previous_script = backup.read_text() if backup.exists() else None
         result.script_path = str(script)
         result.config_path = str(config_path)
         if script.exists():
@@ -90,7 +211,8 @@ class WorkspaceStore:
         script, config = directory / "train.py", directory / "config.json"
         if (
             script.exists()
-            and script.read_text() != stage.script
+            and normalize_script(script.read_text(), stage.config.recipe)
+            != normalize_script(stage.script, stage.config.recipe)
             and stage.script_revision != file_hash(script)
         ):
             raise WorkspaceConflict(
@@ -111,7 +233,15 @@ class WorkspaceStore:
 
     def write(self, project_id, stage):
         self.check(project_id, stage)
+        original = stage.script
+        stage = stage.model_copy(
+            update={"script": normalize_script(stage.script, stage.config.recipe)}
+        )
         directory = self.directory(project_id, stage.id)
+        if original != stage.script:
+            backup = directory / PACKAGE / "migrations" / "train.original.py"
+            if not backup.exists():
+                atomic_text(backup, original)
         directory.mkdir(parents=True, exist_ok=True)
         script, config = directory / "train.py", directory / "config.json"
         if not script.exists() or script.read_text() != stage.script:
@@ -178,8 +308,6 @@ class WorkspaceStore:
 
     def prepare_model(self, project, stage, tokenizer_root):
         """Refresh graph-owned files, preserving the editable training script."""
-        import io
-        import zipfile
         from ..compiler import export_zip
         from ..tokenizer_bindings import input_tokenizers
 
@@ -192,24 +320,11 @@ class WorkspaceStore:
             for info in input_tokenizers(project).values()
         }
         bundle = export_zip(project, tokenizer_dirs=directories)
-        generated = []
+        generated = write_support(directory, bundle)
         atomic_text(
             project_directory / "README.md",
-            "# Weave project files\n\nproject.json records the saved graph. stages/<stage-id>/ contains model.py, train.py, config.json and the portable reporting helper. Edit train.py and helper files in VS Code; model.py is generated from the graph and refreshed when saving a stage. Training runs are frozen separately in training/runs/.\n",
+            "# Weave project\n\nproject.json is the saved graph. Edit stages/<stage-id>/train.py, config.json and your own helpers. Generated model code, tokenizer assets and the reusable trainer live in each stage's weave_support/ folder and are refreshed by Weave. Migration originals are kept in weave_support/migrations/. Run python train.py --config config.json from the stage folder. Install training dependencies from weave_support/requirements.txt into your chosen environment. UI-launched run histories and checkpoints stay in Weave's application data directory. Standalone training writes its outputs under runs/.\n",
         )
-        with zipfile.ZipFile(io.BytesIO(bundle)) as archive:
-            for name in archive.namelist():
-                if name in ("train.py", "config.json"):
-                    continue
-                target = inside(directory, name)
-                target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_bytes(archive.read(name))
-                generated.append(name)
-        shutil.copyfile(
-            Path(__file__).with_name("weave_training.py"),
-            directory / "weave_training.py",
-        )
-        generated.append("weave_training.py")
         atomic_json(directory / ".weave-generated.json", {"files": generated})
 
     def freeze_extras(self, project_id, stage_id, destination):
@@ -220,6 +335,7 @@ class WorkspaceStore:
             if manifest.exists()
             else set()
         )
+        copied = []
         for source in directory.rglob("*"):
             name = source.relative_to(directory).as_posix()
             if (
@@ -227,6 +343,7 @@ class WorkspaceStore:
                 or source.is_symlink()
                 or source.name.startswith(".")
                 or "__pycache__" in source.parts
+                or name.startswith(PACKAGE + "/")
                 or name in generated
                 or name in ("train.py", "config.json")
             ):
@@ -238,3 +355,5 @@ class WorkspaceStore:
                 continue
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(source, target)
+            copied.append(name)
+        return copied

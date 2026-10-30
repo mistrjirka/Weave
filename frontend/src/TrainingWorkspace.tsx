@@ -217,15 +217,24 @@ export function TrainingWorkspace({ project }: { project: Project }) {
                 stages: recovered.stages.map((draft) => {
                   const disk = savedStagesRef.current[draft.id];
                   if (!disk) return draft;
+                  const migrated =
+                    disk.previous_script != null &&
+                    draft.script === disk.previous_script;
                   return {
                     ...draft,
+                    script: migrated ? disk.script : draft.script,
                     script_path: disk.script_path,
                     config_path: disk.config_path,
-                    script_revision:
-                      draft.script_revision ??
-                      (draft.script === disk.script
-                        ? disk.script_revision
-                        : null),
+                    project_path: disk.project_path,
+                    model_path: disk.model_path,
+                    support_path: disk.support_path,
+                    previous_script: disk.previous_script,
+                    script_revision: migrated
+                      ? disk.script_revision
+                      : (draft.script_revision ??
+                        (draft.script === disk.script
+                          ? disk.script_revision
+                          : null)),
                     config_revision:
                       draft.config_revision ??
                       (JSON.stringify(draft.config) ===
@@ -496,6 +505,10 @@ export function TrainingWorkspace({ project }: { project: Project }) {
       script_revision: null,
       config_revision: null,
       workspace_warning: null,
+      project_path: null,
+      model_path: null,
+      support_path: null,
+      previous_script: null,
     };
     setPlan((current) => ({ ...current, stages: [...current.stages, clean] }));
     setSelected(clean.id);
@@ -911,26 +924,26 @@ export function TrainingWorkspace({ project }: { project: Project }) {
                   <strong>Editable files on the Weave server</strong>
                   <small>
                     These are server paths, not files on your browser’s
-                    computer. Open them in your SSH-connected VS Code. Saving
-                    this file also refreshes generated model.py in the same
-                    directory.
+                    computer. Open them in your SSH-connected VS Code. Edit
+                    train.py, config.json and your own helpers. Generated
+                    network code, tokenizer assets and trainer support are kept
+                    separately in weave_support/ and refreshed when you save.
                   </small>
                 </div>
                 <div className="training-server-path">
                   <span>Project folder</span>
                   <code>
-                    {(
-                      stage.script_path ?? savedStages[stage.id]?.script_path
-                    )?.split("/stages/")[0] ?? "Creating project folder…"}
+                    {stage.project_path ??
+                      savedStages[stage.id]?.project_path ??
+                      "Creating project folder…"}
                   </code>
                 </div>
                 <div className="training-server-path">
-                  <span>Network code</span>
+                  <span>Generated model</span>
                   <code>
-                    {(
-                      stage.script_path ?? savedStages[stage.id]?.script_path
-                    )?.replace(/train\.py$/, "model.py") ??
-                      "Save the stage to generate model.py"}
+                    {stage.model_path ??
+                      savedStages[stage.id]?.model_path ??
+                      "Save the stage to generate weave_support/model.py"}
                   </code>
                 </div>
                 <div className="training-server-path">
