@@ -24,7 +24,7 @@ class ReportEvent(BaseModel):
     step: int = Field(ge=0)
     tokens: int = Field(ge=0)
     payload: dict
-    channel: Literal["training", "evaluation"] = "training"
+    channel: Literal["training", "evaluation", "system"] = "training"
 
 
 class ReportBatch(BaseModel):

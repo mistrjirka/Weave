@@ -35,6 +35,7 @@ from text_training import (
 )
 from runtime import SparseMoE
 from weave_training import Run, atomic_json, atomic_checkpoint_path, file_hash
+from token_cache import cache_progress_reporting
 
 
 @dataclass
@@ -304,12 +305,45 @@ class Trainer:
                     raise ValueError(
                         "Selected GPU does not support native BF16; choose fp16 or fp32"
                     )
-        self.tokenizer = (
-            self.tokenizer_factory()
-            if callable(self.tokenizer_factory)
-            else self.tokenizer_factory
+        preparation_directory = (
+            directory / "preparation"
+            if not args.evaluate
+            else directory / ("evaluation-" + Path(args.evaluate).stem) / "preparation"
         )
-        self.train_loader, self.val_loader = self.dataloaders_fn(self.tokenizer, cfg)
+        with Run(
+            preparation_directory,
+            rank=self.rank,
+            source_directory=self.source_directory,
+            channel="evaluation" if args.evaluate else "system",
+        ) as preparation:
+            preparation.emit(
+                "preparation", {"phase": "initializing", "documents": 0, "tokens": 0}
+            )
+
+            def report_cache(progress):
+                preparation.emit("preparation", progress)
+
+            try:
+                with cache_progress_reporting(report_cache):
+                    self.tokenizer = (
+                        self.tokenizer_factory()
+                        if callable(self.tokenizer_factory)
+                        else self.tokenizer_factory
+                    )
+                    self.train_loader, self.val_loader = self.dataloaders_fn(
+                        self.tokenizer, cfg
+                    )
+            except Exception as exc:
+                preparation.emit(
+                    "preparation",
+                    {
+                        "phase": "failed",
+                        "message": str(exc),
+                        "documents": 0,
+                        "tokens": 0,
+                    },
+                )
+                raise
         try:
             self.batches_per_epoch = len(self.train_loader)
         except (TypeError, NotImplementedError):

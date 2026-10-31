@@ -21,6 +21,8 @@ MANAGED_MODULES = {
     "text_training",
     "trainer",
     "data_stream",
+    "cache_identity",
+    "token_cache",
 }
 
 
@@ -143,7 +145,7 @@ def write_support(directory, bundle):
     generated.extend(write_helpers(package))
     requirements = package / "requirements.txt"
     requirements.write_text(
-        requirements.read_text() + "jsonschema>=4,<5\npyarrow>=18,<27\n"
+        requirements.read_text() + "jsonschema>=4,<5\npyarrow>=18,<27\nnumpy>=1.26,<3\n"
     )
     return generated
 
@@ -157,11 +159,33 @@ def write_helpers(package):
         "weave_training.py",
         "trainer.py",
         "data_stream.py",
+        "cache_identity.py",
+        "token_cache.py",
     ):
         source = rewrite_imports((HERE / name).read_text(), ".")
         target = package / name
         if not target.exists() or target.read_text() != source:
             target.write_text(source)
+        generated.append(PACKAGE + "/" + name)
+    # Ship the authoring guide and optional complete example with offline exports.
+    for source_path, name in (
+        (HERE.parent.parent / "TRAINING_GUIDE.md", "TRAINING_GUIDE.md"),
+        (
+            HERE.parent.parent / "examples" / "train_cached_jsonl.py",
+            "example_cached_jsonl.py",
+        ),
+    ):
+        target = package / name
+        content = source_path.read_text()
+        if name == "TRAINING_GUIDE.md":
+            content = content.replace(
+                "examples/train_cached_jsonl.py", "example_cached_jsonl.py"
+            ).replace(
+                "(TRAINING.md)",
+                "(https://github.com/mistrjirka/Weave/blob/main/TRAINING.md)",
+            )
+        if not target.exists() or target.read_text() != content:
+            target.write_text(content)
         generated.append(PACKAGE + "/" + name)
     target = package / "__init__.py"
     source = '"""Generated support. Edit train.py and your own helpers in the parent folder."""\nfrom .weave_training import Run, atomic_checkpoint_path\n'

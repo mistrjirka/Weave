@@ -144,7 +144,9 @@ def events(directory, *, limit=None, kind=None, after=None):
         sources = [
             directory / "events.jsonl",
             directory / "system/events.jsonl",
+            directory / "preparation/events.jsonl",
             *sorted(directory.glob("evaluation-*/events.jsonl")),
+            *sorted(directory.glob("evaluation-*/preparation/events.jsonl")),
         ]
         for path in sources:
             if not path.exists():
@@ -410,9 +412,38 @@ class TrainingService:
         return sorted(result, key=lambda item: item["created"], reverse=True)
 
     def status(self, directory):
+        preparation = events(directory, kind="preparation", limit=1)
+        progress = (
+            preparation[-1]["payload"]
+            if preparation and preparation[-1].get("channel") == "system"
+            else None
+        )
+
+        def preparing():
+            if progress and progress.get("phase") == "failed":
+                return {
+                    "state": "failed",
+                    "message": progress.get("message", "Data preparation failed"),
+                }
+            return {
+                "state": "preparing",
+                "message": (
+                    "Data ready; initializing training."
+                    if progress and progress.get("phase") in ("complete", "reused")
+                    else "Preparing tokenizer and data; optimizer updates have not started yet."
+                ),
+            }
+
         path = directory / "status.json"
         if path.exists():
-            return json.loads(path.read_text())
+            status = json.loads(path.read_text())
+            if (
+                status["state"] in ("starting", "running")
+                and progress
+                and not status.get("metrics_received")
+            ):
+                status.update(preparing())
+            return status
         info = json.loads((directory / "run.json").read_text())
         if info.get("execution") == "monitor":
             records = [e for e in events(directory) if e.get("channel") == "training"]
@@ -441,7 +472,7 @@ class TrainingService:
                     "state": "running",
                     "message": "Terminal-launched process; liveness is based on reported events.",
                 }
-        return {"state": "prepared"}
+        return preparing() if progress else {"state": "prepared"}
 
     def launch(self, request):
         project, stage = request.project, request.stage

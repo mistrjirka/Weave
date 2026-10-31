@@ -59,7 +59,7 @@ const reportingHooks: Record<string, string> = {
     '# Save weights + optimizer/scheduler/scaler/RNG/data state first.\n# Include snapshot_ids from run.poll_commands() to fulfill UI snapshots.\nrun.checkpoint(checkpoint_path, metadata={"snapshot_requests": snapshot_ids})\n',
 };
 
-const running = new Set(["starting", "running", "evaluating"]);
+const running = new Set(["starting", "running", "preparing", "evaluating"]);
 const previewSchema = z.object({
   records: z.array(
     z.object({
@@ -2031,6 +2031,76 @@ export function TrainingWorkspace({ project }: { project: Project }) {
                   {detail.status.message}
                 </p>
               )}
+              {detail.events
+                .filter(
+                  (event) =>
+                    event.kind === "preparation" && event.channel === "system",
+                )
+                .slice(-1)
+                .map((event) => {
+                  const documents =
+                    typeof event.payload.documents === "number"
+                      ? event.payload.documents
+                      : 0;
+                  const total =
+                    typeof event.payload.total_documents === "number"
+                      ? event.payload.total_documents
+                      : undefined;
+                  const cacheReady =
+                    event.payload.phase === "complete" ||
+                    event.payload.phase === "reused";
+                  const trainingHasMetrics = detail.events.some(
+                    (entry) =>
+                      entry.kind === "metrics" && entry.channel === "training",
+                  );
+                  return (
+                    !trainingHasMetrics && (
+                      <section
+                        key={event.id}
+                        className="training-server-files"
+                        aria-label="Data preparation progress"
+                      >
+                        <strong>
+                          {event.payload.phase === "failed"
+                            ? "Data preparation failed"
+                            : cacheReady
+                              ? "Token cache ready"
+                              : "Preparing data"}
+                        </strong>
+                        <p role="status">
+                          {event.payload.phase === "waiting"
+                            ? "Waiting for another process to finish this cache. "
+                            : event.payload.phase === "initializing"
+                              ? "Loading tokenizer and creating data loaders. "
+                              : ""}
+                          {documents.toLocaleString()}
+                          {total ? ` / ${total.toLocaleString()}` : ""}{" "}
+                          documents ·{" "}
+                          {typeof event.payload.tokens === "number"
+                            ? event.payload.tokens.toLocaleString()
+                            : "0"}{" "}
+                          tokens
+                        </p>
+                        {!cacheReady && event.payload.phase !== "failed" && (
+                          <progress
+                            aria-label="Cache preparation progress"
+                            value={total ? documents : undefined}
+                            max={total}
+                          />
+                        )}
+                        {!!event.payload.message && (
+                          <p>{String(event.payload.message)}</p>
+                        )}
+                        {!total && !cacheReady && (
+                          <small>
+                            The reader did not supply a document total; progress
+                            is shown as counts rather than a percentage.
+                          </small>
+                        )}
+                      </section>
+                    )
+                  );
+                })}
               {detail.events
                 .filter((e) => e.kind === "progress")
                 .slice(-1)

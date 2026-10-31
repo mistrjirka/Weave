@@ -693,3 +693,75 @@ def test_fp16_training_can_validate_asynchronously_on_cpu_or_selected_gpu(
         assert resolved["precision"] == (
             "fp32" if validation_device == "cpu" else "fp16"
         )
+
+
+def test_cache_preparation_reports_automatically_without_recipe_hooks(tmp_path):
+    data = tmp_path / "rows.jsonl"
+    data.write_text('{"input_ids": [1, 2, 3, 4, 1]}\n')
+    script = filled_starter(data, max_optimizer_steps=1)
+    script = script.replace(
+        "from weave_support.data_stream import TokenStream",
+        """from weave_support.data_stream import TokenStream
+    from weave_support.token_cache import cache_documents
+    from tokenizers import Tokenizer, models
+    from transformers import PreTrainedTokenizerFast
+    tokenizer = PreTrainedTokenizerFast(
+        tokenizer_object=Tokenizer(models.WordLevel({'[UNK]': 0, 'hello': 1}, unk_token='[UNK]')),
+        unk_token='[UNK]',
+    )
+    cache_documents(
+        'document-cache', sources=['rows.jsonl'], tokenizer=tokenizer,
+        read_documents=lambda: iter(['hello', 'hello']),
+        policy={'reader': 'test-v1'}, total_documents=2,
+    )""".replace("sources=['rows.jsonl']", f"sources=[{str(data)!r}]"),
+    )
+    service, directory, _ = make_hook_run(tmp_path, script)
+    execute(directory)
+    preparation = [e for e in events(directory) if e["kind"] == "preparation"]
+    assert [e["payload"]["phase"] for e in preparation] == [
+        "initializing",
+        "building",
+        "complete",
+    ]
+    assert all(e["channel"] == "system" for e in preparation)
+    assert preparation[-1]["payload"]["documents"] == 2
+    assert service.status(directory)["state"] == "completed"
+    assert (directory / "weave_support/TRAINING_GUIDE.md").is_file()
+
+
+def test_documented_cached_jsonl_recipe_trains_with_exported_support(tmp_path):
+    source = tmp_path / "text.jsonl"
+    source.write_text(
+        "\n".join(
+            json.dumps({"text": text})
+            for text in ["hello world", "hello", "world hello"]
+        )
+    )
+    script = (
+        Path(__file__).parent.parent / "examples/train_cached_jsonl.py"
+    ).read_text()
+    script = script.replace("max_optimizer_steps=10", "max_optimizer_steps=1")
+    script = script.replace('os.environ["TRAINING_DATA"]', repr(str(source)))
+    script = script.replace(
+        'str(Path.home() / "shared/weave-token-cache")',
+        repr(str(tmp_path / "persistent-cache")),
+    )
+    script = script.replace(
+        'if __name__ == "__main__":',
+        """def load_tokenizer():
+    from tokenizers import Tokenizer, models, pre_tokenizers
+    from transformers import PreTrainedTokenizerFast
+    backend = Tokenizer(models.WordLevel({'[UNK]': 0, 'hello': 1, 'world': 2, 'end': 3}, unk_token='[UNK]'))
+    backend.pre_tokenizer = pre_tokenizers.Whitespace()
+    return PreTrainedTokenizerFast(tokenizer_object=backend, unk_token='[UNK]', eos_token='end')
+
+if __name__ == "__main__":""",
+    )
+    _, directory, _ = make_hook_run(tmp_path, script)
+    execute(directory)
+    records = events(directory)
+    assert any(e["kind"] == "metrics" for e in records)
+    assert any(
+        e["kind"] == "preparation" and e["payload"]["phase"] == "complete"
+        for e in records
+    )

@@ -77,6 +77,8 @@ Built-in text recipes require a single int64 `[B,T]` token input and a single fl
 
 Define dataset paths, tokenization and sequence lengths in your loader. Legacy recipes additionally support uploads (512 MB limit) and token previews. TXT, JSONL, JSON arrays and Parquet are supported. JSON arrays over 64 MB must be converted to JSONL/Parquet. The optional TokenStream utility streams and packs data; legacy preparation uses disk-backed records with a bounded cache and an in-memory offset index. Huge individual documents still require memory to tokenize that document. Right-padding is ignored in the loss; built-in autoregressive recipes use causal attention. No arbitrary padding-mask input is assumed. The preview highlights supervised target tokens; the first token is never a next-token target.
 
+For custom preprocessing caches, `weave_support.cache_identity.token_cache_key(files, tokenizer, policy=...)` provides a location-independent fast-tokenizer identity. It includes the tokenizer backend, special-token roles, EOS ID, ordered source paths/size/mtime, and your explicit policy (for example chunk sizes, validation split and format version). Tokenizer export folders are excluded, so creating another frozen run does not invalidate the cache. This helper identifies caches; the recipe still controls cache construction, completion checks and document/chunk policy. Source stats avoid hashing the full corpus and are not a cryptographic content guarantee. Keep completed cache files on persistent storage; incomplete temporary files require validation or rebuilding after an interruption.
+
 ## Epochs, optimizer updates and learning-rate schedule
 
 Use `max_epochs=3, max_optimizer_steps=None` for three complete loader passes, or `max_epochs=None, max_optimizer_steps=2000` for a fixed number of weight updates. If both limits are set, the first reached stops training. Every epoch flushes its final partial accumulation group; batches are never pulled from the next epoch to fill it. Counters distinguish completed epochs, microbatches per rank, optimizer updates and global input token slots (including padding).
@@ -220,3 +222,5 @@ npx playwright test tests/browser/training.spec.ts
 ```
 
 Real two-GPU acceptance compares single-device, DDP and split-model weights; checks incompatible weight-sharing placement; and runs a separate evaluation GPU. Browser tests cover stage editing, actual training, token-mask preview, charts, snapshots, reloads, black theme, accessibility and phone layouts.
+
+See the [training authoring guide](TRAINING_GUIDE.md) and [optional cached JSONL example](examples/train_cached_jsonl.py). New stages keep the minimal data-loader placeholder; persistent document caching is opt-in. Copies of the guide and example are included under `weave_support/` in project folders and downloaded packages. Cache progress appears automatically when called from a Trainer data-loader hook; no extra reporting hook is required.

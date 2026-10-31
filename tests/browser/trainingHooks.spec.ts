@@ -121,6 +121,22 @@ test("code-owned configuration, training hooks, provenance and snapshots", async
     expect(String(templates.scripts.causal)).not.toContain("sequence_length");
     const dataHook = `from torch.utils.data import DataLoader
     from weave_support.data_stream import TokenStream
+    from weave_support.token_cache import cache_documents
+    from tokenizers import Tokenizer, models
+    from transformers import PreTrainedTokenizerFast
+    import time
+    tokenizer = PreTrainedTokenizerFast(
+        tokenizer_object=Tokenizer(models.WordLevel({"[UNK]": 0, "hello": 1}, unk_token="[UNK]")),
+        unk_token="[UNK]",
+    )
+    def read_documents():
+        time.sleep(10)
+        yield "hello"
+        yield "hello"
+    cache_documents(
+        "browser-document-cache", sources=[${JSON.stringify(data)}], tokenizer=tokenizer,
+        read_documents=read_documents, policy={"reader": "browser-v1"}, total_documents=2,
+    )
     def encode(row):
         return row["input_ids"], row["input_ids"]
     dataset = TokenStream(${JSON.stringify(data)}, encode, seq_len=4)
@@ -190,6 +206,16 @@ test("code-owned configuration, training hooks, provenance and snapshots", async
     await expect(
       page.getByRole("region", { name: "Run dashboard", exact: true }),
     ).toBeVisible({ timeout: 30000 });
+    const preparation = page.getByRole("region", {
+      name: "Data preparation progress",
+      exact: true,
+    });
+    await expect(preparation).toContainText("0 / 2", { timeout: 60000 });
+    await expect(preparation.getByRole("progressbar")).toBeVisible();
+    await page.screenshot({
+      path: "data/training-cache-preparation.png",
+      fullPage: true,
+    });
     await expect(
       page.locator(".training-dashboard .training-section-heading").first(),
     ).toContainText("completed", { timeout: 180000 });
@@ -265,7 +291,9 @@ test("code-owned configuration, training hooks, provenance and snapshots", async
       if (response.ok()) {
         const current = detailSchema.parse(await response.json());
         runDirectory = current.directory;
-        if (["starting", "running"].includes(current.status.state)) {
+        if (
+          ["starting", "running", "preparing"].includes(current.status.state)
+        ) {
           await context.request.post(
             `/api/training/runs/${activeRun}/commands`,
             { data: { kind: "kill" } },
