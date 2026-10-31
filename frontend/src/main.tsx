@@ -1,3 +1,4 @@
+import { ProjectTokenizerPicker } from "./ProjectTokenizerPicker";
 import React, {
   useCallback,
   useEffect,
@@ -4365,6 +4366,21 @@ function Workbench({
                 <code>$vocab</code> update automatically; numeric overrides stay
                 independent.
               </p>
+              <ProjectTokenizerPicker
+                projectId={project.id}
+                disabled={busy}
+                onSelect={(info) => {
+                  if (applyInputTokenizer(info)) {
+                    setTokSource(info.repo ?? "");
+                    setTokRevision("");
+                    setTokError("");
+                    setTokPreview(null);
+                    notify(
+                      "Tokenizer copied · linked vocabulary dimensions updated",
+                    );
+                  }
+                }}
+              />
               <label className="property-field">
                 <span>Hugging Face repository or server-local path</span>
                 <input

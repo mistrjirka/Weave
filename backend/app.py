@@ -165,6 +165,31 @@ class TokenizerRequest(BaseModel):
     revision:str|None=None
 
 
+@app.get('/api/tokenizers/projects')
+def project_tokenizers():
+    """Reuse saved input bindings without downloading or re-inspecting tokenizers."""
+    result = []
+    with db() as conn:
+        for project_id, name, document in conn.execute(
+            'SELECT id,name,document FROM projects ORDER BY updated DESC, id'
+        ):
+            project = json.loads(document)
+            bindings = input_tokenizers(project)
+            # Older projects stored their tokenizer on the project itself.
+            if project.get('tokenizer'):
+                bindings.setdefault('', project['tokenizer'])
+            seen = set()
+            for path, info in bindings.items():
+                if info['id'] in seen:
+                    continue
+                seen.add(info['id'])
+                result.append({
+                    'project_id': project_id, 'project_name': name,
+                    'input_path': path, 'tokenizer': info,
+                })
+    return result
+
+
 @app.post('/api/tokenizers/inspect')
 def inspect_tokenizer(request:TokenizerRequest):
     try:return tokenizers.load(request.source,request.revision)
