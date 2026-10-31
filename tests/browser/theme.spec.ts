@@ -243,3 +243,33 @@ for (const { width, theme } of ["dark", "black"].flatMap((theme) =>
     }
   });
 }
+
+test("phone theme picker stays icon-only in every theme with readable menu options", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/");
+  for (const theme of ["system", "light", "dark", "black"]) {
+    await picker(page).selectOption(theme);
+    await expect(picker(page)).toHaveCSS("color", "rgba(0, 0, 0, 0)");
+    await expect(picker(page)).toHaveCSS("width", "44px");
+    await expect(picker(page)).toHaveCSS("min-height", "44px");
+    expect(
+      await picker(page)
+        .locator("option")
+        .evaluateAll((options) =>
+          options.every(
+            (option) => getComputedStyle(option).color !== "rgba(0, 0, 0, 0)",
+          ),
+        ),
+    ).toBeTruthy();
+    expect(
+      await page
+        .locator(".viewbar")
+        .evaluate((el) => el.scrollWidth <= el.clientWidth + 1),
+    ).toBeTruthy();
+  }
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await expect(picker(page)).not.toHaveCSS("color", "rgba(0, 0, 0, 0)");
+  await expect(picker(page)).toHaveCSS("width", "98px");
+});

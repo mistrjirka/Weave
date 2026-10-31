@@ -155,10 +155,14 @@ html:is([data-theme="dark"], [data-theme="black"]) .project-browser-search {
 }
 @media (max-width: 760px) {
   .theme-picker select {
-    width: 34px;
+    width: 44px;
+    min-height: 44px;
     padding: 6px 0;
     color: transparent;
     font-size: 16px;
+  }
+  .theme-picker > svg {
+    left: 14px;
   }
   .theme-picker select:focus-visible {
     outline: 2px solid var(--theme-green-accent, #739660);
@@ -190,7 +194,11 @@ html:is([data-theme="dark"], [data-theme="black"]) .project-browser-search {
 
 /* Inputs have their own well and outline, distinct from neutral cards and text. */
 html:is([data-theme="dark"], [data-theme="black"])
-  :is(input:not([type="checkbox"]):not([type="radio"]), select, textarea) {
+  :is(
+    input:not([type="checkbox"]):not([type="radio"]),
+    select:not([name="color-theme"]),
+    textarea
+  ) {
   background-color: var(--theme-input);
   border-color: var(--theme-input-border);
   color: var(--theme-text);
@@ -206,16 +214,4 @@ html:is([data-theme="dark"], [data-theme="black"]) .arch-node.blue {
 }
 html:is([data-theme="dark"], [data-theme="black"]) .arch-node {
   border-left: 3px solid var(--accent);
-}
-
-@media (max-width: 760px) {
-  .theme-picker select,
-  html:is([data-theme="dark"], [data-theme="black"]) .theme-picker select {
-    width: 44px;
-    min-height: 44px;
-    color: transparent;
-  }
-  .theme-picker > svg {
-    left: 14px;
-  }
 }
