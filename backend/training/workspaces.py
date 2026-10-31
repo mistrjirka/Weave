@@ -282,10 +282,6 @@ class WorkspaceStore:
         directory = self.directory(project_id, stage.id)
         script = directory / "train.py"
         script_content = script.read_bytes() if script.exists() else None
-        config = self.config_path(
-            directory,
-            script_content.decode() if script_content is not None else stage.script,
-        )
         if (
             script_content is not None
             and normalize_script(script_content.decode(), stage.config.recipe)
@@ -295,21 +291,9 @@ class WorkspaceStore:
             raise WorkspaceConflict(
                 "train.py changed on the server. Reload the server file, or save your browser draft as another stage."
             )
-        if config.exists():
-            config_content = config.read_bytes()
-            try:
-                same = (
-                    TrainingConfig.model_validate_json(config_content) == stage.config
-                )
-            except ValueError:
-                same = False
-            if (
-                not same
-                and stage.config_revision != hashlib.sha256(config_content).hexdigest()
-            ):
-                raise WorkspaceConflict(
-                    "config.json changed on the server. Reload the server files before saving these settings."
-                )
+        # Launch/preset settings are explicitly owned by the GUI save action.
+        # Browser drafts survive reloads; their old revision must not block
+        # applying the user's current settings. Script edits retain protection.
 
     def write(self, project_id, stage):
         self.check(project_id, stage)

@@ -53,17 +53,37 @@ def test_real_files_external_edits_and_conflict_protection(tmp_path):
     values["learning_rate"] = 0.001
     config.write_text(json.dumps(values))
     assert store.load_plan("project-test").stages[0].config.learning_rate == 0.001
-    with pytest.raises(WorkspaceConflict, match="config.json"):
-        store.save_stage(
-            "project-test",
-            current.model_copy(
-                update={
-                    "config": TrainingConfig(
-                        recipe="custom", execution="monitor", learning_rate=0.02
-                    )
-                }
-            ),
-        )
+    requested = current.model_copy(update={"config": TrainingConfig(
+        recipe="custom", execution="monitor", learning_rate=0.02,
+    )})
+    written = store.save_stage("project-test", requested)
+    assert written.config.learning_rate == 0.02
+    assert json.loads(config.read_text())["learning_rate"] == 0.02
+    assert script.read_text() == current.script
+
+
+def test_stale_code_first_launch_settings_are_saved_without_overwriting_ssh_script(tmp_path):
+    from backend.training.recipe import starter_script
+
+    store = WorkspaceStore(tmp_path)
+    initial = stage().model_copy(update={"script": starter_script()})
+    saved = store.save_stage("project-launch", initial)
+    settings_path = Path(saved.config_path)
+    assert settings_path.name == "launch.json"
+    external = saved.config.model_copy(update={"devices": [1], "compute_mode": "override"})
+    settings_path.write_text(external.model_dump_json())
+    requested = saved.model_copy(update={"config": saved.config.model_copy(update={
+        "devices": [0, 1], "strategy": "ddp", "compute_mode": "override",
+    })})
+    written = store.save_stage("project-launch", requested)
+    assert written.config.devices == [0, 1]
+    assert written.config.strategy == "ddp"
+    assert json.loads(settings_path.read_text())["devices"] == [0, 1]
+    script = Path(saved.script_path)
+    script.write_text(script.read_text() + "\n# User SSH edit\n")
+    with pytest.raises(WorkspaceConflict, match="train.py"):
+        store.save_stage("project-launch", requested)
+    assert "# User SSH edit" in script.read_text()
 
 
 def test_legacy_inline_stages_migrate_without_overwriting_ssh_changes(tmp_path):

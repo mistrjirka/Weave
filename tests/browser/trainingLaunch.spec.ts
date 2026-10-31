@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { rmSync } from "node:fs";
+import { rmSync, readFileSync, writeFileSync } from "node:fs";
 import {
   detailSchema,
   stageSchema,
@@ -174,6 +174,13 @@ test("launch saves first, reports failures beside Start, and selects the new run
     await expect(
       page.getByRole("region", { name: "Run dashboard", exact: true }),
     ).toContainText("Previous run");
+    // Persisted browser drafts may hold an older launch-settings revision,
+    // even after a hard refresh. Start must apply the selected GUI settings.
+    const changedSettings = JSON.parse(
+      readFileSync(saved.config_path!, "utf8"),
+    );
+    changedSettings.use_gpu_tuning = false;
+    writeFileSync(saved.config_path!, JSON.stringify(changedSettings));
     mode = "success";
     await start.click();
     await expect
@@ -191,6 +198,7 @@ test("launch saves first, reports failures beside Start, and selects the new run
       await (await context.request.get(endpoint)).json(),
     );
     expect(diskStage.name).toBe("Edited before Start");
+    expect(diskStage.config.use_gpu_tuning).toBe(true);
     await expect(error).toHaveCount(0);
     await expect(
       page.getByRole("region", { name: "Run dashboard", exact: true }),
