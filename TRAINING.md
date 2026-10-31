@@ -4,11 +4,21 @@ Open a project and choose **Training**. Stages and run records are separate from
 
 ## Enable local execution
 
+The default `bash scripts/install.sh` installs CPU PyTorch in a separate environment and saves training settings. For an existing GPU environment, run:
+
 ```bash
-WEAVE_TRAINING_ENABLED=1 \
-WEAVE_TRAINING_PYTHON=/absolute/path/to/cuda-environment/bin/python \
-./scripts/start.sh
+bash scripts/install.sh --training-python /absolute/path/to/cuda-environment/bin/python
+bash scripts/start.sh
 ```
+
+On an already installed machine, save a selection without installing packages:
+
+```bash
+bash scripts/configure.sh --enable-training --training-python /absolute/path/to/cuda-environment/bin/python
+bash scripts/start.sh
+```
+
+See [installation and GPU setup](INSTALL.md). Environment variables such as `WEAVE_TRAINING_ENABLED` and `WEAVE_TRAINING_PYTHON` are optional overrides, not required setup steps.
 
 The web application remains on `0.0.0.0:8173`. Training opens without a token by default. Operators can opt into authentication by setting `WEAVE_TRAINING_TOKEN`; existing generated `operator.token` files are no longer used as an implicit access gate. When optional authentication is enabled, the browser uses an HttpOnly, same-site session cookie. Training APIs reject cross-origin browser requests. Editable scripts run with the server user's permissions; this is a trusted local workbench.
 
@@ -100,6 +110,8 @@ Background evaluation runs the user's validation/loss/sample hooks in a fresh Py
 Validation still briefly uses the training process to capture/save stable weights. Evaluations between regular checkpoints save weights only, without serializing the optimizer. Choose a separate GPU to avoid competing for training VRAM/compute; CPU validation still shares host CPU, RAM and disk bandwidth. The worker constructs a separate model and invokes `get_dataloaders`; hooks can check `config.evaluation_only` to return `(None, val_loader)` and avoid building the training loader. Optimizers and schedulers are not constructed in the evaluator. Model construction/data hooks must be repeatable. Separate-process execution avoids sharing a live CUDA model across threads, following [PyTorch multiprocessing guidance](https://docs.pytorch.org/docs/stable/notes/multiprocessing.html).
 
 The built-in recipes support FP32, CUDA FP16 with a gradient scaler, and supported BF16 hardware. Native BF16 is checked on selected GPUs. Split placement currently requires FP32. Capability/runtime errors appear in Logs. Existing loop/shared-weight semantics are retained.
+
+DDP does not automatically balance different GPU speeds. Each rank runs the same number of microbatches and synchronizes gradients before updating its model copy. For equal batches, two GPUs with 16 sequences each and two accumulation microbatches contribute 64 sequences per optimizer update. Your loader controls which records go to each rank; DDP itself does not shard inputs. Custom per-rank batch sizes can be used with correct weighting and matched synchronization counts, but Weave does not profile or automatically assign them. See [PyTorch DDP](https://docs.pytorch.org/docs/stable/generated/torch.nn.parallel.DistributedDataParallel.html). With heterogeneous GPUs, benchmark DDP against one training GPU plus asynchronous validation on the other. Splitting model layers is a separate placement strategy, also without automatic balancing.
 
 ## Chat and text completion from checkpoints
 

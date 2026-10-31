@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
-exec .venv/bin/uvicorn backend.app:app --host "${WEAVE_HOST:-0.0.0.0}" --port "${WEAVE_PORT:-8173}"
+if [[ ! -x .venv/bin/python ]]; then
+  echo 'Weave is not installed. Run: bash scripts/install.sh' >&2
+  exit 1
+fi
+exec .venv/bin/python -m backend.installation run "$@"

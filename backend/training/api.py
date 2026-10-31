@@ -294,7 +294,7 @@ actual training code when your model/data/optimizer are ready.
         ):
             raise HTTPException(
                 403,
-                "Local execution is disabled. Start the server with WEAVE_TRAINING_ENABLED=1.",
+                "Local execution is disabled. Run bash scripts/install.sh --training cpu, or configure an existing training Python, then restart Weave.",
             )
         try:
             try:

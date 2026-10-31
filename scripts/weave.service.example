@@ -1,0 +1,13 @@
+[Unit]
+Description=Weave neural network design workbench
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/absolute/path/to/Weave
+ExecStart=/bin/bash "/absolute/path/to/Weave/scripts/start.sh"
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

@@ -4,36 +4,28 @@ A self-hosted browser workbench for composing neural networks and exporting read
 
 ## Install and run
 
-Python 3.11+ and Node 20.19+ are required.
+Install [uv](https://docs.astral.sh/uv/getting-started/installation/), Node.js 20.19+ and npm. The installer uses uv to obtain Python 3.12, sync the committed lockfile, build the browser UI, and create a separate CPU training environment.
 
 ```bash
 git clone https://github.com/mistrjirka/Weave.git
 cd Weave
-python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
-npm ci
-npm run build
-bash scripts/configure.sh --projects-dir ~/shared/weave-projects
+bash scripts/install.sh
 bash scripts/start.sh
 ```
 
-For an existing installation, run `bash scripts/start.sh` from the repository root. The server listens on **0.0.0.0:8173** by default. Open **http://127.0.0.1:8173** on the server, or `http://YOUR_SERVER_IP:8173` from another device on the LAN.
+Open **http://127.0.0.1:8173**, or `http://YOUR_SERVER_IP:8173` on your LAN. The default address is **0.0.0.0:8173**. This is a trusted single-user workbench: browser-launched scripts run with the server user's permissions.
 
-SSH forwarding is also supported:
+Training is enabled by the default installer. For a smaller editor/export-only installation, use `bash scripts/install.sh --training none`. To use an existing CUDA/ROCm environment, use `bash scripts/install.sh --training-python /absolute/path/to/venv/bin/python`; the installer keeps that environment's PyTorch build. See [installation, GPU setup, updates and reboot startup](INSTALL.md).
 
-```bash
-ssh -L 8173:127.0.0.1:8173 USER@SERVER
-```
-
-Editable projects default to `~/shared/weave-projects`, separately from the installation and internal data. Project folders use readable lowercase names such as `hello-there`; same-name projects get a short ID suffix, and renaming a project renames its folder. Set the base during installation with `scripts/configure.sh --projects-dir /your/projects`, or override it with `WEAVE_PROJECTS_DIR`. The saved local setting is `.weave-config.json`; restart Weave after changing it. Existing project folders migrate to the named layout without overwriting collisions.
-
-Then open the localhost URL in that computer's browser. `WEAVE_HOST`, `WEAVE_PORT`, and `WEAVE_DATA` configure listening and storage. Set `WEAVE_HOST=127.0.0.1` for localhost-only access. This is a single-user service without built-in authentication.
-
-PyTorch is required to run exported models and the computational tests, but is not needed for graph editing or code generation:
+Settings persist in `.weave-config.json`, so restarting requires **no exported environment variables**:
 
 ```bash
-.venv/bin/pip install torch --index-url https://download.pytorch.org/whl/cpu
+bash scripts/configure.sh --projects-dir ~/shared/weave-projects --port 8173
+bash scripts/configure.sh --enable-training --training-python /path/to/training/bin/python
+bash scripts/start.sh
 ```
+
+Project folders have readable names such as `hello-there`; renaming a project renames its folder. Internal databases/run history default to `data/`, independently of editable projects. Environment variables remain optional deployment overrides; `.env.example` lists them, but `.env` files are not automatically loaded. Restart after configuration changes.
 
 For frontend development, run the API on port 8173 and `npm run dev` in another terminal. Vite serves port 5173 and proxies `/api` to the backend.
 

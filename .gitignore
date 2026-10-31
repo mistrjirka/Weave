@@ -20,3 +20,6 @@ playwright-report/
 
 # Local installation settings
 .weave-config.json
+
+# Optional managed CPU training environment
+.venv-training/

@@ -1,0 +1,24 @@
+[project]
+name = "weave-neural-graph-studio"
+version = "0.1.0"
+description = "Self-hosted neural network graph editor and PyTorch training workbench"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115,<1",
+    "uvicorn>=0.34,<1",
+    "python-multipart>=0.0.20",
+    "transformers>=4.48,<5",
+    "tokenizers>=0.21,<0.23",
+    "sentencepiece>=0.2",
+    "black>=25,<27",
+    "nvidia-ml-py>=12,<14",
+    "psutil>=6,<8",
+    "jsonschema>=4,<5",
+    "pyarrow>=18,<27",
+]
+
+[dependency-groups]
+dev = ["pytest>=8,<9", "httpx>=0.28,<1"]
+
+[tool.uv]
+package = false

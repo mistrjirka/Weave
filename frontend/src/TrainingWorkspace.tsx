@@ -750,8 +750,9 @@ export function TrainingWorkspace({ project }: { project: Project }) {
         </p>
         {!capabilities.enabled && (
           <p>
-            Local launch is disabled. Enable it with{" "}
-            <code>WEAVE_TRAINING_ENABLED=1</code> when starting Weave.
+            Local launch is disabled. Run{" "}
+            <code>bash scripts/install.sh --training cpu</code> on the server,
+            or configure an existing training Python, then restart Weave.
           </p>
         )}
         {error && <p role="alert">{error}</p>}
@@ -1930,8 +1931,10 @@ export function TrainingWorkspace({ project }: { project: Project }) {
               </footer>
               {!capabilities.enabled && (
                 <p className="training-alert">
-                  Local execution is disabled. Set WEAVE_TRAINING_ENABLED=1 when
-                  starting Weave.
+                  Local execution is disabled. Run{" "}
+                  <code>bash scripts/install.sh --training cpu</code> on the
+                  server, or select an existing environment with
+                  scripts/configure.sh, then restart Weave.
                 </p>
               )}
             </section>

@@ -1,0 +1,7 @@
+# Install a CPU/CUDA/ROCm PyTorch build separately for your hardware.
+transformers>=4.48,<5
+tokenizers>=0.21,<0.23
+sentencepiece>=0.2
+numpy>=1.26,<3
+jsonschema>=4,<5
+pyarrow>=18,<27
