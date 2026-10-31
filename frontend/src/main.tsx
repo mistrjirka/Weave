@@ -50,6 +50,7 @@ import {
   GitBranch,
   Layers3,
   MessageSquareText,
+  Menu,
   LayoutGrid,
   Columns2,
   Tags,
@@ -1120,6 +1121,7 @@ function Workbench({
   const [mobilePanel, setMobilePanel] = useState<string | null>(
     initialLocation.panel,
   );
+  const sidebarMenuButton = useRef<HTMLButtonElement>(null);
   const [splitView, setSplitView] = useState(initialLocation.split);
   const [splitRatio, setSplitRatio] = useState(initialLocation.ratio);
   const [referenceChoice, setReferenceChoice] = useState(
@@ -1602,6 +1604,8 @@ function Workbench({
         return;
       if (e.key === "Escape") {
         setMobilePanel(null);
+        if (document.activeElement?.closest("#workspace-sidebar"))
+          sidebarMenuButton.current?.focus();
         return;
       }
       if (
@@ -2388,17 +2392,24 @@ function Workbench({
         <button
           className="drawer-backdrop"
           aria-label="Close side panel"
-          onClick={() => setMobilePanel(null)}
+          onClick={() => {
+            setMobilePanel(null);
+            if (mobilePanel === "library") sidebarMenuButton.current?.focus();
+          }}
         />
       )}
       <aside
+        id="workspace-sidebar"
         className={"sidebar " + (mobilePanel === "library" ? "is-open" : "")}
         aria-label="Component library"
       >
         <button
           className="drawer-close"
           aria-label="Close library"
-          onClick={() => setMobilePanel(null)}
+          onClick={() => {
+            setMobilePanel(null);
+            sidebarMenuButton.current?.focus();
+          }}
         >
           <X size={20} />
         </button>
@@ -2427,11 +2438,21 @@ function Workbench({
           <div className="training-sidebar-context">
             <p>Model workspace</p>
             <strong>{project.name}</strong>
-            <button onClick={() => setTab("graph")}>
+            <button
+              onClick={() => {
+                setTab("graph");
+                setMobilePanel(null);
+              }}
+            >
               <Workflow size={15} aria-hidden="true" />
               Architecture
             </button>
-            <button onClick={() => setTab("code")}>
+            <button
+              onClick={() => {
+                setTab("code");
+                setMobilePanel(null);
+              }}
+            >
               <Code2 size={15} aria-hidden="true" />
               PyTorch code
             </button>
@@ -2672,6 +2693,25 @@ function Workbench({
       </aside>
       <main className="main-workspace" id="workspace" tabIndex={-1}>
         <header className="topbar">
+          <button
+            ref={sidebarMenuButton}
+            className="mobile-sidebar-menu"
+            aria-label="Open sidebar"
+            aria-controls="workspace-sidebar"
+            aria-expanded={mobilePanel === "library"}
+            onClick={() => {
+              setMobilePanel(mobilePanel === "library" ? null : "library");
+              requestAnimationFrame(() =>
+                document
+                  .querySelector<HTMLButtonElement>(
+                    "#workspace-sidebar .drawer-close",
+                  )
+                  ?.focus(),
+              );
+            }}
+          >
+            <Menu size={20} aria-hidden="true" />
+          </button>
           <div className="project-heading">
             <span className="project-icon">
               <GitBranch size={18} />

@@ -5065,3 +5065,23 @@ textarea:focus-visible {
     justify-content: center;
   }
 }
+
+.mobile-sidebar-menu {
+  display: none;
+}
+@media (max-width: 760px) {
+  .topbar .mobile-sidebar-menu {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 36px;
+    width: 36px;
+    min-height: 44px;
+    padding: 0;
+    margin-right: 6px;
+    color: var(--theme-text, #263b30);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    background: var(--theme-raised, #fff);
+  }
+}

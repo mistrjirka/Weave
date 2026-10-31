@@ -27,6 +27,7 @@ import { TrainingMessages } from "./TrainingMessages";
 import { ValidationStatus } from "./ValidationStatus";
 import { GeneratedExamples } from "./GeneratedExamples";
 import { RunValidationControls } from "./RunValidationControls";
+import { CopyTrainingScript } from "./CopyTrainingScript";
 import { RunOverview } from "./RunOverview";
 import { ExecutionStatus } from "./ExecutionStatus";
 import { TrainingCounters } from "./TrainingCounters";
@@ -1390,6 +1391,16 @@ export function TrainingWorkspace({ project }: { project: Project }) {
                       >
                         Reload server files
                       </button>
+                      <CopyTrainingScript
+                        projectId={project.id}
+                        disabled={busy}
+                        onCopy={(script, source) => {
+                          updateStage({ script });
+                          setNotice(
+                            `Copied script from ${source} into the editor. Review it, then Save file.`,
+                          );
+                        }}
+                      />
                       {!codeFirst && (
                         <label>
                           Insert reporting hook

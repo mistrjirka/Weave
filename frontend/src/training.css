@@ -1530,3 +1530,27 @@ html:is([data-theme="dark"], [data-theme="black"]) {
   max-width: 235px;
   min-height: 44px;
 }
+.training-script-copy-dialog .training-history-content > label {
+  display: grid;
+  gap: 6px;
+  margin-top: 12px;
+}
+.training-script-copy-dialog select {
+  width: 100%;
+  min-width: 0;
+}
+.training-script-copy-path {
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
+.training-script-copy-preview {
+  max-height: 260px;
+  overflow: auto;
+  padding: 12px;
+  background: var(--theme-input, #f4f6f1);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font-size: 13px;
+  line-height: 1.6;
+  white-space: pre;
+}
