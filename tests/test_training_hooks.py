@@ -69,7 +69,7 @@ def filled_starter(data, **settings):
     ).replace("tokenizer=load_tokenizer,", "tokenizer=None,")
 
 
-def make_hook_run(tmp_path, script=None):
+def make_hook_run(tmp_path, script=None, config=None):
     data = tmp_path / "rows.jsonl"
     data.write_text(
         "\n".join(json.dumps({"input_ids": [i % 7 + 1] * 17}) for i in range(12))
@@ -82,7 +82,7 @@ def make_hook_run(tmp_path, script=None):
     stage = Stage(
         id="hooks",
         name="Hooks",
-        config=TrainingConfig(execution="monitor"),
+        config=config or TrainingConfig(execution="monitor"),
         script=script,
     )
     stage = service.workspaces.save_stage(project["id"], stage)
@@ -635,6 +635,142 @@ def test_async_validation_is_independent_of_cpu_ddp_and_gui_override(tmp_path):
         for e in records
         if e["kind"] == "warning" and e["payload"].get("code") == "evaluation-failed"
     ]
+
+
+def test_gui_compute_override_reaches_runtime_and_preserves_user_script(tmp_path):
+    script = textwrap.dedent(PARALLEL_SCRIPT).replace("STRATEGY", repr("auto"))
+    # This script would select a nonexistent GPU without the launch override.
+    script = script.replace("devices=[]", "devices=[99], precision='fp16'")
+    script = script.replace("eval_every=2", "eval_every=1")
+    script = script.replace(
+        "return DataLoader(dataset, batch_size=1 if parallel else 2, sampler=sampler), None",
+        "loader = DataLoader(dataset, batch_size=1 if parallel else 2, sampler=sampler)\n    return loader, loader",
+    )
+    config = TrainingConfig(
+        execution="monitor",
+        compute_mode="override",
+        devices=[],
+        strategy="single",
+        precision="fp32",
+        evaluation_mode="async",
+        evaluation_device="cpu",
+        use_gpu_tuning=False,
+    )
+    service, directory, stage = make_hook_run(tmp_path, script, config)
+    assert Path(stage.script_path).read_text() == script
+    assert (directory / "train.py").read_text() == script
+    launch = json.loads((directory / "weave_support/launch.json").read_text())
+    assert launch["compute_mode"] == "override"
+    assert launch["devices"] == []
+    assert launch["precision"] == "fp32"
+    execute(directory)
+    checkpoint = events(directory, kind="checkpoint")[-1]
+    state = torch.load(
+        directory / checkpoint["payload"]["path"],
+        weights_only=True,
+        map_location="cpu",
+    )
+    assert state["config"]["devices"] == []
+    assert state["config"]["strategy"] == "single"
+    assert state["config"]["precision"] == "fp32"
+    assert state["config"]["use_gpu_tuning"] is False
+    assert any(
+        row["channel"] == "evaluation" and row["kind"] == "metrics"
+        for row in events(directory)
+    )
+
+
+def test_script_device_settings_remain_authoritative_without_override(tmp_path):
+    script = textwrap.dedent(PARALLEL_SCRIPT).replace("STRATEGY", repr("single"))
+    _, directory, _ = make_hook_run(
+        tmp_path,
+        script,
+        TrainingConfig(execution="monitor", devices=[0, 1], strategy="ddp"),
+    )
+    launch = json.loads((directory / "weave_support/launch.json").read_text())
+    assert launch["compute_mode"] == "script"
+    assert launch["devices"] == []
+    assert launch["strategy"] == "single"
+
+
+@pytest.mark.skipif(
+    not os.environ.get("WEAVE_CUDA_PYTHON"), reason="Requires two CUDA GPUs"
+)
+@pytest.mark.parametrize("strategy, precision", [("ddp", "fp16"), ("split", "fp32")])
+def test_gui_multi_gpu_override_and_async_cpu_validation_on_real_gpus(
+    tmp_path, strategy, precision
+):
+    script = textwrap.dedent(PARALLEL_SCRIPT).replace("STRATEGY", repr("single"))
+    script = script.replace("devices=[]", "devices=[99]")
+    script = script.replace("eval_every=2", "eval_every=1")
+    script = script.replace(
+        "return DataLoader(dataset, batch_size=1 if parallel else 2, sampler=sampler), None",
+        "loader = DataLoader(dataset, batch_size=1 if parallel else 2, sampler=sampler)\n    return loader, loader",
+    )
+    config = TrainingConfig(
+        execution="monitor",
+        compute_mode="override",
+        devices=[0, 1],
+        strategy=strategy,
+        precision=precision,
+        placement=(
+            {"embedding": 0, "shared_transformer": 1, "vocabulary": 0}
+            if strategy == "split"
+            else {}
+        ),
+        evaluation_mode="async",
+        evaluation_device="cpu",
+    )
+    _, directory, stage = make_hook_run(tmp_path, script, config)
+    result = subprocess.run(
+        [os.environ["WEAVE_CUDA_PYTHON"], "train.py"],
+        cwd=directory,
+        env={
+            **os.environ,
+            "WEAVE_RUN_DIR": str(directory),
+            "USE_TORCH": "1",
+            "CUDA_DEVICE_ORDER": "PCI_BUS_ID",
+        },
+        capture_output=True,
+        text=True,
+        timeout=180,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert Path(stage.script_path).read_text() == script
+    checkpoint = events(directory, kind="checkpoint")[-1]
+    state = torch.load(
+        directory / checkpoint["payload"]["path"],
+        weights_only=True,
+        map_location="cpu",
+    )
+    assert state["config"]["devices"] == [0, 1]
+    assert state["config"]["strategy"] == strategy
+    assert state["config"]["precision"] == precision
+    assert any(
+        row["channel"] == "evaluation" and row["kind"] == "metrics"
+        for row in events(directory)
+    )
+
+
+@pytest.mark.parametrize(
+    "settings, message",
+    [
+        ({"devices": [0], "strategy": "ddp"}, "at least two"),
+        ({"devices": [0, 0], "strategy": "ddp"}, "unique"),
+        ({"devices": [0, 1], "strategy": "split", "precision": "fp16"}, "FP32"),
+        ({"devices": [0, 1], "strategy": "split"}, "matching saved FP32"),
+    ],
+)
+def test_invalid_gui_compute_override_is_rejected_before_launch(
+    tmp_path, settings, message
+):
+    script = textwrap.dedent(PARALLEL_SCRIPT).replace("STRATEGY", repr("single"))
+    with pytest.raises(ValueError, match=message):
+        make_hook_run(
+            tmp_path,
+            script,
+            TrainingConfig(execution="monitor", compute_mode="override", **settings),
+        )
 
 
 @pytest.mark.skipif(

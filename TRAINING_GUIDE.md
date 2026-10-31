@@ -15,7 +15,7 @@ This guide describes the optional helpers shipped beside every generated model. 
 | `weave_support/cache_identity.py` | Stable identities for your own cache implementation | Weave |
 | `weave_support/data_stream.py` | Optional packed stream with a restorable cursor | Weave |
 | `weave_support/weave_training.py` | Reporting for a custom loop | Weave |
-| `weave_support/launch.json` | Generated launch/checkpoint context and explicit GUI validation override | Weave |
+| `weave_support/launch.json` | Generated launch/checkpoint context and explicit GUI compute/validation overrides | Weave |
 
 Save your stage to refresh its support files. Generated support can be inspected, but keep custom helpers outside that folder. Starting a run freezes another copy of the script, local helpers, graph, model and tokenizer. Editing the stage does not change that running copy. Cache files should live in a persistent location shared by stages/runs, rather than inside each frozen run directory.
 
@@ -72,6 +72,8 @@ config = TrainingConfig(
 | `find_unused_parameters` | Optional DDP override, useful for some routed/conditional graphs. |
 
 An unsized stream can end an epoch at StopIteration. The starter's cosine scheduler still needs `len(train_loader)` or an explicit optimizer-update budget. A finite stream must be repeatable for multiple epochs. A random sampler run for a token budget does not guarantee each document is visited once.
+
+In **Launch settings → Training device settings**, choose **Use train.py settings** (the default) or **Use GUI overrides**. An override selects single-device, DDP, or split training, devices, precision, and optional block placement. It applies before worker startup and data hooks, and is saved in the run's `weave_support/launch.json`; your Python source is unchanged. Batch sizes and schedules remain owned by your script/data loader. Split training currently requires FP32 and either complete manual placement or a matching saved tuning profile. Validation execution is independent: select **Asynchronous** and **CPU** to keep validation off the training GPUs. Your data hook still needs to return a validation loader. These settings affect new launches, not running jobs. Exact resume still requires a compatible training configuration; use a new stage from weights when changing the training topology.
 
 ### Data hook
 

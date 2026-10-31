@@ -103,6 +103,46 @@ test("code-owned configuration, training hooks, provenance and snapshots", async
     await page
       .getByRole("button", { name: "Launch settings", exact: true })
       .click();
+    const computeMode = page.getByRole("combobox", {
+      name: "Training device settings",
+    });
+    await expect(computeMode).toHaveValue("script");
+    await expect(
+      page.getByRole("combobox", { name: "GPU strategy" }),
+    ).toHaveCount(0);
+    await computeMode.selectOption("override");
+    const strategy = page.getByRole("combobox", { name: "GPU strategy" });
+    await expect(strategy).toBeVisible();
+    if (
+      (await strategy
+        .locator('option[value="ddp"]')
+        .getAttribute("disabled")) === null
+    ) {
+      await strategy.selectOption("ddp");
+      const devices = page.getByRole("group", { name: "Training devices" });
+      await devices.getByRole("checkbox", { name: /GPU 0/ }).check();
+      await devices.getByRole("checkbox", { name: /GPU 1/ }).check();
+      await expect(
+        devices.getByRole("checkbox", { name: /GPU 0/ }),
+      ).toBeChecked();
+      await expect(
+        devices.getByRole("checkbox", { name: /GPU 1/ }),
+      ).toBeChecked();
+      await strategy.selectOption("split");
+      await expect(
+        page.getByRole("combobox", { name: "Precision", exact: true }),
+      ).toHaveValue("fp32");
+      await expect(
+        page
+          .getByRole("combobox", { name: "Precision", exact: true })
+          .locator('option[value="fp16"]'),
+      ).toHaveAttribute("disabled", "");
+    }
+    await strategy.selectOption("single");
+    await page
+      .getByRole("group", { name: "Training devices" })
+      .getByRole("checkbox", { name: "CPU", exact: true })
+      .check();
     await expect(page.getByRole("combobox", { name: "Run on" })).toBeVisible();
     await expect(
       page.getByRole("combobox", { name: "GPU strategy", exact: true }),
@@ -193,6 +233,10 @@ test("code-owned configuration, training hooks, provenance and snapshots", async
       await context.request.get(`/api/training/plans/${id}`)
     ).json();
     const saved = stageSchema.parse(plan.stages[0]);
+    expect(saved.config.compute_mode).toBe("override");
+    expect(saved.config.devices).toEqual([]);
+    expect(saved.config.evaluation_mode).toBe("async");
+    expect(saved.config.evaluation_device).toBe("cpu");
     projectPath = saved.project_path ?? null;
     expect(projectPath).toContain("code-hooks-browser-");
     expect(saved.script_path && existsSync(saved.script_path)).toBeTruthy();

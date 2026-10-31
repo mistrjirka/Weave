@@ -206,12 +206,22 @@ class Trainer:
         cfg = self.config
         context_path = Path(__file__).parent / "launch.json"
         launch = json.loads(context_path.read_text()) if context_path.is_file() else {}
+        if "use_gpu_tuning" in launch:
+            cfg.use_gpu_tuning = launch["use_gpu_tuning"]
+        if launch.get("compute_mode") == "override":
+            cfg.strategy = launch["strategy"]
+            cfg.devices = list(launch["devices"])
+            cfg.precision = launch["precision"]
+            cfg.placement = dict(launch.get("placement", {}))
         mode = launch.get("evaluation_mode", "script")
         if mode != "script":
             cfg.async_evaluation = mode == "async"
             cfg.evaluation_device = launch.get("evaluation_device")
             if mode == "inline" and cfg.strategy == "train_eval":
                 cfg.strategy = "single"
+        # Validate the effective settings before spawning workers or calling user
+        # data hooks. launch.json controls the frozen run, never the source script.
+        cfg.__post_init__()
         self.tuning_profile, self.tuning_note = (None, "")
         if not args.evaluate:
             self.tuning_profile, self.tuning_note = load_tuning(

@@ -11,6 +11,7 @@ export const trainingConfigSchema = z.object({
     .union([z.number().int().nonnegative(), z.literal("cpu")])
     .nullable(),
   evaluation_mode: z.enum(["script", "inline", "async"]).default("script"),
+  compute_mode: z.enum(["script", "override"]).default("script"),
   placement: z.record(z.string(), z.number()),
   use_gpu_tuning: z.boolean().default(true),
   dataset: z.string(),

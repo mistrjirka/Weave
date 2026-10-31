@@ -1163,7 +1163,7 @@ export function TrainingWorkspace({ project }: { project: Project }) {
                 <>
                   <p className="training-muted">
                     {codeFirst
-                      ? "Configure training in train.py. Launch settings choose the interpreter, starting checkpoint and optional validation override. Training devices, precision and the batch schedule stay in the script."
+                      ? "Configure training in train.py. Launch settings choose the interpreter, starting checkpoint and optional validation override. Optional GUI overrides choose training devices and precision without editing your script. The batch schedule stays in Python."
                       : "Optional starter values for legacy config.json recipes. Custom Python remains editable."}
                   </p>
                   <div className="training-form-grid">
@@ -1455,7 +1455,31 @@ export function TrainingWorkspace({ project }: { project: Project }) {
                         dependencies installed.
                       </small>
                     </label>
-                    {!codeFirst && (
+                    {codeFirst && (
+                      <label>
+                        Training device settings
+                        <select
+                          value={config.compute_mode}
+                          onChange={(e) =>
+                            setting(
+                              "compute_mode",
+                              z
+                                .enum(["script", "override"])
+                                .parse(e.target.value),
+                            )
+                          }
+                        >
+                          <option value="script">Use train.py settings</option>
+                          <option value="override">Use GUI overrides</option>
+                        </select>
+                        <small>
+                          Applies to the next launch. Your train.py stays
+                          unchanged, including its data loader and batch
+                          schedule.
+                        </small>
+                      </label>
+                    )}
+                    {(!codeFirst || config.compute_mode === "override") && (
                       <>
                         <label>
                           GPU strategy
@@ -1501,12 +1525,14 @@ export function TrainingWorkspace({ project }: { project: Project }) {
                             >
                               Split model · top-level block placement
                             </option>
-                            <option
-                              value="train_eval"
-                              disabled={gpus.length < 2}
-                            >
-                              Training GPU + evaluation GPU
-                            </option>
+                            {!codeFirst && (
+                              <option
+                                value="train_eval"
+                                disabled={gpus.length < 2}
+                              >
+                                Training GPU + evaluation GPU
+                              </option>
+                            )}
                           </select>
                           <small>
                             {config.strategy === "ddp"
@@ -1550,6 +1576,167 @@ export function TrainingWorkspace({ project }: { project: Project }) {
                       </>
                     )}
                   </div>
+                  {codeFirst && config.compute_mode === "script" && (
+                    <details>
+                      <summary>
+                        Available GPUs · set devices in train.py
+                      </summary>
+                      {gpus.map((gpu) => (
+                        <p key={gpu.uuid}>
+                          GPU {gpu.index}: {gpu.name} ·{" "}
+                          {gpu.memory_total_mb === null
+                            ? "Memory unavailable"
+                            : `${(gpu.memory_total_mb / 1024).toFixed(1)} GB total`}
+                        </p>
+                      ))}
+                      {!gpus.length && (
+                        <p>No GPUs detected by the Weave host.</p>
+                      )}
+                    </details>
+                  )}
+                  {(!codeFirst || config.compute_mode === "override") && (
+                    <>
+                      <fieldset className="training-devices">
+                        <legend>Training devices</legend>
+                        <label>
+                          <input
+                            type="checkbox"
+                            checked={!config.devices.length}
+                            onChange={() =>
+                              updateStage({
+                                config: {
+                                  ...config,
+                                  devices: [],
+                                  strategy: "single",
+                                  precision: "fp32",
+                                },
+                              })
+                            }
+                          />
+                          CPU
+                        </label>
+                        {gpus.map((gpu) => (
+                          <label key={gpu.uuid}>
+                            <input
+                              type="checkbox"
+                              checked={config.devices.includes(gpu.index)}
+                              onChange={(e) =>
+                                setting(
+                                  "devices",
+                                  e.target.checked
+                                    ? config.strategy === "single" ||
+                                      config.strategy === "train_eval"
+                                      ? [gpu.index]
+                                      : [...config.devices, gpu.index]
+                                    : config.devices.filter(
+                                        (i) => i !== gpu.index,
+                                      ),
+                                )
+                              }
+                            />
+                            <span>
+                              GPU {gpu.index} · {gpu.name}
+                              <small>
+                                {gpu.memory_total_mb === null
+                                  ? "Memory unavailable"
+                                  : `${(gpu.memory_total_mb / 1024).toFixed(1)} GB total · ${((gpu.memory_used_mb ?? 0) / 1024).toFixed(1)} GB used`}
+                              </small>
+                            </span>
+                          </label>
+                        ))}
+                      </fieldset>
+                      {codeFirst && config.strategy === "ddp" && (
+                        <p className="training-muted">
+                          Each GPU runs a full model copy. Your data loader must
+                          shard data between ranks and provide matched update
+                          counts. Custom loaders still own batch sizes; saved
+                          unequal-batch tuning requires their explicit opt-in.
+                        </p>
+                      )}
+                      {config.strategy === "train_eval" && (
+                        <label>
+                          Evaluation GPU
+                          <select
+                            value={config.evaluation_device ?? ""}
+                            onChange={(e) =>
+                              setting(
+                                "evaluation_device",
+                                e.target.value === ""
+                                  ? null
+                                  : Number(e.target.value),
+                              )
+                            }
+                          >
+                            <option value="">Select a separate GPU…</option>
+                            {gpus.map((gpu) => (
+                              <option
+                                key={gpu.index}
+                                value={gpu.index}
+                                disabled={config.devices.includes(gpu.index)}
+                              >
+                                GPU {gpu.index} · {gpu.name}
+                              </option>
+                            ))}
+                          </select>
+                          <small>
+                            Evaluates completed checkpoints; the queue keeps the
+                            newest pending checkpoint.
+                          </small>
+                        </label>
+                      )}
+                      {config.strategy === "split" && (
+                        <div className="training-form-grid">
+                          {codeFirst && (
+                            <p className="training-muted">
+                              Leave every block unassigned to use a matching
+                              saved split profile, or assign every block
+                              manually. Split training currently requires FP32.
+                              DDP uses a full model copy on each GPU; split
+                              training divides the model's blocks.
+                            </p>
+                          )}
+                          {model?.modules.map((name) => (
+                            <label key={name}>
+                              {name}
+                              <select
+                                value={config.placement[name] ?? ""}
+                                onChange={(e) =>
+                                  setting(
+                                    "placement",
+                                    Object.fromEntries(
+                                      Object.entries({
+                                        ...config.placement,
+                                        [name]:
+                                          e.target.value === ""
+                                            ? undefined
+                                            : Number(e.target.value),
+                                      }).filter(
+                                        (entry): entry is [string, number] =>
+                                          entry[1] !== undefined,
+                                      ),
+                                    ),
+                                  )
+                                }
+                              >
+                                <option value="">Assign GPU…</option>
+                                {config.devices.map((index) => (
+                                  <option key={index} value={index}>
+                                    GPU {index}
+                                  </option>
+                                ))}
+                              </select>
+                            </label>
+                          ))}
+                        </div>
+                      )}
+                      {!model?.split_supported &&
+                        model?.split_reasons.map((reason) => (
+                          <p className="training-muted" key={reason}>
+                            Split placement: {reason}
+                          </p>
+                        ))}
+                    </>
+                  )}
                   {codeFirst && (
                     <div className="training-form-grid">
                       <label>
@@ -1624,137 +1811,8 @@ export function TrainingWorkspace({ project }: { project: Project }) {
                       </label>
                     </div>
                   )}
-                  {codeFirst && (
-                    <details>
-                      <summary>
-                        Available GPUs · set devices in train.py
-                      </summary>
-                      {gpus.map((gpu) => (
-                        <p key={gpu.uuid}>
-                          GPU {gpu.index}: {gpu.name} ·{" "}
-                          {gpu.memory_total_mb === null
-                            ? "Memory unavailable"
-                            : `${(gpu.memory_total_mb / 1024).toFixed(1)} GB total`}
-                        </p>
-                      ))}
-                      {!gpus.length && (
-                        <p>No GPUs detected by the Weave host.</p>
-                      )}
-                    </details>
-                  )}
                   {!codeFirst && (
                     <>
-                      <fieldset className="training-devices">
-                        <legend>Training devices</legend>
-                        <label>
-                          <input
-                            type="checkbox"
-                            checked={!config.devices.length}
-                            onChange={() =>
-                              updateStage({
-                                config: {
-                                  ...config,
-                                  devices: [],
-                                  strategy: "single",
-                                  precision: "fp32",
-                                },
-                              })
-                            }
-                          />
-                          CPU
-                        </label>
-                        {gpus.map((gpu) => (
-                          <label key={gpu.uuid}>
-                            <input
-                              type="checkbox"
-                              checked={config.devices.includes(gpu.index)}
-                              onChange={(e) =>
-                                setting(
-                                  "devices",
-                                  e.target.checked
-                                    ? config.strategy === "single" ||
-                                      config.strategy === "train_eval"
-                                      ? [gpu.index]
-                                      : [...config.devices, gpu.index]
-                                    : config.devices.filter(
-                                        (i) => i !== gpu.index,
-                                      ),
-                                )
-                              }
-                            />
-                            <span>
-                              GPU {gpu.index} · {gpu.name}
-                              <small>
-                                {gpu.memory_total_mb === null
-                                  ? "Memory unavailable"
-                                  : `${(gpu.memory_total_mb / 1024).toFixed(1)} GB total · ${((gpu.memory_used_mb ?? 0) / 1024).toFixed(1)} GB used`}
-                              </small>
-                            </span>
-                          </label>
-                        ))}
-                      </fieldset>
-                      {config.strategy === "train_eval" && (
-                        <label>
-                          Evaluation GPU
-                          <select
-                            value={config.evaluation_device ?? ""}
-                            onChange={(e) =>
-                              setting(
-                                "evaluation_device",
-                                e.target.value === ""
-                                  ? null
-                                  : Number(e.target.value),
-                              )
-                            }
-                          >
-                            <option value="">Select a separate GPU…</option>
-                            {gpus.map((gpu) => (
-                              <option
-                                key={gpu.index}
-                                value={gpu.index}
-                                disabled={config.devices.includes(gpu.index)}
-                              >
-                                GPU {gpu.index} · {gpu.name}
-                              </option>
-                            ))}
-                          </select>
-                          <small>
-                            Evaluates completed checkpoints; the queue keeps the
-                            newest pending checkpoint.
-                          </small>
-                        </label>
-                      )}
-                      {config.strategy === "split" && (
-                        <div className="training-form-grid">
-                          {model?.modules.map((name) => (
-                            <label key={name}>
-                              {name}
-                              <select
-                                value={config.placement[name] ?? ""}
-                                onChange={(e) =>
-                                  setting("placement", {
-                                    ...config.placement,
-                                    [name]: Number(e.target.value),
-                                  })
-                                }
-                              >
-                                <option value="">Assign GPU…</option>
-                                {config.devices.map((index) => (
-                                  <option key={index} value={index}>
-                                    GPU {index}
-                                  </option>
-                                ))}
-                              </select>
-                            </label>
-                          ))}
-                        </div>
-                      )}
-                      {!model?.split_supported &&
-                        model?.split_reasons.map((reason) => (
-                          <p className="training-muted" key={reason}>
-                            Split placement: {reason}
-                          </p>
-                        ))}
                       <details>
                         <summary>Optimizer, schedule, and evaluation</summary>
                         <label className="training-inline-check">
@@ -1918,7 +1976,11 @@ export function TrainingWorkspace({ project }: { project: Project }) {
               <footer className="training-launch">
                 <span>
                   {codeFirst ? (
-                    "Devices and batch schedule: train.py"
+                    config.compute_mode === "override" ? (
+                      `${config.strategy.toUpperCase()} · ${config.devices.length ? config.devices.map((index) => `GPU ${index}`).join(", ") : "CPU"} · batch schedule: train.py`
+                    ) : (
+                      "Devices and batch schedule: train.py"
+                    )
                   ) : (
                     <>
                       {config.devices.length

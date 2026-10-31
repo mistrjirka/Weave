@@ -36,6 +36,7 @@ class TrainingConfig(BaseModel):
     devices: list[int] = Field(default_factory=list, max_length=32)
     evaluation_device: int | Literal["cpu"] | None = None
     evaluation_mode: Literal["script", "inline", "async"] = "script"
+    compute_mode: Literal["script", "override"] = "script"
     placement: dict[str, int] = Field(default_factory=dict)
     use_gpu_tuning: bool = True
     dataset: str = ""
@@ -492,16 +493,27 @@ class TrainingService:
                     "parent_run",
                     "parent_checkpoint",
                     "evaluation_mode",
+                    "compute_mode",
                     "use_gpu_tuning",
                 }
             )
             if stage.config.evaluation_mode != "script":
                 controls["evaluation_device"] = stage.config.evaluation_device
+            if stage.config.compute_mode == "override":
+                controls.update(
+                    stage.config.model_dump(
+                        include={"strategy", "devices", "precision", "placement"}
+                    )
+                )
             stage = stage.model_copy(
                 update={"config": TrainingConfig(**{**settings, **controls})}
             )
         if not code_first:
             stage.config.validate_execution()
+        elif stage.config.compute_mode == "override":
+            stage.config.validate_execution()
+            if stage.config.strategy == "split" and stage.config.precision != "fp32":
+                raise ValueError("Split training currently requires FP32 in Weave.")
         elif stage.config.start_mode != "random" and not (
             stage.config.parent_run and stage.config.parent_checkpoint
         ):
@@ -718,6 +730,27 @@ class TrainingService:
             profile = matching_profile(self.root, project, stage.config)
             if profile:
                 config["gpu_tuning"] = profile
+            if (
+                code_first
+                and config["compute_mode"] == "override"
+                and config["strategy"] == "split"
+            ):
+                if not config["placement"] and not profile:
+                    raise ValueError(
+                        "Split training needs a matching saved FP32 tuning profile "
+                        "or a GPU assignment for every top-level block."
+                    )
+                if config["placement"] and (
+                    set(config["placement"]) != set(metadata["modules"])
+                    or any(
+                        device not in config["devices"]
+                        for device in config["placement"].values()
+                    )
+                ):
+                    raise ValueError(
+                        "Assign every top-level block to a selected training GPU, "
+                        "or clear all assignments to use saved tuning."
+                    )
             (directory / "train.py").write_text(stage.script)
 
             atomic_json(directory / "config.json", config)
