@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import type { Project } from "./types";
 import { TrainingChart } from "./TrainingChart";
+import { CheckpointChat } from "./CheckpointChat";
 import { newId, copyText } from "./ui";
 import type { PythonEditorHandle } from "./PythonEditor";
 const PythonEditor = lazy(() =>
@@ -118,7 +119,7 @@ export function TrainingWorkspace({ project }: { project: Project }) {
   const [loaded, setLoaded] = useState(false);
   const [editor, setEditor] = useState<"settings" | "script">("script");
   const [dashboard, setDashboard] = useState<
-    "metrics" | "samples" | "hardware" | "logs" | "checkpoints"
+    "metrics" | "samples" | "hardware" | "logs" | "checkpoints" | "chat"
   >("metrics");
   const [axis, setAxis] = useState<"step" | "tokens" | "time">("step");
   const [smooth, setSmooth] = useState(false);
@@ -2119,6 +2120,7 @@ export function TrainingWorkspace({ project }: { project: Project }) {
                     "hardware",
                     "logs",
                     "checkpoints",
+                    "chat",
                   ] as const
                 ).map((tab) => (
                   <button
@@ -2133,6 +2135,7 @@ export function TrainingWorkspace({ project }: { project: Project }) {
                         hardware: "Hardware",
                         logs: "Logs",
                         checkpoints: "Checkpoints & snapshots",
+                        chat: "Chat & text completion",
                       }[tab]
                     }
                   </button>
@@ -2256,6 +2259,14 @@ export function TrainingWorkspace({ project }: { project: Project }) {
                     execute shell text.
                   </p>
                 </details>
+              )}
+              {dashboard === "chat" && (
+                <CheckpointChat
+                  key={runId}
+                  runId={runId}
+                  gpus={gpus}
+                  enabled={capabilities.enabled}
+                />
               )}
               {dashboard === "metrics" && (
                 <>

@@ -856,3 +856,61 @@
   font-variant-numeric: tabular-nums;
   font-weight: 600;
 }
+
+.checkpoint-chat {
+  display: grid;
+  gap: 1rem;
+  min-width: 0;
+}
+.checkpoint-chat > h3,
+.checkpoint-chat > p {
+  margin: 0;
+}
+.checkpoint-chat-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+}
+.checkpoint-chat-actions small {
+  color: var(--theme-muted, #64746b);
+}
+.checkpoint-chat-transcript {
+  display: grid;
+  align-content: start;
+  gap: 1rem;
+  max-height: 32rem;
+  min-height: 8rem;
+  overflow: auto;
+  padding: 1rem;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+.checkpoint-chat-message {
+  padding: 1rem;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  min-width: 0;
+}
+.checkpoint-chat-message.is-user {
+  background: var(--theme-neutral-surface, #edf2e9);
+  margin-left: 8%;
+}
+.checkpoint-chat-message.is-assistant {
+  margin-right: 8%;
+}
+.checkpoint-chat-message p {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin: 0.5rem 0 0;
+}
+.checkpoint-chat form {
+  display: grid;
+  gap: 0.75rem;
+}
+@media (max-width: 600px) {
+  .checkpoint-chat-message.is-user,
+  .checkpoint-chat-message.is-assistant {
+    margin: 0;
+  }
+}

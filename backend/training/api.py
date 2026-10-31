@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 from urllib.parse import urlsplit
 import zipfile
+from contextlib import asynccontextmanager
 
 from fastapi import (
     APIRouter,
@@ -40,6 +41,7 @@ from .environment import inspect_python
 from .reporting import ReportStore, ReportBatch
 from .layout import PACKAGE, normalize_script
 from .recipe import is_code_first, starter_script
+from .chat import ChatService, ChatLoad, ChatMessage, checkpoint_catalog
 from ..paths import projects_directory
 from ..compiler import compile_project
 
@@ -55,7 +57,16 @@ class Command(BaseModel):
 
 def router(data):
     service = TrainingService(Path(data) / "training", Path(data) / "tokenizers")
-    api = APIRouter(prefix="/api/training")
+    chat = ChatService()
+
+    @asynccontextmanager
+    async def lifespan(app):
+        try:
+            yield
+        finally:
+            chat.close()
+
+    api = APIRouter(prefix="/api/training", lifespan=lifespan)
     reports = ReportStore()
 
     def same_origin(request):
@@ -450,6 +461,53 @@ actual training code when your model/data/optimizer are ready.
             "directory": str(directory),
             "script": (directory / "train.py").read_text(),
         }
+
+    @api.get("/runs/{run_id}/chat", dependencies=[Depends(authenticated)])
+    def get_chat(run_id: str):
+        directory = run_directory(run_id)
+        return {**checkpoint_catalog(directory), "session": chat.status(run_id)}
+
+    @api.post("/runs/{run_id}/chat/load", dependencies=[Depends(authenticated)])
+    def load_chat(run_id: str, body: ChatLoad):
+        if os.environ.get("WEAVE_TRAINING_ENABLED") != "1":
+            raise HTTPException(
+                403, "Enable local execution to load checkpoint chat on this server."
+            )
+        try:
+            return chat.load(run_directory(run_id), body)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc))
+
+    @api.get("/runs/{run_id}/chat/session", dependencies=[Depends(authenticated)])
+    def get_chat_session(run_id: str):
+        run_directory(run_id)
+        return chat.status(run_id)
+
+    @api.post("/runs/{run_id}/chat/messages", dependencies=[Depends(authenticated)])
+    def send_chat(run_id: str, body: ChatMessage):
+        run_directory(run_id)
+        try:
+            return chat.send(run_id, body)
+        except ValueError as exc:
+            raise HTTPException(409, str(exc))
+
+    @api.post("/runs/{run_id}/chat/stop", dependencies=[Depends(authenticated)])
+    def stop_chat(run_id: str):
+        run_directory(run_id)
+        return chat.stop(run_id)
+
+    @api.post("/runs/{run_id}/chat/clear", dependencies=[Depends(authenticated)])
+    def clear_chat(run_id: str):
+        run_directory(run_id)
+        try:
+            return chat.clear(run_id)
+        except ValueError as exc:
+            raise HTTPException(409, str(exc))
+
+    @api.delete("/runs/{run_id}/chat", dependencies=[Depends(authenticated)])
+    def unload_chat(run_id: str):
+        chat.close(run_id)
+        return chat.status(run_id)
 
     @api.get("/runs/{run_id}/events", dependencies=[Depends(authenticated)])
     async def stream(run_id: str, request: Request):
