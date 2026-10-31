@@ -449,3 +449,123 @@ def test_clean_training_package_runs_offline_from_another_directory(
     )
     assert (parallel / "consumed-rank-0.jsonl").is_file()
     assert any(event["kind"] == "checkpoint" for event in events(parallel))
+
+
+def test_slow_http_server_does_not_block_optimizer_updates(tmp_path, monkeypatch):
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    import torch
+
+    request_started = threading.Event()
+    release_response = threading.Event()
+    updates_finished = threading.Event()
+    failures = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            self.rfile.read(int(self.headers["Content-Length"]))
+            request_started.set()
+            release_response.wait(10)
+            self.send_response(200)
+            self.end_headers()
+            try:
+                self.wfile.write(b'{"commands": []}')
+            except BrokenPipeError:
+                pass
+
+        def log_message(self, *args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    connection = tmp_path / "reporting.json"
+    connection.write_text(
+        json.dumps({"url": f"http://127.0.0.1:{server.server_port}", "token": "test"})
+    )
+    monkeypatch.setenv("WEAVE_REPORT_CONFIG", str(connection))
+    monkeypatch.setattr(_Reporter, "hardware", lambda self: None)
+
+    def train():
+        try:
+            parameter = torch.nn.Parameter(torch.tensor(1.0))
+            optimizer = torch.optim.SGD([parameter], lr=0.01)
+            with Run(tmp_path / "outbox", optimizer=optimizer) as run:
+                assert request_started.wait(10)
+                for _ in range(30):
+                    optimizer.zero_grad()
+                    loss = parameter.square()
+                    loss.backward()
+                    optimizer.step()
+                    run.log_loss(loss)
+                assert parameter.item() < 1.0
+                updates_finished.set()
+        except BaseException as error:
+            failures.append(error)
+            updates_finished.set()
+
+    worker = threading.Thread(target=train)
+    worker.start()
+    try:
+        assert request_started.wait(15), "Reporter did not start its HTTP request"
+        assert updates_finished.wait(1.5), "Optimizer loop waited for the HTTP response"
+        assert not release_response.is_set()
+        assert not failures
+    finally:
+        release_response.set()
+        worker.join(10)
+        server.shutdown()
+        server.server_close()
+    assert not worker.is_alive()
+    assert len(events(tmp_path / "outbox", kind="metrics")) >= 30
+
+
+def test_remote_evaluation_cannot_finish_training(tmp_path, monkeypatch):
+    monkeypatch.delenv("WEAVE_TRAINING_TOKEN", raising=False)
+    app = FastAPI()
+    app.include_router(router(tmp_path))
+    with TestClient(app) as client:
+        run_id = prepare(client)
+        directory = tmp_path / "training/runs" / run_id
+        connection = json.loads((directory / "reporting.json").read_text())
+        endpoint = f"/api/training/reports/{run_id}"
+        headers = {"x-weave-report-token": connection["token"]}
+        with Run(tmp_path / "train") as training:
+            records = [
+                json.loads(line)
+                for line in (training.directory / "events.jsonl")
+                .read_text()
+                .splitlines()
+            ]
+            assert (
+                client.post(
+                    endpoint, json={"events": records}, headers=headers
+                ).status_code
+                == 200
+            )
+            with Run(tmp_path / "eval", channel="evaluation") as validation:
+                validation.log({"eval/loss": 0.5}, step=1)
+            records = [
+                json.loads(line)
+                for line in (validation.directory / "events.jsonl")
+                .read_text()
+                .splitlines()
+            ]
+            assert (
+                client.post(
+                    endpoint, json={"events": records}, headers=headers
+                ).status_code
+                == 200
+            )
+            detail = client.get(f"/api/training/runs/{run_id}").json()
+            assert detail["status"]["state"] == "running"
+            assert any(
+                event["channel"] == "evaluation" and event["kind"] == "metrics"
+                for event in detail["events"]
+            )
+
+
+def test_default_reporter_preserves_filesystem_system_channel(tmp_path):
+    with Run(tmp_path / "system") as reporter:
+        reporter.emit("hardware", {"gpus": []})
+    records = events(tmp_path)
+    assert records and all(event["channel"] == "system" for event in records)

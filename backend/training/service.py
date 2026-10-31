@@ -15,6 +15,7 @@ import sys
 import time
 import uuid
 import zipfile
+from typing import Literal
 
 from pydantic import BaseModel, Field, ConfigDict
 from ..compiler import export_zip
@@ -33,7 +34,8 @@ class TrainingConfig(BaseModel):
     execution: str = Field(default="local", pattern="^(local|monitor)$")
     python: str = sys.executable
     devices: list[int] = Field(default_factory=list, max_length=32)
-    evaluation_device: int | None = None
+    evaluation_device: int | Literal["cpu"] | None = None
+    evaluation_mode: Literal["script", "inline", "async"] = "script"
     placement: dict[str, int] = Field(default_factory=dict)
     dataset: str = ""
     eval_dataset: str = ""
@@ -72,7 +74,7 @@ class TrainingConfig(BaseModel):
             raise ValueError("Single-device training accepts at most one GPU.")
         if self.strategy == "train_eval" and (
             len(self.devices) != 1
-            or self.evaluation_device is None
+            or type(self.evaluation_device) is not int
             or self.evaluation_device in self.devices
         ):
             raise ValueError("Select one training GPU and a different evaluation GPU.")
@@ -457,10 +459,13 @@ class TrainingService:
                     "start_mode",
                     "parent_run",
                     "parent_checkpoint",
+                    "evaluation_mode",
                 }
             )
+            if stage.config.evaluation_mode != "script":
+                controls["evaluation_device"] = stage.config.evaluation_device
             stage = stage.model_copy(
-                update={"config": TrainingConfig(**{**controls, **settings})}
+                update={"config": TrainingConfig(**{**settings, **controls})}
             )
         if not code_first:
             stage.config.validate_execution()

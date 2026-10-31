@@ -42,7 +42,8 @@ class TrainingConfig:
     devices: list[int] = field(default_factory=list)
     strategy: Literal["auto", "single", "ddp", "split", "train_eval"] = "auto"
     placement: dict[str, int] = field(default_factory=dict)
-    evaluation_device: int | None = None
+    evaluation_device: int | Literal["cpu"] | None = None
+    async_evaluation: bool = False
     precision: Literal["fp32", "fp16", "bf16"] = "fp32"
     seed: int = 42
     micro_batch_size: int = 2
@@ -50,6 +51,7 @@ class TrainingConfig:
     max_epochs: int | None = 3
     max_optimizer_steps: int | None = None
     total_optimizer_steps: int | None = field(default=None, init=False)
+    evaluation_only: bool = field(default=False, init=False)
     learning_rate: float = 3e-4
     min_learning_rate: float = 3e-5
     weight_decay: float = 0.01
@@ -89,6 +91,10 @@ class TrainingConfig:
             raise ValueError("Unknown device strategy")
         if self.precision not in ("fp32", "fp16", "bf16"):
             raise ValueError("precision must be fp32, fp16 or bf16")
+        if self.evaluation_device not in (None, "cpu") and (
+            type(self.evaluation_device) is not int or self.evaluation_device < 0
+        ):
+            raise ValueError("evaluation_device must be 'cpu', a GPU index or None")
         if len(set(self.devices)) != len(self.devices) or any(
             type(i) is not int or i < 0 for i in self.devices
         ):
@@ -127,6 +133,10 @@ class TrainingConfig:
             if self.strategy == "auto"
             else self.strategy
         )
+
+    @property
+    def background_evaluation(self):
+        return self.async_evaluation or self.resolved_strategy == "train_eval"
 
 
 @dataclass
@@ -181,6 +191,20 @@ class Trainer:
         parser.add_argument("--output-dir")
         args = parser.parse_args()
         cfg = self.config
+        context_path = Path(__file__).parent / "launch.json"
+        launch = json.loads(context_path.read_text()) if context_path.is_file() else {}
+        mode = launch.get("evaluation_mode", "script")
+        if mode != "script":
+            cfg.async_evaluation = mode == "async"
+            cfg.evaluation_device = launch.get("evaluation_device")
+            if mode == "inline" and cfg.strategy == "train_eval":
+                cfg.strategy = "single"
+        # Evaluation is a standalone process, even when launched from torchrun.
+        if args.evaluate:
+            cfg.evaluation_only = True
+            if cfg.background_evaluation and cfg.evaluation_device is None:
+                cfg.evaluation_device = "cpu"
+            self.rank, self.world = 0, 1
         output = args.output_dir or os.environ.get("WEAVE_RUN_DIR")
         if not output:
             output = str(self.source_directory / "runs" / f"run-{time.time_ns()}")
@@ -249,11 +273,23 @@ class Trainer:
             placement.update(
                 strategy="single",
                 devices=(
-                    [cfg.evaluation_device]
-                    if cfg.evaluation_device is not None
-                    else cfg.devices[:1]
+                    []
+                    if cfg.evaluation_device == "cpu"
+                    else (
+                        [cfg.evaluation_device]
+                        if cfg.evaluation_device is not None
+                        else cfg.devices[:1]
+                    )
                 ),
             )
+            # CPU evaluation uses full precision even for an FP16 training job.
+            if cfg.evaluation_device == "cpu":
+                cfg.precision = "fp32"
+            # Data hooks must also see a standalone evaluator, rather than
+            # constructing a DistributedSampler for the training process group.
+            cfg.strategy = "single"
+            cfg.devices = placement["devices"]
+            cfg.placement = {}
         self.model = (
             self.model_factory()
             if not isinstance(self.model_factory, nn.Module)
@@ -262,14 +298,12 @@ class Trainer:
         self.model, self.device = place_model(self.model, placement)
         if cfg.precision == "fp16" and self.device == "cpu":
             raise ValueError("FP16 requires CUDA; use fp32 or bf16 on CPU")
-        if (
-            cfg.precision == "bf16"
-            and cfg.devices
-            and not torch.cuda.is_bf16_supported(including_emulation=False)
-        ):
-            raise ValueError(
-                "Selected GPU does not support native BF16; choose fp16 or fp32"
-            )
+        if cfg.precision == "bf16" and self.device != "cpu":
+            with torch.cuda.device(self.device):
+                if not torch.cuda.is_bf16_supported(including_emulation=False):
+                    raise ValueError(
+                        "Selected GPU does not support native BF16; choose fp16 or fp32"
+                    )
         self.tokenizer = (
             self.tokenizer_factory()
             if callable(self.tokenizer_factory)
@@ -280,7 +314,7 @@ class Trainer:
             self.batches_per_epoch = len(self.train_loader)
         except (TypeError, NotImplementedError):
             pass
-        if self.batches_per_epoch == 0:
+        if self.batches_per_epoch == 0 and not args.evaluate:
             raise ValueError("Training loader contains no batches")
         if self.world > 1:
             lengths = [None] * self.world
@@ -299,16 +333,22 @@ class Trainer:
             )
         cfg.total_optimizer_steps = min(planned) if planned else None
         self.optimizer = (
-            self.optimizer_fn(self.model, cfg)
-            if self.optimizer_fn
-            else torch.optim.AdamW(
-                self.model.parameters(),
-                lr=cfg.learning_rate,
-                weight_decay=cfg.weight_decay,
+            None
+            if args.evaluate
+            else (
+                self.optimizer_fn(self.model, cfg)
+                if self.optimizer_fn
+                else torch.optim.AdamW(
+                    self.model.parameters(),
+                    lr=cfg.learning_rate,
+                    weight_decay=cfg.weight_decay,
+                )
             )
         )
         self.scheduler = (
-            self.scheduler_fn(self.optimizer, cfg) if self.scheduler_fn else None
+            self.scheduler_fn(self.optimizer, cfg)
+            if self.scheduler_fn and not args.evaluate
+            else None
         )
         self.scaler = torch.amp.GradScaler("cuda", enabled=cfg.precision == "fp16")
         context_path = Path(__file__).parent / "launch.json"
@@ -323,9 +363,21 @@ class Trainer:
             else directory
         )
         with Run(
-            report_directory, rank=self.rank, source_directory=self.source_directory
+            report_directory,
+            rank=self.rank,
+            source_directory=self.source_directory,
+            channel="evaluation" if args.evaluate else "training",
         ) as run:
             self.run = run
+            if (
+                not args.evaluate
+                and cfg.background_evaluation
+                and cfg.evaluation_device in cfg.devices
+            ):
+                run.warning(
+                    "Background validation shares a training GPU; it needs another model copy and competes for memory and compute. Select CPU or a separate GPU to avoid GPU contention.",
+                    code="evaluation-contention",
+                )
             run.capabilities(
                 metrics=True,
                 samples=True,
@@ -334,9 +386,9 @@ class Trainer:
             )
             if self.rank == 0:
                 print(f"Run outputs: {directory}", flush=True)
-                atomic_json(directory / "resolved-config.json", asdict(cfg))
+                atomic_json(report_directory / "resolved-config.json", asdict(cfg))
                 run.emit("configuration", asdict(cfg))
-            self.manifest = self._sources(directory, run)
+            self.manifest = self._sources(report_directory, run)
             self.code_sha256 = self._code_hash()
             if checkpoint:
                 path = Path(checkpoint).expanduser()
@@ -381,7 +433,7 @@ class Trainer:
                 random.seed(cfg.seed + self.rank)
                 torch.manual_seed(cfg.seed + self.rank)
             self._loop(directory)
-            if self.rank == 0 and cfg.resolved_strategy == "train_eval":
+            if self.rank == 0 and cfg.background_evaluation:
                 while self.evaluation_job or self.evaluation_pending:
                     self._evaluation_worker(directory, wait=True)
             if self.rank == 0:
@@ -525,6 +577,9 @@ class Trainer:
             "eval_batches",
             "generation_tokens",
             "sample_prompts",
+            "async_evaluation",
+            "evaluation_device",
+            "evaluation_only",
         }
         if any(
             previous.get(key) != value
@@ -772,15 +827,18 @@ class Trainer:
                 ):
                     checkpoint = self._checkpoint(directory, commands)
                 if run.step % cfg.eval_every == 0 or self._training_done():
-                    if cfg.resolved_strategy == "train_eval" and self.rank == 0:
-                        checkpoint = checkpoint or self._checkpoint(directory, commands)
-                        self.evaluation_pending = str(directory / checkpoint)
-                    if self.rank == 0 and cfg.resolved_strategy != "train_eval":
-                        self._evaluate(checkpoint)
+                    if self.rank == 0:
+                        if cfg.background_evaluation:
+                            checkpoint = checkpoint or self._evaluation_snapshot(
+                                directory
+                            )
+                            self._queue_evaluation(directory / checkpoint)
+                        else:
+                            self._evaluate(checkpoint)
                     last_evaluated_step = run.step
-                    if self.world > 1:
+                    if self.world > 1 and not cfg.background_evaluation:
                         dist.barrier()
-                if self.rank == 0 and cfg.resolved_strategy == "train_eval":
+                if self.rank == 0 and cfg.background_evaluation:
                     self._evaluation_worker(directory)
 
         self._progress()
@@ -789,8 +847,8 @@ class Trainer:
             checkpoint = self._checkpoint(directory, [])
         if not stopped and last_evaluated_step != run.step:
             if self.rank == 0:
-                if cfg.resolved_strategy == "train_eval":
-                    self.evaluation_pending = str(directory / checkpoint)
+                if cfg.background_evaluation:
+                    self._queue_evaluation(directory / checkpoint)
                     self._evaluation_worker(directory)
                 else:
                     self._evaluate(checkpoint)
@@ -946,8 +1004,39 @@ class Trainer:
                     "Separate evaluation failed; see evaluation.log",
                     code="evaluation-failed",
                 )
+            self.run.emit(
+                "evaluation",
+                {
+                    "state": (
+                        "failed" if self.evaluation_job.returncode else "completed"
+                    ),
+                    "checkpoint": self.evaluation_active,
+                    "checkpoint_step": self.evaluation_active_step,
+                    "device": (
+                        self.config.evaluation_device
+                        if self.config.evaluation_device is not None
+                        else "cpu"
+                    ),
+                },
+            )
+            self._discard_evaluation_snapshot(self.evaluation_active)
             self.evaluation_job = None
         if self.evaluation_pending:
+            environment = dict(os.environ, WEAVE_RUN_DIR=str(directory), USE_TORCH="1")
+            # Do not let an evaluator join the parent's distributed process group.
+            for key in list(environment):
+                if key in (
+                    "RANK",
+                    "LOCAL_RANK",
+                    "WORLD_SIZE",
+                    "LOCAL_WORLD_SIZE",
+                    "GROUP_RANK",
+                    "ROLE_RANK",
+                    "ROLE_WORLD_SIZE",
+                    "MASTER_ADDR",
+                    "MASTER_PORT",
+                ) or key.startswith("TORCHELASTIC_"):
+                    environment.pop(key)
             with (directory / "evaluation.log").open("a") as output:
                 self.evaluation_job = subprocess.Popen(
                     [
@@ -957,11 +1046,70 @@ class Trainer:
                         self.evaluation_pending,
                     ],
                     cwd=self.source_directory,
-                    env=dict(os.environ, WEAVE_RUN_DIR=str(directory), USE_TORCH="1"),
+                    env=environment,
                     stdout=output,
                     stderr=subprocess.STDOUT,
                 )
+            self.evaluation_active = self.evaluation_pending
+            self.evaluation_active_step = self.evaluation_pending_step
+            self.run.emit(
+                "evaluation",
+                {
+                    "state": "running",
+                    "checkpoint": self.evaluation_active,
+                    "checkpoint_step": self.evaluation_active_step,
+                    "device": (
+                        self.config.evaluation_device
+                        if self.config.evaluation_device is not None
+                        else "cpu"
+                    ),
+                },
+            )
             self.evaluation_pending = None
+
+    def _evaluation_snapshot(self, directory):
+        """Immutable weights only; no optimizer/loader serialization for validation."""
+        path = (
+            directory
+            / "evaluation-weights"
+            / f"step-{self.run.step}-{time.time_ns()}.pt"
+        )
+        raw = self.model.module if isinstance(self.model, DDP) else self.model
+        with atomic_checkpoint_path(path) as temporary:
+            torch.save(
+                {
+                    "model": raw.state_dict(),
+                    "step": self.run.step,
+                    "tokens": self.run.tokens,
+                },
+                temporary,
+            )
+        return str(path.relative_to(directory))
+
+    def _discard_evaluation_snapshot(self, path):
+        # Published resumable checkpoints are retained; only private validation
+        # snapshots are disposable after a worker finishes or a newer job replaces it.
+        if path and Path(path).parent.name == "evaluation-weights":
+            Path(path).unlink(missing_ok=True)
+
+    def _queue_evaluation(self, path):
+        if self.evaluation_pending:
+            self._discard_evaluation_snapshot(self.evaluation_pending)
+        self.evaluation_pending = str(path)
+        self.evaluation_pending_step = self.run.step
+        self.run.emit(
+            "evaluation",
+            {
+                "state": "queued",
+                "checkpoint": str(path),
+                "checkpoint_step": self.run.step,
+                "device": (
+                    self.config.evaluation_device
+                    if self.config.evaluation_device is not None
+                    else "cpu"
+                ),
+            },
+        )
 
     def _evaluate(self, checkpoint):
         cfg, run = self.config, self.run

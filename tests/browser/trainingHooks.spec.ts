@@ -7,7 +7,7 @@ test("code-owned configuration, training hooks, provenance and snapshots", async
   page,
   context,
 }) => {
-  test.setTimeout(120000);
+  test.setTimeout(240000);
   const id = `project-hooks-browser-${Date.now()}`;
   const project = {
     version: 1,
@@ -124,7 +124,7 @@ test("code-owned configuration, training hooks, provenance and snapshots", async
     def encode(row):
         return row["input_ids"], row["input_ids"]
     dataset = TokenStream(${JSON.stringify(data)}, encode, seq_len=4)
-    return DataLoader(dataset, batch_size=config.micro_batch_size), None`;
+    return DataLoader(dataset, batch_size=config.micro_batch_size), [{"input_ids": torch.tensor([[1, 2, 3, 4]]), "labels": torch.tensor([[2, 3, 4, 1]])}]`;
     const source = String(templates.scripts.causal)
       .replace(
         'raise NotImplementedError("Add your data loaders here.")',
@@ -145,6 +145,34 @@ test("code-owned configuration, training hooks, provenance and snapshots", async
     await expect(page.locator(".training-notice")).toContainText(
       "Saved server file",
     );
+    await page
+      .getByRole("button", { name: "Launch settings", exact: true })
+      .click();
+    const validationMode = page.getByRole("combobox", {
+      name: "Validation execution",
+      exact: false,
+    });
+    const validationDevice = page.getByRole("combobox", {
+      name: "Validation device",
+      exact: false,
+    });
+    await expect(validationMode).toHaveValue("script");
+    await expect(validationDevice).toBeDisabled();
+    await validationMode.selectOption("async");
+    await expect(validationDevice).toBeEnabled();
+    if (await validationDevice.locator('option[value="1"]').count()) {
+      await validationDevice.selectOption("1");
+      await expect(validationDevice).toHaveValue("1");
+    }
+    await validationDevice.selectOption("cpu");
+    await page
+      .getByRole("button", { name: "Python script", exact: true })
+      .click();
+    await expect(editor).toContainText("async_evaluation=False");
+    await page.getByRole("button", { name: "Save file", exact: true }).click();
+    await expect(
+      page.getByRole("button", { name: "Save file", exact: true }),
+    ).toBeEnabled({ timeout: 30000 });
     const plan = await (
       await context.request.get(`/api/training/plans/${id}`)
     ).json();
@@ -164,7 +192,7 @@ test("code-owned configuration, training hooks, provenance and snapshots", async
     ).toBeVisible({ timeout: 30000 });
     await expect(
       page.locator(".training-dashboard .training-section-heading").first(),
-    ).toContainText("completed", { timeout: 60000 });
+    ).toContainText("completed", { timeout: 180000 });
     const runId = new URL(page.url()).searchParams.get("run");
     const detail = detailSchema.parse(
       await (await context.request.get(`/api/training/runs/${runId}`)).json(),
@@ -189,6 +217,12 @@ test("code-owned configuration, training hooks, provenance and snapshots", async
     await expect(
       counters.locator("div").filter({ hasText: "Input tokens processed" }),
     ).toContainText("32");
+    await expect(
+      page.getByRole("status", { name: "Background validation status" }),
+    ).toContainText("completed");
+    await expect(
+      page.getByRole("status", { name: "Background validation status" }),
+    ).toContainText("CPU");
     await page
       .getByRole("button", { name: "Checkpoints & snapshots", exact: true })
       .click();
@@ -222,7 +256,34 @@ test("code-owned configuration, training hooks, provenance and snapshots", async
     expect(errors).toEqual([]);
   } finally {
     releaseInitialSave();
+    const activeRun = new URL(page.url()).searchParams.get("run");
     await page.goto("about:blank");
+    if (activeRun) {
+      const response = await context.request.get(
+        `/api/training/runs/${activeRun}`,
+      );
+      if (response.ok()) {
+        const current = detailSchema.parse(await response.json());
+        runDirectory = current.directory;
+        if (["starting", "running"].includes(current.status.state)) {
+          await context.request.post(
+            `/api/training/runs/${activeRun}/commands`,
+            { data: { kind: "kill" } },
+          );
+          await expect
+            .poll(
+              async () => {
+                const result = await context.request.get(
+                  `/api/training/runs/${activeRun}`,
+                );
+                return String((await result.json()).status.state);
+              },
+              { timeout: 15000 },
+            )
+            .not.toMatch(/^(starting|running)$/);
+        }
+      }
+    }
     await context.request.delete(`/api/projects/${id}`);
     rmSync(data, { force: true });
     if (

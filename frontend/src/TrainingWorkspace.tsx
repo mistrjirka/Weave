@@ -1160,7 +1160,7 @@ export function TrainingWorkspace({ project }: { project: Project }) {
                 <>
                   <p className="training-muted">
                     {codeFirst
-                      ? "Configure training in train.py. These launch settings only select where to run it and which checkpoint to start from. Devices, precision and the training schedule remain owned by the script."
+                      ? "Configure training in train.py. Launch settings choose the interpreter, starting checkpoint and optional validation override. Training devices, precision and the batch schedule stay in the script."
                       : "Optional starter values for legacy config.json recipes. Custom Python remains editable."}
                   </p>
                   <div className="training-form-grid">
@@ -1532,6 +1532,80 @@ export function TrainingWorkspace({ project }: { project: Project }) {
                       </>
                     )}
                   </div>
+                  {codeFirst && (
+                    <div className="training-form-grid">
+                      <label>
+                        Validation execution
+                        <select
+                          value={config.evaluation_mode}
+                          onChange={(e) =>
+                            updateStage({
+                              config: {
+                                ...config,
+                                evaluation_mode: z
+                                  .enum(["script", "inline", "async"])
+                                  .parse(e.target.value),
+                                evaluation_device:
+                                  config.evaluation_device ?? "cpu",
+                              },
+                            })
+                          }
+                        >
+                          <option value="script">Use train.py settings</option>
+                          <option value="inline">
+                            Inline · pause for validation
+                          </option>
+                          <option value="async">
+                            Asynchronous · continue training
+                          </option>
+                        </select>
+                        <small>
+                          A launch override; your Python script stays unchanged.
+                          Background validation keeps one running job and the
+                          newest pending checkpoint.
+                        </small>
+                      </label>
+                      <label>
+                        Validation device
+                        <select
+                          value={
+                            config.evaluation_mode === "async"
+                              ? (config.evaluation_device ?? "cpu")
+                              : config.evaluation_mode
+                          }
+                          disabled={config.evaluation_mode !== "async"}
+                          onChange={(e) =>
+                            setting(
+                              "evaluation_device",
+                              e.target.value === "cpu"
+                                ? "cpu"
+                                : Number(e.target.value),
+                            )
+                          }
+                        >
+                          {config.evaluation_mode !== "async" && (
+                            <option value={config.evaluation_mode}>
+                              {config.evaluation_mode === "script"
+                                ? "Defined in train.py"
+                                : "Training device"}
+                            </option>
+                          )}
+                          <option value="cpu">CPU</option>
+                          {gpus.map((gpu) => (
+                            <option key={gpu.uuid} value={gpu.index}>
+                              GPU {gpu.index} · {gpu.name}
+                            </option>
+                          ))}
+                        </select>
+                        <small>
+                          Select a separate GPU to avoid competing with
+                          training. CPU validation uses FP32. Inline validation
+                          uses the training device. Saving checkpoint weights
+                          still briefly uses the training process.
+                        </small>
+                      </label>
+                    </div>
+                  )}
                   {codeFirst && (
                     <details>
                       <summary>
@@ -2020,6 +2094,23 @@ export function TrainingWorkspace({ project }: { project: Project }) {
                     </div>
                   );
                 })}
+              {detail.events
+                .filter((event) => event.kind === "evaluation")
+                .slice(-1)
+                .map((event) => (
+                  <p
+                    key={event.id}
+                    role="status"
+                    aria-label="Background validation status"
+                    className="training-muted"
+                  >
+                    Background validation: {String(event.payload.state)} ·
+                    checkpoint update {String(event.payload.checkpoint_step)} ·{" "}
+                    {event.payload.device === "cpu"
+                      ? "CPU"
+                      : `GPU ${String(event.payload.device)}`}
+                  </p>
+                ))}
               <nav className="training-tabs" aria-label="Run views">
                 {(
                   [

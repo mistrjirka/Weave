@@ -9,6 +9,7 @@ import os
 import secrets
 import time
 from threading import RLock
+from typing import Literal
 
 from pydantic import BaseModel, Field, FiniteFloat
 
@@ -23,6 +24,7 @@ class ReportEvent(BaseModel):
     step: int = Field(ge=0)
     tokens: int = Field(ge=0)
     payload: dict
+    channel: Literal["training", "evaluation"] = "training"
 
 
 class ReportBatch(BaseModel):
@@ -61,7 +63,6 @@ class ReportStore:
         records = []
         for item in batch.events:
             event = item.model_dump()
-            event["channel"] = "training"
             payload = event["payload"]
             if event["kind"] == "checkpoint":
                 payload["remote"] = True

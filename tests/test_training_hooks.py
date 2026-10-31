@@ -543,3 +543,153 @@ def test_unsized_finite_loader_can_train_by_epochs_without_step_budget(tmp_path)
     assert progress["optimizer_updates"] == 4
     assert progress["batches_processed"] == 8
     assert progress["tokens_processed"] == 400
+
+
+def test_background_cpu_validation_overlaps_updates_and_keeps_latest_job(tmp_path):
+    script = filled_starter(
+        tmp_path / "rows.jsonl",
+        max_optimizer_steps=5,
+        checkpoint_every=999,
+        eval_every=1,
+    )
+    script = script.replace("async_evaluation=False", "async_evaluation=True")
+    script = script.replace(
+        "return DataLoader(dataset, batch_size=config.micro_batch_size, num_workers=0), None",
+        "return DataLoader(dataset, batch_size=config.micro_batch_size, num_workers=0), [next(iter(DataLoader(dataset, batch_size=1)))]",
+    )
+    # A deterministic gate: validation cannot finish until training has reached
+    # the final update. An inline implementation would fail this test.
+    script = script.replace(
+        "def training_step(model, batch, device):",
+        """def validation_step(model, batch, device):
+    import json, os, time
+    from pathlib import Path
+    root = Path(os.environ['WEAVE_RUN_DIR'])
+    deadline = time.monotonic() + 15
+    while time.monotonic() < deadline:
+        lines = (root / 'events.jsonl').read_text().splitlines()
+        if any(json.loads(line)['kind'] == 'metrics' and json.loads(line)['step'] == 5 for line in lines):
+            assert device == 'cpu'
+            return training_step(model, batch, device)
+        time.sleep(0.05)
+    raise RuntimeError('Training stalled waiting for validation')
+
+
+def training_step(model, batch, device):""",
+    )
+    script = script.replace(
+        "training_step_fn=training_step,",
+        "training_step_fn=training_step,\n        evaluation_step_fn=validation_step,",
+    )
+    service, directory, _ = make_hook_run(tmp_path, script)
+    execute(directory)
+    records = events(directory)
+    phases = [e for e in records if e["kind"] == "evaluation"]
+    assert not [e for e in phases if e["payload"]["state"] == "failed"]
+    running = [
+        e["payload"]["checkpoint_step"]
+        for e in phases
+        if e["payload"]["state"] == "running"
+    ]
+    assert running == [1, 5], running
+    evaluations = [
+        e for e in records if e["channel"] == "evaluation" and e["kind"] == "metrics"
+    ]
+    assert [e["step"] for e in evaluations] == [1, 5]
+    assert all("eval/loss" in e["payload"] for e in evaluations)
+    assert not list((directory / "evaluation-weights").glob("*.pt"))
+    checkpoints = events(directory, kind="checkpoint")
+    assert (
+        len(checkpoints) == 1
+    ), "Validation should not serialize the optimizer at every update"
+    assert events(directory, kind="progress")[-1]["payload"]["optimizer_updates"] == 5
+
+
+def test_async_validation_is_independent_of_cpu_ddp_and_gui_override(tmp_path):
+    script = textwrap.dedent(PARALLEL_SCRIPT).replace("STRATEGY", repr("ddp"))
+    script = script.replace("eval_every=2", "eval_every=1")
+    script = script.replace(
+        "parallel = int(os.environ.get('WORLD_SIZE', '1')) > 1",
+        "parallel = config.resolved_strategy == 'ddp'",
+    )
+    script = script.replace(
+        "return DataLoader(dataset, batch_size=1 if parallel else 2, sampler=sampler), None",
+        "loader = DataLoader(dataset, batch_size=1 if parallel else 2, sampler=sampler)\n    return loader, loader",
+    )
+    service, directory, _ = make_hook_run(tmp_path, script)
+    # The launch override enables validation without editing the Python recipe.
+    launch_path = directory / "weave_support/launch.json"
+    launch = json.loads(launch_path.read_text())
+    launch.update(evaluation_mode="async", evaluation_device="cpu")
+    atomic_json(launch_path, launch)
+    execute(directory)
+    records = events(directory)
+    assert [e["step"] for e in records if e["kind"] == "progress"][-1] == 2
+    validations = [
+        e for e in records if e["channel"] == "evaluation" and e["kind"] == "metrics"
+    ]
+    assert validations and validations[-1]["step"] == 2
+    assert "eval/loss" in validations[-1]["payload"]
+    assert not [
+        e
+        for e in records
+        if e["kind"] == "warning" and e["payload"].get("code") == "evaluation-failed"
+    ]
+
+
+@pytest.mark.skipif(
+    not os.environ.get("WEAVE_CUDA_PYTHON"), reason="Requires CUDA training environment"
+)
+@pytest.mark.parametrize("validation_device", ["cpu", 1])
+def test_fp16_training_can_validate_asynchronously_on_cpu_or_selected_gpu(
+    tmp_path, validation_device
+):
+    script = (
+        textwrap.dedent(PARALLEL_SCRIPT)
+        .replace("STRATEGY", repr("single"))
+        .replace("devices=[]", "devices=[0]")
+    )
+    script = script.replace(
+        "gradient_accumulation_steps=2,",
+        f'gradient_accumulation_steps=2, precision="fp16", async_evaluation=True, evaluation_device={validation_device!r},',
+    )
+    script = script.replace("eval_every=2", "eval_every=1")
+    script = script.replace(
+        "return DataLoader(dataset, batch_size=1 if parallel else 2, sampler=sampler), None",
+        "loader = DataLoader(dataset, batch_size=1 if parallel else 2, sampler=sampler)\n    return loader, loader",
+    )
+    service, directory, _ = make_hook_run(tmp_path, script)
+    result = subprocess.run(
+        [os.environ["WEAVE_CUDA_PYTHON"], "train.py"],
+        cwd=directory,
+        env={
+            **os.environ,
+            "WEAVE_RUN_DIR": str(directory),
+            "USE_TORCH": "1",
+            "CUDA_DEVICE_ORDER": "PCI_BUS_ID",
+        },
+        text=True,
+        capture_output=True,
+        timeout=180,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    records = events(directory)
+    assert not [
+        e
+        for e in records
+        if e["kind"] == "evaluation" and e["payload"]["state"] == "failed"
+    ], (directory / "evaluation.log").read_text()
+    results = [
+        e for e in records if e["kind"] == "metrics" and e["channel"] == "evaluation"
+    ]
+    assert results and results[-1]["step"] == 2
+    config_files = list(directory.glob("evaluation-*/resolved-config.json"))
+    assert config_files
+    for path in config_files:
+        resolved = json.loads(path.read_text())
+        assert resolved["devices"] == (
+            [] if validation_device == "cpu" else [validation_device]
+        )
+        assert resolved["precision"] == (
+            "fp32" if validation_device == "cpu" else "fp16"
+        )

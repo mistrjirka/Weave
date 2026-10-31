@@ -572,7 +572,12 @@ def main(loss_fn=None):
     )
     if evaluation:
         rank = 0
-    with Run(report_directory, rank=rank, source_directory=config_path.parent) as run:
+    with Run(
+        report_directory,
+        rank=rank,
+        source_directory=config_path.parent,
+        channel="evaluation" if args.evaluate else "training",
+    ) as run:
         run.step, run.tokens = start_step, tokens
         run.capabilities(
             metrics=True,

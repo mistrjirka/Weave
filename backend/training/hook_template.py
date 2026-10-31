@@ -21,6 +21,8 @@ config = TrainingConfig(
     log_every=1,
     checkpoint_every=250,
     eval_every=100,
+    async_evaluation=False,  # True: evaluate checkpoints in a separate process.
+    evaluation_device="cpu",  # "cpu" or a GPU index, e.g. 1.
     sample_prompts=[],
 )
 

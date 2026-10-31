@@ -57,6 +57,7 @@ class Run:
         start_step=0,
         log_every=1,
         source_directory=None,
+        channel=None,
     ):
         self.directory = Path(
             directory or os.environ.get("WEAVE_RUN_DIR", "weave-run")
@@ -71,6 +72,9 @@ class Run:
             )
         )
         self.rank = int(os.environ.get("RANK", "0")) if rank is None else rank
+        if channel not in (None, "training", "evaluation", "system"):
+            raise ValueError("Unknown reporting channel")
+        self.channel = channel
         self.directory.mkdir(parents=True, exist_ok=True)
         if (
             start_step < 0
@@ -192,6 +196,8 @@ class Run:
             "tokens": self.tokens,
             "payload": payload,
         }
+        if self.channel is not None:
+            record["channel"] = self.channel
         line = json.dumps(record, allow_nan=False)
         if len(line.encode()) > 1024 * 1024:
             raise ValueError(

@@ -7,7 +7,10 @@ export const trainingConfigSchema = z.object({
   execution: z.enum(["local", "monitor"]),
   python: z.string(),
   devices: z.array(z.number().int()),
-  evaluation_device: z.number().nullable(),
+  evaluation_device: z
+    .union([z.number().int().nonnegative(), z.literal("cpu")])
+    .nullable(),
+  evaluation_mode: z.enum(["script", "inline", "async"]).default("script"),
   placement: z.record(z.string(), z.number()),
   dataset: z.string(),
   eval_dataset: z.string(),
