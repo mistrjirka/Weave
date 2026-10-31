@@ -402,7 +402,7 @@ test("code-owned configuration, training hooks, provenance and snapshots", async
       "Run data refreshed",
     );
     await expect(
-      page.getByRole("button", { name: "Stop safely", exact: true }),
+      page.getByRole("button", { name: "Pause training", exact: true }),
     ).toHaveCount(0);
     expect(errors).toEqual([]);
   } finally {

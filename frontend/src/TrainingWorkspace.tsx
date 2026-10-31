@@ -12,6 +12,7 @@ import {
   Cpu,
   Download,
   Play,
+  Pause,
   Plus,
   Save,
   ShieldCheck,
@@ -132,6 +133,7 @@ export function TrainingWorkspace({ project }: { project: Project }) {
     () => `http://localhost:${location.port || "8173"}`,
   );
   const [busy, setBusy] = useState(false);
+  const [pauseRequested, setPauseRequested] = useState<string | null>(null);
   const pendingTasksRef = useRef(0);
   const stageSavesRef = useRef(new Map<string, Promise<TrainingStage>>());
   const launchInFlight = useRef(false);
@@ -727,14 +729,17 @@ export function TrainingWorkspace({ project }: { project: Project }) {
       commandSchema,
       { kind, include_data: includeData },
     );
+    if (kind === "stop") setPauseRequested(runId);
     setNotice(
       result.artifact
         ? "Snapshot saved. Open Checkpoints to download it."
         : kind === "snapshot"
           ? "Snapshot requested at the next safe training boundary. A custom script must support checkpoint requests."
-          : `${kind === "stop" ? "Safe stop" : "Force stop"} requested.`,
+          : kind === "stop"
+            ? "Pause requested. Waiting for the safe checkpoint boundary…"
+            : "Force stop requested.",
     );
-    setDashboard("checkpoints");
+    if (kind === "snapshot") setDashboard("checkpoints");
   }
   function numeric(
     key: keyof Pick<
@@ -885,12 +890,30 @@ export function TrainingWorkspace({ project }: { project: Project }) {
         >
           <Square size={16} aria-hidden="true" />
           <strong>Training stopped</strong>
+          {detail.run.code_first && detail.restart_context?.exact_resume && (
+            <span>
+              Resume training restores the saved checkpoint without starting
+              over.
+            </span>
+          )}
         </p>
       )}
       {error && (
         <p className="training-alert" role="alert">
           {error}
         </p>
+      )}
+      {detail?.resume_problem && (
+        <div className="training-alert training-resume-problem" role="alert">
+          <strong>Checkpoint resume failed.</strong> No training updates were
+          applied. Use Retry resume to choose the previous script or try your
+          corrected edits.
+          <details>
+            <summary>Compatibility details</summary>
+            <pre>{detail.resume_problem.message}</pre>
+            <p>{detail.resume_problem.recovery}</p>
+          </details>
+        </div>
       )}
       {monitorError && (
         <p className="training-alert" role="alert">
@@ -1075,7 +1098,11 @@ export function TrainingWorkspace({ project }: { project: Project }) {
                       {new Date(run.created).toLocaleString()}
                     </small>
                     {run.parent && (
-                      <small>Continues a previous checkpoint</small>
+                      <small>
+                        {run.revision
+                          ? `Resumed · ${run.revision.script_source === "edited" ? "edited script" : "previous script"} · snapshot saved`
+                          : "Continues a previous checkpoint"}
+                      </small>
                     )}
                   </button>
                 ))}
@@ -2397,11 +2424,14 @@ export function TrainingWorkspace({ project }: { project: Project }) {
                   {active && (
                     <>
                       <button
-                        disabled={busy}
+                        disabled={busy || pauseRequested === detail.run.id}
+                        title="Save a checkpoint and stop workers. Resume restores training state."
                         onClick={() => void task(() => command("stop"))}
                       >
-                        <Square aria-hidden="true" size={14} />
-                        Stop safely
+                        <Pause aria-hidden="true" size={14} />
+                        {pauseRequested === detail.run.id
+                          ? "Pausing…"
+                          : "Pause training"}
                       </button>
                       <button
                         disabled={busy || detail.run.execution === "monitor"}

@@ -39,10 +39,12 @@ EXCLUDED_CODE_FOLDERS = {
     "tokenizers",
     "licenses",
     "migrations",
+    "resume-attempts",
 }
 # The release before live controls has the same optimizer, scheduler and loader
 # checkpoint contract. Other unknown trainer revisions retain strict resume checks.
 VALIDATION_UPGRADE_FROM = {
+    "357a3523cf43d2a2df3a429e72aca24d5da638c218e8d31e1ccffd3b7bbc0630",
     "469f4a2fb01e81e9ab3f11a755bae691e65b924be68463613d978988987f7560",
     # Initial live-controls rollout, before legacy train_eval alias normalization.
     "9862eeef1d8c4bee5e0da1c1fad43c85aa11255c628910d5480beca6820bebe0",

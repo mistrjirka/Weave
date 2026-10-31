@@ -69,6 +69,10 @@ const modelSchema = z.object({
   split_reasons: z.array(z.string()),
 });
 export const runSchema = z.object({
+  revision: z
+    .object({ script_source: z.enum(["previous", "edited"]) })
+    .nullable()
+    .optional(),
   id: z.string(),
   project_id: z.string(),
   stage_id: z.string(),
@@ -146,6 +150,34 @@ export const validationSettingsSchema = z.object({
 export type ValidationSettings = z.infer<typeof validationSettingsSchema>;
 
 export const detailSchema = z.object({
+  revision: z
+    .object({
+      script_source: z.enum(["previous", "edited"]),
+      created: z.string(),
+      code_sha256: z.string(),
+      state_policy: z.string(),
+    })
+    .nullable()
+    .optional(),
+  restart_context: z
+    .object({
+      source_run: z.string(),
+      directory: z.string(),
+      checkpoint: z.string(),
+      step: z.number(),
+      exact_resume: z.boolean(),
+      edited_script_path: z.string(),
+    })
+    .nullable()
+    .optional(),
+  resume_problem: z
+    .object({
+      message: z.string(),
+      checkpoint: z.string(),
+      recovery: z.string(),
+    })
+    .nullable()
+    .optional(),
   validation_control: z
     .object({
       supported: z.boolean(),

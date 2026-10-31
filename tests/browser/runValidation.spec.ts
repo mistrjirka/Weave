@@ -79,11 +79,9 @@ shutil.copytree(source,destination)
     await page
       .getByRole("button", { name: "Resume training", exact: true })
       .click();
-    const dialog = page.getByRole("dialog", {
-      name: "Run validation settings",
-      exact: true,
-    });
+    const dialog = page.getByRole("dialog");
     await expect(dialog).toContainText("needs a checkpoint restart");
+    await dialog.locator("summary").filter({ hasText: "Validation ·" }).click();
     await expect(
       dialog.getByRole("combobox", {
         name: "Run validation device",

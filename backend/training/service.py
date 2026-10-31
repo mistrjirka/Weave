@@ -479,7 +479,15 @@ class TrainingService:
                 }
         return preparing() if progress else {"state": "prepared"}
 
-    def launch(self, request, *, frozen_source=None, validation_settings=None):
+    def launch(
+        self,
+        request,
+        *,
+        frozen_source=None,
+        validation_settings=None,
+        restart_record=None,
+        edited_files_source=None,
+    ):
         project, stage = request.project, request.stage
         stage = stage.model_copy(
             update={"script": normalize_script(stage.script, stage.config.recipe)}
@@ -561,15 +569,22 @@ class TrainingService:
                     )
                 shutil.copytree(frozen_source / PACKAGE, directory / PACKAGE)
                 (directory / PACKAGE / "trainer.py").write_text(current_trainer)
-                extras = json.loads(
-                    (frozen_source / ".workspace-files.json").read_text()
-                )
-                for name in extras:
-                    source, target = inside(frozen_source, name), inside(
-                        directory, name
+                if restart_record and restart_record["script_source"] == "edited":
+                    extras = list(restart_record["user_files"])
+                    for name in extras:
+                        target = inside(directory, name)
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copyfile(inside(edited_files_source, name), target)
+                else:
+                    extras = json.loads(
+                        (frozen_source / ".workspace-files.json").read_text()
                     )
-                    target.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copyfile(source, target)
+                    for name in extras:
+                        source, target = inside(frozen_source, name), inside(
+                            directory, name
+                        )
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copyfile(source, target)
             atomic_json(directory / ".workspace-files.json", extras)
             files = {"model.py": (directory / PACKAGE / "model.py").read_text()}
             metadata = model_metadata(files, project)
@@ -792,7 +807,16 @@ class TrainingService:
                     {
                         "previous_code_sha256": code_hash(frozen_source),
                         "current_code_sha256": code_hash(directory),
-                        "reason": "Verified validation-controls trainer upgrade; frozen model, recipe and user helpers preserved.",
+                        "edited_script": bool(
+                            restart_record
+                            and restart_record["script_source"] == "edited"
+                        ),
+                        "reason": (
+                            "User-requested edited-script resume; restore only compatible checkpoint state."
+                            if restart_record
+                            and restart_record["script_source"] == "edited"
+                            else "Verified trainer upgrade; frozen model, recipe and user helpers preserved."
+                        ),
                     },
                 )
             if validation_settings is not None:
@@ -805,6 +829,35 @@ class TrainingService:
                 atomic_json(directory / PACKAGE / "launch.json", config)
             atomic_json(directory / "stage.json", stage.model_dump())
             atomic_json(directory / "datasets.json", datasets)
+            if restart_record is not None:
+                from .run_controls import code_hash
+
+                artifacts = [
+                    "train.py",
+                    "stage.json",
+                    "config.json",
+                    ".workspace-files.json",
+                ]
+                artifacts += [
+                    p.relative_to(directory).as_posix()
+                    for p in (directory / PACKAGE).rglob("*")
+                    if p.is_file() and "__pycache__" not in p.parts
+                ]
+                artifacts += extras
+                revision = {
+                    **restart_record,
+                    "run_id": run_id,
+                    "created": datetime.now(timezone.utc).isoformat(),
+                    "checkpoint": parent,
+                    "code_sha256": code_hash(directory),
+                    "validation": validation_settings,
+                    "files": {
+                        name: file_hash(inside(directory, name))
+                        for name in sorted(set(artifacts))
+                    },
+                    "state_policy": "Restore optimizer, scheduler, scaler, RNG and data cursor; reject incompatible state.",
+                }
+                atomic_json(directory / "revision.json", revision)
             warnings = instrumentation_warnings(stage.script)
             info = {
                 "id": run_id,
@@ -819,6 +872,7 @@ class TrainingService:
                 "code_first": code_first,
                 "warnings": warnings,
                 "model": metadata,
+                "revision": restart_record,
             }
             atomic_json(directory / "run.json", info)
             if config["execution"] == "local":
@@ -865,16 +919,56 @@ class TrainingService:
                     directory, matching, request["include_data"], request["id"]
                 )
 
-    def restart(self, run_id, validation_settings=None):
-        """Resume a stopped local run without reading or overwriting editable files."""
+    def restart_context(self, run_id):
+        """Find the last usable checkpoint, including before a failed resume."""
+        visited = set()
+        directory = self.run_dir(run_id)
+        while directory.name not in visited:
+            visited.add(directory.name)
+            info = json.loads((directory / "run.json").read_text())
+            checkpoint = next(
+                (
+                    event
+                    for event in reversed(events(directory, kind="checkpoint"))
+                    if not event["payload"].get("remote")
+                ),
+                None,
+            )
+            if checkpoint is not None:
+                return {
+                    "source_run": directory.name,
+                    "directory": str(directory.resolve()),
+                    "checkpoint": checkpoint["payload"]["path"],
+                    "step": checkpoint["step"],
+                    "exact_resume": checkpoint["payload"]
+                    .get("metadata", {})
+                    .get("exact_resume", False),
+                    "edited_script_path": str(
+                        self.workspaces.directory(info["project_id"], info["stage_id"])
+                        / "train.py"
+                    ),
+                }
+            parent = info.get("parent")
+            if not parent:
+                return None
+            try:
+                directory = self.run_dir(parent["run_id"])
+            except FileNotFoundError:
+                return None
+        return None
+
+    def restart(self, run_id, validation_settings=None, *, script_source="previous"):
+        """Snapshot each attempt. Failed restores can retry the last usable state."""
+        if script_source not in ("previous", "edited"):
+            raise ValueError("Choose the previous or edited script")
         with self.controls_lock:
-            source = self.run_dir(run_id)
-            info = json.loads((source / "run.json").read_text())
+            requested_source = self.run_dir(run_id)
+            info = json.loads((requested_source / "run.json").read_text())
             if info["execution"] != "local" or not info.get("code_first"):
                 raise ValueError(
                     "Checkpoint restart currently requires a local hook-Trainer run."
                 )
-            if self.status(source)["state"] not in (
+            if self.status(requested_source)["state"] not in (
                 "stopped",
                 "failed",
                 "killed",
@@ -883,55 +977,97 @@ class TrainingService:
                 raise ValueError(
                     "Stop training safely before restarting from its checkpoint."
                 )
-            receipt = source / "restart.json"
+            receipt = requested_source / "restart.json"
             if receipt.is_file():
-                return json.loads(
-                    (
-                        self.run_dir(json.loads(receipt.read_text())["run_id"])
-                        / "run.json"
-                    ).read_text()
-                )
-            checkpoint = next(
-                (
-                    event
-                    for event in reversed(events(source, kind="checkpoint"))
-                    if not event["payload"].get("remote")
-                ),
-                None,
-            )
-            if not checkpoint or not checkpoint["payload"].get("metadata", {}).get(
-                "exact_resume"
-            ):
+                previous = json.loads(receipt.read_text())
+                child = self.run_dir(previous["run_id"])
+                # A repeated click must not launch a second worker. A failed
+                # attempt must never prevent fixing the script and trying again.
+                if self.status(child)["state"] not in ("failed", "killed", "stopped"):
+                    return json.loads((child / "run.json").read_text())
+            context = self.restart_context(run_id)
+            if not context or not context["exact_resume"]:
                 raise ValueError(
                     "No checkpoint with restorable optimizer and data-loader state is available. Create a new stage from weights instead."
                 )
+            source = self.run_dir(context["source_run"])
             project = json.loads((source / PACKAGE / "project.json").read_text())
             stage = Stage(**json.loads((source / "stage.json").read_text()))
             stage.script = (source / "train.py").read_text()
+            if script_source == "edited":
+                with self.workspaces.lock:
+                    edited = self.workspaces.get_stage(info["project_id"], stage.id)
+                    stage.script = edited.script
             stage.config = stage.config.model_copy(
                 update={
                     "execution": "local",
                     "start_mode": "resume",
-                    "parent_run": run_id,
-                    "parent_checkpoint": checkpoint["payload"]["path"],
+                    "parent_run": source.name,
+                    "parent_checkpoint": context["checkpoint"],
                 }
             )
             if validation_settings is None:
                 from .run_controls import validation_state
 
                 validation_settings = validation_state(
-                    source, events(source), self.status(source)
+                    requested_source,
+                    events(requested_source),
+                    self.status(requested_source),
                 )["current"]
-            restarted = self.launch(
-                Launch(project=project, stage=stage),
-                frozen_source=source,
-                validation_settings=validation_settings,
+            attempt_id = uuid.uuid4().hex
+            attempt = requested_source / "resume-attempts" / attempt_id
+            attempt.mkdir(parents=True)
+            (attempt / "previous.py").write_text((source / "train.py").read_text())
+            (attempt / "requested.py").write_text(stage.script)
+            atomic_json(attempt / "stage.json", stage.model_dump())
+            user_files = []
+            if script_source == "edited":
+                user_files = self.workspaces.freeze_extras(
+                    info["project_id"], stage.id, attempt / "user-files"
+                )
+            record = {
+                "attempt_id": attempt_id,
+                "requested_from": run_id,
+                "source_run": source.name,
+                "script_source": script_source,
+                "script_sha256": hashlib.sha256(stage.script.encode()).hexdigest(),
+                "user_files": {
+                    name: file_hash(inside(attempt / "user-files", name))
+                    for name in user_files
+                },
+                "validation": validation_settings,
+                "checkpoint": context["checkpoint"],
+                "created": datetime.now(timezone.utc).isoformat(),
+            }
+            atomic_json(attempt / "attempt.json", record)
+            try:
+                restarted = self.launch(
+                    Launch(project=project, stage=stage),
+                    frozen_source=source,
+                    validation_settings=validation_settings,
+                    restart_record=record,
+                    edited_files_source=attempt / "user-files",
+                )
+            except Exception as exc:
+                atomic_json(
+                    attempt / "attempt.json",
+                    {**record, "state": "rejected", "error": str(exc)},
+                )
+                if isinstance(exc, SyntaxError):
+                    raise ValueError(
+                        f"Edited script has a syntax error at line {exc.lineno}: {exc.msg}. Fix the file and retry, or select the previous script."
+                    ) from exc
+                raise
+            atomic_json(
+                attempt / "attempt.json",
+                {**record, "state": "launched", "run_id": restarted["id"]},
             )
             atomic_json(
                 receipt,
                 {
                     "run_id": restarted["id"],
-                    "checkpoint": checkpoint["payload"]["path"],
+                    "checkpoint": context["checkpoint"],
+                    "attempt_id": attempt_id,
                 },
             )
             return restarted

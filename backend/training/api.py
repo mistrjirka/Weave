@@ -8,6 +8,7 @@ import json
 import os
 import stat
 from pathlib import Path
+from typing import Literal
 from urllib.parse import urlsplit
 import zipfile
 from contextlib import asynccontextmanager
@@ -60,6 +61,7 @@ class Command(BaseModel):
 
 class RestartRequest(BaseModel):
     validation: ValidationSettings | None = None
+    script_source: Literal["previous", "edited"] = "previous"
 
 
 def directory_size(directory):
@@ -500,6 +502,17 @@ actual training code when your model/data/optimizer are ready.
         return {
             "run": json.loads((directory / "run.json").read_text()),
             "validation_control": validation_state(directory, records, status),
+            "restart_context": service.restart_context(run_id),
+            "revision": (
+                json.loads((directory / "revision.json").read_text())
+                if (directory / "revision.json").is_file()
+                else None
+            ),
+            "resume_problem": (
+                json.loads((directory / "resume-problem.json").read_text())
+                if (directory / "resume-problem.json").is_file()
+                else None
+            ),
             "status": status,
             "events": records[-10000:],
             "hardware": hw,
@@ -642,7 +655,9 @@ actual training code when your model/data/optimizer are ready.
             if body.validation:
                 validate_validation_device(run_directory(run_id), body.validation)
             return service.restart(
-                run_id, body.validation.model_dump() if body.validation else None
+                run_id,
+                body.validation.model_dump() if body.validation else None,
+                script_source=body.script_source,
             )
         except (ValueError, FileNotFoundError) as exc:
             raise HTTPException(409, str(exc))

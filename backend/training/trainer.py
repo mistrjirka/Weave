@@ -478,13 +478,24 @@ class Trainer:
                 if not path.is_absolute():
                     path = self.source_directory / path
                 state = torch.load(path, map_location="cpu", weights_only=True)
-                self.model.load_state_dict(state["model"])
-                if resume and not args.evaluate:
-                    self._restore(state)
-                    self.resuming = True
-                    step, tokens = state["step"], state["tokens"]
-                elif args.evaluate:
-                    step, tokens = state["step"], state["tokens"]
+                try:
+                    self.model.load_state_dict(state["model"], strict=True)
+                    if resume and not args.evaluate:
+                        self._restore(state)
+                        self.resuming = True
+                        step, tokens = state["step"], state["tokens"]
+                    elif args.evaluate:
+                        step, tokens = state["step"], state["tokens"]
+                except (ValueError, RuntimeError, KeyError, TypeError) as exc:
+                    if resume and not args.evaluate and self.rank == 0:
+                        problem = {
+                            "message": str(exc),
+                            "checkpoint": str(path),
+                            "recovery": "Fix the stage script and retry, or resume with the previous script. The source checkpoint and scripts are unchanged.",
+                        }
+                        atomic_json(report_directory / "resume-problem.json", problem)
+                        run.emit("resume_problem", problem)
+                    raise
             run.step, run.tokens = step, tokens
             if self.tuning_profile or self.tuning_note:
                 run.emit(
@@ -570,6 +581,7 @@ class Trainer:
             "tokenizers",
             "licenses",
             "migrations",
+            "resume-attempts",
         }
         for folder, children, files in os.walk(self.source_directory):
             children[:] = [
@@ -659,6 +671,30 @@ class Trainer:
             }
         return None
 
+    def _optimizer_structure(self):
+        """Optimizer IDs are positional; tensor shapes alone cannot identify them."""
+        raw = self.model.module if isinstance(self.model, DDP) else self.model
+        names = {id(param): name for name, param in raw.named_parameters()}
+        return {
+            "type": type(self.optimizer).__module__
+            + "."
+            + type(self.optimizer).__qualname__,
+            "scheduler": (
+                type(self.scheduler).__module__
+                + "."
+                + type(self.scheduler).__qualname__
+                if self.scheduler is not None
+                else None
+            ),
+            "groups": [
+                [
+                    {"name": names.get(id(param)), "shape": list(param.shape)}
+                    for param in group["params"]
+                ]
+                for group in self.optimizer.param_groups
+            ],
+        }
+
     def _restore(self, state):
         if state.get("trainer_version") != 2:
             raise ValueError(
@@ -675,6 +711,21 @@ class Trainer:
         if state.get("code_sha256") != self.code_sha256 and not compatible_upgrade:
             raise ValueError(
                 "Training/model code changed since checkpoint; start a new stage from weights"
+            )
+        if (
+            compatible_upgrade
+            and migration.get("edited_script")
+            and not state.get("optimizer_structure")
+        ):
+            raise ValueError(
+                "This older checkpoint has no optimizer parameter-name mapping. Resume once with the previous script and save a new checkpoint before using an edited script."
+            )
+        if (
+            state.get("optimizer_structure") is not None
+            and state["optimizer_structure"] != self._optimizer_structure()
+        ):
+            raise ValueError(
+                "Optimizer parameter names, shapes, group order, optimizer type or scheduler type differ from the checkpoint. Fix the script or retry with the previous script."
             )
         previous = dict(state["config"])
         current = asdict(self.config)
@@ -695,14 +746,21 @@ class Trainer:
             "async_evaluation",
             "evaluation_device",
             "evaluation_only",
+            "gradient_clip",
+            "cpu_threads",
+            "generation_context_length",
+            "trace_batches",
         }
-        if any(
-            previous.get(key) != value
+        changed = [
+            key
             for key, value in current.items()
-            if key not in mutable
-        ):
+            if key not in mutable and previous.get(key) != value
+        ]
+        if changed:
             raise ValueError(
-                "Training configuration differs from checkpoint; start a new stage from weights"
+                "Training configuration differs from checkpoint: "
+                + ", ".join(changed)
+                + ". This resume preserves optimizer/scheduler state; restore these settings or start a new stage from weights."
             )
         if state["datasets"] != self.manifest:
             raise ValueError(
@@ -729,6 +787,10 @@ class Trainer:
         self.batches_in_epoch = rank_state["batches_in_epoch"]
         self.batches_processed = rank_state["batches_processed"]
         self.optimizer.load_state_dict(state["optimizer"])
+        if (self.scheduler is None) != (state["scheduler"] is None):
+            raise ValueError(
+                "Scheduler presence differs from checkpoint; fix the script or retry with the previous script"
+            )
         if self.scheduler is not None:
             self.scheduler.load_state_dict(state["scheduler"])
         self.scaler.load_state_dict(state["scaler"])
@@ -1145,6 +1207,7 @@ class Trainer:
                 "trainer_version": 2,
                 "model": raw.state_dict(),
                 "optimizer": self.optimizer.state_dict(),
+                "optimizer_structure": self._optimizer_structure(),
                 "scheduler": self.scheduler.state_dict() if self.scheduler else None,
                 "scaler": self.scaler.state_dict(),
                 "step": run.step,
