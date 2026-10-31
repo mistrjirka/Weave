@@ -43,6 +43,28 @@ def test_ratio_search_preserves_global_batch_and_starts_with_standalone_estimate
     )
 
 
+def test_ddp_search_expands_past_duplicate_equal_and_nearby_allocations():
+    # These measured speeds round to 8/8. The old search stopped at 7/9, 9/7.
+    speeds = [34717, 39460]
+    assert ddp_candidates(16, speeds, 4) == [
+        (8, 8),
+        (7, 9),
+        (9, 7),
+        (6, 10),
+    ]
+    assert ddp_candidates(16, speeds, 5)[-1] == (10, 6)
+    assert ddp_candidates(16, speeds, 0) == []
+
+
+@pytest.mark.parametrize("speeds", [[1, 1], [3, 1], [1, 20]])
+def test_two_gpu_search_covers_every_legal_split_when_budget_allows(speeds):
+    for total in range(2, 21):
+        candidates = ddp_candidates(total, speeds, 100)
+        assert len(candidates) == total - 1
+        assert set(candidates) == {(n, total - n) for n in range(1, total)}
+        assert candidates[0] == tuple(allocate(total, speeds))
+
+
 def test_graph_identity_ignores_canvas_movement_but_not_computation():
     original = tiny_project()
     moved = copy.deepcopy(original)

@@ -67,16 +67,31 @@ def allocate(total, speeds):
 
 
 def ddp_candidates(total, speeds, limit=8):
+    """Explore progressively wider transfers around the standalone estimate."""
     estimate = allocate(total, speeds)
-    candidates = [estimate, allocate(total, [1] * len(speeds))]
-    for offset in sorted(set([1, max(1, total // 10)])):
+    if limit <= 0:
+        return []
+    candidates = list(
+        dict.fromkeys((tuple(estimate), tuple(allocate(total, [1] * len(speeds)))))
+    )
+    if len(candidates) >= limit:
+        return candidates[:limit]
+    seen = set(candidates)
+    # Fill the trial budget even when rounding makes the estimate equal to the
+    # balanced allocation. For two GPUs this visits every legal split if asked.
+    for offset in range(1, max(estimate)):
         for source, target in itertools.permutations(range(len(speeds)), 2):
             candidate = estimate.copy()
             if candidate[source] > offset:
                 candidate[source] -= offset
                 candidate[target] += offset
-                candidates.append(candidate)
-    return list(dict.fromkeys(map(tuple, candidates)))[:limit]
+                sizes = tuple(candidate)
+                if sizes not in seen:
+                    seen.add(sizes)
+                    candidates.append(sizes)
+                    if len(candidates) >= limit:
+                        return candidates
+    return candidates
 
 
 def split_candidates(names, costs, devices, speeds, limit=8):
