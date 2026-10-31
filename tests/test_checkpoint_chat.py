@@ -19,6 +19,40 @@ from backend.training.weave_training import Run
 from test_training import tiny_project
 
 
+@pytest.mark.parametrize("values", [(1.0, 1.1), (-2.0, -1.5)])
+def test_repetition_penalty_affects_greedy_decoding_and_preserves_default(
+    values, tmp_path, monkeypatch
+):
+    import torch
+    from backend.training import chat_worker
+
+    class Tokenizer:
+        eos_token_id = None
+
+        def encode(self, text, add_special_tokens=False):
+            return [1]
+
+        def decode(self, ids, skip_special_tokens=True):
+            return ",".join(str(value) for value in ids)
+
+    class Model:
+        def __call__(self, ids):
+            return torch.tensor(values).reshape(1, 1, 2).expand(1, ids.shape[1], 2)
+
+    emitted = []
+    monkeypatch.setattr(
+        chat_worker, "emit", lambda kind, **payload: emitted.append((kind, payload))
+    )
+    request = ChatMessage(
+        text="hello", mode="completion", temperature=0, max_new_tokens=1
+    ).model_dump()
+    chat_worker.generate(Model(), Tokenizer(), request, "cpu", tmp_path / "cancel")
+    assert emitted[-2][1]["text"] == "1"
+    request["repetition_penalty"] = 2
+    chat_worker.generate(Model(), Tokenizer(), request, "cpu", tmp_path / "cancel")
+    assert emitted[-2][1]["text"] == "0"
+
+
 def test_stalled_checkpoint_load_becomes_visible_error_and_releases_worker(tmp_path):
     class Worker:
         stdin = None

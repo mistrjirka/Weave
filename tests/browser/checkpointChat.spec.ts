@@ -73,6 +73,17 @@ shutil.copytree(source,destination)
     await expect(
       panel.getByRole("status", { name: "Chat model status" }),
     ).toContainText("ready", { timeout: 90000 });
+    await expect(
+      panel.getByRole("button", { name: "Checkpoint loaded", exact: true }),
+    ).toBeDisabled();
+    await select.selectOption("checkpoints/latest.pt");
+    await expect(
+      panel.getByRole("button", { name: "Load checkpoint", exact: true }),
+    ).toBeEnabled();
+    await select.selectOption("checkpoints/first.pt");
+    await expect(
+      panel.getByRole("button", { name: "Checkpoint loaded", exact: true }),
+    ).toBeDisabled();
     // A slow checkpoint catalog must not block loading/error status polling.
     const chatURL = `/api/training/runs/${fixture.run}/chat`;
     const readySession = await (
@@ -140,6 +151,12 @@ shutil.copytree(source,destination)
       await page.unroute("**" + chatURL + "/session");
     }
     await panel.getByText("Generation settings", { exact: true }).click();
+    await expect(
+      panel.getByRole("spinbutton", {
+        name: "Repetition penalty",
+        exact: true,
+      }),
+    ).toHaveValue("1");
     await panel
       .getByRole("spinbutton", { name: "Maximum new tokens", exact: true })
       .fill("3");

@@ -29,6 +29,16 @@ def stage():
     )
 
 
+def test_workspace_reads_do_not_rewrite_project_registry(tmp_path):
+    store = WorkspaceStore(tmp_path)
+    store.save_stage("project-read-only", stage())
+    registry = tmp_path / "project-locations.json"
+    before = registry.stat().st_mtime_ns
+    store.load_plan("project-read-only")
+    store.get_stage("project-read-only", "stage-one")
+    assert registry.stat().st_mtime_ns == before
+
+
 def test_real_files_external_edits_and_conflict_protection(tmp_path):
     store = WorkspaceStore(tmp_path)
     saved = store.save_stage("project-test", stage())
@@ -53,16 +63,24 @@ def test_real_files_external_edits_and_conflict_protection(tmp_path):
     values["learning_rate"] = 0.001
     config.write_text(json.dumps(values))
     assert store.load_plan("project-test").stages[0].config.learning_rate == 0.001
-    requested = current.model_copy(update={"config": TrainingConfig(
-        recipe="custom", execution="monitor", learning_rate=0.02,
-    )})
+    requested = current.model_copy(
+        update={
+            "config": TrainingConfig(
+                recipe="custom",
+                execution="monitor",
+                learning_rate=0.02,
+            )
+        }
+    )
     written = store.save_stage("project-test", requested)
     assert written.config.learning_rate == 0.02
     assert json.loads(config.read_text())["learning_rate"] == 0.02
     assert script.read_text() == current.script
 
 
-def test_stale_code_first_launch_settings_are_saved_without_overwriting_ssh_script(tmp_path):
+def test_stale_code_first_launch_settings_are_saved_without_overwriting_ssh_script(
+    tmp_path,
+):
     from backend.training.recipe import starter_script
 
     store = WorkspaceStore(tmp_path)
@@ -70,11 +88,21 @@ def test_stale_code_first_launch_settings_are_saved_without_overwriting_ssh_scri
     saved = store.save_stage("project-launch", initial)
     settings_path = Path(saved.config_path)
     assert settings_path.name == "launch.json"
-    external = saved.config.model_copy(update={"devices": [1], "compute_mode": "override"})
+    external = saved.config.model_copy(
+        update={"devices": [1], "compute_mode": "override"}
+    )
     settings_path.write_text(external.model_dump_json())
-    requested = saved.model_copy(update={"config": saved.config.model_copy(update={
-        "devices": [0, 1], "strategy": "ddp", "compute_mode": "override",
-    })})
+    requested = saved.model_copy(
+        update={
+            "config": saved.config.model_copy(
+                update={
+                    "devices": [0, 1],
+                    "strategy": "ddp",
+                    "compute_mode": "override",
+                }
+            )
+        }
+    )
     written = store.save_stage("project-launch", requested)
     assert written.config.devices == [0, 1]
     assert written.config.strategy == "ddp"

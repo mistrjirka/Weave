@@ -219,6 +219,13 @@ class Trainer:
             cfg.evaluation_device = launch.get("evaluation_device")
             if mode == "inline" and cfg.strategy == "train_eval":
                 cfg.strategy = "single"
+        validation_initial = Path(__file__).parent / "validation-initial.json"
+        if validation_initial.is_file():
+            self._set_validation(json.loads(validation_initial.read_text()))
+        # An evaluator receives a snapshot of the settings chosen by its parent,
+        # rather than rereading the original launch overrides.
+        if args.evaluate and os.environ.get("WEAVE_VALIDATION_SETTINGS"):
+            self._set_validation(json.loads(os.environ["WEAVE_VALIDATION_SETTINGS"]))
         # Validate the effective settings before spawning workers or calling user
         # data hooks. launch.json controls the frozen run, never the source script.
         cfg.__post_init__()
@@ -453,6 +460,7 @@ class Trainer:
                 samples=True,
                 checkpoint=not bool(args.evaluate),
                 commands=not bool(args.evaluate),
+                live_validation=not bool(args.evaluate),
             )
             if self.rank == 0:
                 print(f"Run outputs: {directory}", flush=True)
@@ -525,7 +533,7 @@ class Trainer:
                 random.seed(cfg.seed + self.rank)
                 torch.manual_seed(cfg.seed + self.rank)
             stopped = self._loop(directory)
-            if self.rank == 0 and cfg.background_evaluation:
+            if self.rank == 0 and (cfg.background_evaluation or self.evaluation_job):
                 if stopped:
                     self._cancel_evaluation(directory)
                 else:
@@ -656,12 +664,24 @@ class Trainer:
             raise ValueError(
                 "This checkpoint uses a different trainer. Load weights into a new stage instead."
             )
-        if state.get("code_sha256") != self.code_sha256:
+        migration_path = Path(__file__).parent / "resume-compatibility.json"
+        migration = (
+            json.loads(migration_path.read_text()) if migration_path.is_file() else {}
+        )
+        compatible_upgrade = (
+            migration.get("previous_code_sha256") == state.get("code_sha256")
+            and migration.get("current_code_sha256") == self.code_sha256
+        )
+        if state.get("code_sha256") != self.code_sha256 and not compatible_upgrade:
             raise ValueError(
                 "Training/model code changed since checkpoint; start a new stage from weights"
             )
-        previous = state["config"]
+        previous = dict(state["config"])
         current = asdict(self.config)
+        if previous.get("strategy") == "train_eval" and current["strategy"] == "single":
+            # Both place the training model on one device. Only the evaluation
+            # policy moved from the legacy alias into explicit live settings.
+            previous["strategy"] = "single"
         mutable = {
             "max_epochs",
             "max_optimizer_steps",
@@ -770,6 +790,21 @@ class Trainer:
                 if self.world > 1:
                     dist.broadcast_object_list(commands, src=0)
                 commands = commands[0]
+                for command in commands:
+                    if command["kind"] == "validation":
+                        self._set_validation(command["settings"])
+                        if self.rank == 0:
+                            run.emit(
+                                "validation_settings",
+                                {
+                                    **command["settings"],
+                                    "command_id": command["id"],
+                                    "state": "applied",
+                                    "effective_after_step": run.step,
+                                },
+                            )
+                if self.rank == 0 and self.evaluation_job:
+                    self._evaluation_worker(directory)
                 if any(c["kind"] == "stop" for c in commands):
                     self._checkpoint(directory, commands)
                     stopped = True
@@ -1144,6 +1179,42 @@ class Trainer:
         )
         return self._last_checkpoint_path
 
+    def _validation_settings(self):
+        return {
+            "mode": "async" if self.config.background_evaluation else "inline",
+            "device": (
+                self.config.evaluation_device
+                if self.config.evaluation_device is not None
+                else "cpu"
+            ),
+            "eval_every": self.config.eval_every,
+            "eval_batches": self.config.eval_batches,
+        }
+
+    def _set_validation(self, settings):
+        candidate = copy.deepcopy(self.config)
+        if settings["mode"] not in ("async", "inline"):
+            raise ValueError("Unknown validation mode")
+        candidate.async_evaluation = settings["mode"] == "async"
+        candidate.evaluation_device = (
+            settings["device"] if candidate.async_evaluation else None
+        )
+        candidate.eval_every = settings["eval_every"]
+        candidate.eval_batches = settings["eval_batches"]
+        # train_eval is a legacy alias; switching validation must not change
+        # the training model's placement or distributed process group.
+        if candidate.strategy == "train_eval":
+            candidate.strategy = "single"
+        candidate.__post_init__()
+        for key in (
+            "async_evaluation",
+            "evaluation_device",
+            "eval_every",
+            "eval_batches",
+            "strategy",
+        ):
+            setattr(self.config, key, getattr(candidate, key))
+
     def _evaluation_worker(self, directory, wait=False):
         if self.evaluation_job:
             if wait:
@@ -1163,17 +1234,20 @@ class Trainer:
                     ),
                     "checkpoint": self.evaluation_active,
                     "checkpoint_step": self.evaluation_active_step,
-                    "device": (
-                        self.config.evaluation_device
-                        if self.config.evaluation_device is not None
-                        else "cpu"
-                    ),
+                    "device": self.evaluation_active_device,
                 },
             )
             self._discard_evaluation_snapshot(self.evaluation_active)
             self.evaluation_job = None
         if self.evaluation_pending:
+            if not self.config.background_evaluation:
+                self._discard_evaluation_snapshot(self.evaluation_pending)
+                self.evaluation_pending = None
+                return
             environment = dict(os.environ, WEAVE_RUN_DIR=str(directory), USE_TORCH="1")
+            environment["WEAVE_VALIDATION_SETTINGS"] = json.dumps(
+                self._validation_settings()
+            )
             # Do not let an evaluator join the parent's distributed process group.
             for key in list(environment):
                 if key in (
@@ -1203,6 +1277,11 @@ class Trainer:
                 )
             self.evaluation_active = self.evaluation_pending
             self.evaluation_active_step = self.evaluation_pending_step
+            self.evaluation_active_device = (
+                self.config.evaluation_device
+                if self.config.evaluation_device is not None
+                else "cpu"
+            )
             self.run.emit(
                 "evaluation",
                 {
@@ -1239,7 +1318,7 @@ class Trainer:
                 "state": "cancelled",
                 "checkpoint": self.evaluation_active,
                 "checkpoint_step": self.evaluation_active_step,
-                "device": self.config.evaluation_device or "cpu",
+                "device": self.evaluation_active_device,
                 "reason": "training stopped by user",
             },
         )

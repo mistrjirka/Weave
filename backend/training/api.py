@@ -44,6 +44,7 @@ from .layout import PACKAGE, normalize_script
 from .recipe import is_code_first, starter_script
 from .chat import ChatService, ChatLoad, ChatMessage, checkpoint_catalog
 from .gpu_tuning import GPUTuning, TuningRequest, matching_profile
+from .run_controls import ValidationSettings, validation_state
 from ..paths import projects_directory
 from ..compiler import compile_project
 
@@ -55,6 +56,10 @@ class Login(BaseModel):
 class Command(BaseModel):
     kind: str
     include_data: bool = False
+
+
+class RestartRequest(BaseModel):
+    validation: ValidationSettings | None = None
 
 
 def directory_size(directory):
@@ -494,6 +499,7 @@ actual training code when your model/data/optimizer are ready.
 
         return {
             "run": json.loads((directory / "run.json").read_text()),
+            "validation_control": validation_state(directory, records, status),
             "status": status,
             "events": records[-10000:],
             "hardware": hw,
@@ -601,6 +607,45 @@ actual training code when your model/data/optimizer are ready.
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
+
+    def validate_validation_device(directory, settings):
+        if settings.mode == "inline" or settings.device == "cpu":
+            return
+        environment = directory / "environment.json"
+        if not environment.is_file():
+            raise ValueError(
+                "GPU information is not available yet; wait for trainer startup or choose CPU."
+            )
+        info = json.loads(environment.read_text())
+        if not info.get("cuda_available") or settings.device >= len(
+            info.get("devices", [])
+        ):
+            raise ValueError(
+                "The selected validation GPU is unavailable in this run's Python environment."
+            )
+
+    @api.put("/runs/{run_id}/validation", dependencies=[Depends(authenticated)])
+    def update_validation(run_id: str, body: ValidationSettings):
+        try:
+            validate_validation_device(run_directory(run_id), body)
+            return service.set_validation(run_id, body.model_dump())
+        except ValueError as exc:
+            raise HTTPException(409, str(exc))
+
+    @api.post("/runs/{run_id}/restart", dependencies=[Depends(authenticated)])
+    def restart_training(run_id: str, body: RestartRequest):
+        if os.environ.get("WEAVE_TRAINING_ENABLED") != "1":
+            raise HTTPException(
+                403, "Enable local training execution before restarting."
+            )
+        try:
+            if body.validation:
+                validate_validation_device(run_directory(run_id), body.validation)
+            return service.restart(
+                run_id, body.validation.model_dump() if body.validation else None
+            )
+        except (ValueError, FileNotFoundError) as exc:
+            raise HTTPException(409, str(exc))
 
     @api.post("/runs/{run_id}/commands", dependencies=[Depends(authenticated)])
     def command(run_id: str, body: Command):

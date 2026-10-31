@@ -6,29 +6,29 @@
   color: var(--theme-text, #263b30);
   background: var(--theme-base, #f7f9f5);
 }
-.training-workspace h2,
-.training-workspace h3,
-.training-workspace h4 {
+:is(.training-workspace, .training-controls) h2,
+:is(.training-workspace, .training-controls) h3,
+:is(.training-workspace, .training-controls) h4 {
   margin: 0 0 10px;
   line-height: 1.3;
 }
-.training-workspace h2 {
+:is(.training-workspace, .training-controls) h2 {
   display: flex;
   align-items: center;
   gap: 9px;
   font-size: 21px;
 }
-.training-workspace h3 {
+:is(.training-workspace, .training-controls) h3 {
   font-size: 15px;
 }
-.training-workspace h4 {
+:is(.training-workspace, .training-controls) h4 {
   font-size: 13px;
 }
-.training-workspace p {
+:is(.training-workspace, .training-controls) p {
   line-height: 1.6;
   margin: 6px 0 14px;
 }
-.training-workspace button,
+:is(.training-workspace, .training-controls) button,
 .training-download {
   border: 1px solid var(--line);
   padding: 8px 11px;
@@ -38,24 +38,24 @@
   text-decoration: none;
   min-height: 36px;
 }
-.training-workspace button:hover,
+:is(.training-workspace, .training-controls) button:hover,
 .training-download:hover {
   background: var(--theme-neutral-surface, #edf2e9);
 }
-.training-workspace button:disabled {
+:is(.training-workspace, .training-controls) button:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
-.training-workspace .primary {
+:is(.training-workspace, .training-controls) .primary {
   background: var(--theme-green-strong, #283f31);
   color: var(--theme-on-strong, #fff);
   border-color: transparent;
 }
-.training-workspace button:focus-visible,
-.training-workspace input:focus-visible,
-.training-workspace textarea:focus-visible,
-.training-workspace select:focus-visible,
-.training-workspace summary:focus-visible,
+:is(.training-workspace, .training-controls) button:focus-visible,
+:is(.training-workspace, .training-controls) input:focus-visible,
+:is(.training-workspace, .training-controls) textarea:focus-visible,
+:is(.training-workspace, .training-controls) select:focus-visible,
+:is(.training-workspace, .training-controls) summary:focus-visible,
 .training-download:focus-visible {
   outline: 2px solid var(--theme-green-accent, #608d76);
   outline-offset: 3px;
@@ -206,7 +206,7 @@
   gap: 18px 22px;
   margin: 16px 0;
 }
-.training-workspace label {
+:is(.training-workspace, .training-controls) label {
   display: flex;
   flex-direction: column;
   gap: 7px;
@@ -214,9 +214,9 @@
   font-size: 12px;
   font-weight: 600;
 }
-.training-workspace input:not([type="checkbox"]),
-.training-workspace select,
-.training-workspace textarea {
+:is(.training-workspace, .training-controls) input:not([type="checkbox"]),
+:is(.training-workspace, .training-controls) select,
+:is(.training-workspace, .training-controls) textarea {
   padding: 9px 10px;
   width: 100%;
   min-width: 0;
@@ -227,17 +227,17 @@
   font-weight: 400;
   line-height: 1.45;
 }
-.training-workspace select {
+:is(.training-workspace, .training-controls) select {
   min-height: 37px;
 }
-.training-workspace small {
+:is(.training-workspace, .training-controls) small {
   color: var(--theme-muted, #59685d);
   font-size: 11px;
   font-weight: 400;
   line-height: 1.6;
   overflow-wrap: anywhere;
 }
-.training-workspace textarea {
+:is(.training-workspace, .training-controls) textarea {
   resize: vertical;
 }
 .training-workspace .training-script {
@@ -255,7 +255,7 @@
   border-top: 1px solid var(--line);
   padding-top: 14px;
 }
-.training-workspace summary {
+:is(.training-workspace, .training-controls) summary {
   cursor: pointer;
   font-weight: 600;
   line-height: 1.6;
@@ -317,7 +317,7 @@
 .training-devices small {
   display: block;
 }
-.training-workspace input[type="checkbox"] {
+:is(.training-workspace, .training-controls) input[type="checkbox"] {
   width: 16px;
   height: 16px;
   flex-shrink: 0;
@@ -574,7 +574,7 @@
 .training-checkpoint small {
   display: block;
 }
-.training-workspace a {
+:is(.training-workspace, .training-controls) a {
   color: var(--theme-green-accent, #426b52);
   overflow-wrap: anywhere;
 }
@@ -758,8 +758,8 @@
   content-visibility: auto;
   contain-intrinsic-size: auto 160px;
 }
-.training-workspace button,
-.training-workspace a {
+:is(.training-workspace, .training-controls) button,
+:is(.training-workspace, .training-controls) a {
   touch-action: manipulation;
 }
 .training-server-files {
@@ -1017,24 +1017,25 @@
 }
 
 @media (max-width: 760px) {
-  .training-workspace label,
-  .training-workspace summary,
-  .training-workspace .training-muted,
+  :is(.training-workspace, .training-controls) label,
+  :is(.training-workspace, .training-controls) summary,
+  :is(.training-workspace, .training-controls) .training-muted,
   .training-message-log {
     font-size: 14px;
     line-height: 1.6;
   }
-  .training-workspace small {
+  :is(.training-workspace, .training-controls) small {
     font-size: 13px;
     line-height: 1.6;
   }
-  .training-workspace input:not([type="checkbox"]):not([type="radio"]),
-  .training-workspace select,
-  .training-workspace textarea {
+  :is(.training-workspace, .training-controls)
+    input:not([type="checkbox"]):not([type="radio"]),
+  :is(.training-workspace, .training-controls) select,
+  :is(.training-workspace, .training-controls) textarea {
     font-size: 16px;
     min-height: 44px;
   }
-  .training-workspace button,
+  :is(.training-workspace, .training-controls) button,
   .training-download {
     min-height: 44px;
   }
@@ -1248,13 +1249,14 @@ html:is([data-theme="dark"], [data-theme="black"]) {
   align-items: center;
   gap: 6px;
 }
-.training-history-dialog {
+.modal.training-history-dialog {
   width: min(560px, calc(100vw - 24px));
   max-height: 85dvh;
   padding: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  scrollbar-gutter: auto;
 }
 .training-history-heading {
   display: flex;
@@ -1265,6 +1267,7 @@ html:is([data-theme="dark"], [data-theme="black"]) {
 }
 .training-history-heading h2 {
   font-size: 16px;
+  margin: 0;
 }
 .training-history-heading .modal-close {
   position: static;
@@ -1356,4 +1359,122 @@ html:is([data-theme="dark"], [data-theme="black"]) {
 
 [data-testid="run-freshness"] > .training-finish-estimate {
   margin-left: 12px;
+}
+
+.modal.training-validation-dialog {
+  width: min(620px, calc(100vw - 24px));
+  max-height: 90dvh;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  scrollbar-gutter: auto;
+}
+.training-controls {
+  color: var(--theme-text, #263b30);
+  font-size: 14px;
+}
+.training-controls input:not([type="checkbox"]):not([type="radio"]),
+.training-controls select {
+  min-height: 44px;
+  font-size: 14px;
+}
+.training-controls label {
+  font-size: 13px;
+}
+.training-controls button:not(.modal-close) {
+  min-height: 44px;
+  font-size: 13px;
+}
+.training-controls .training-actions {
+  margin-top: 16px;
+}
+.training-restart-details {
+  display: grid;
+  gap: 12px;
+  margin: 16px 0;
+}
+.training-restart-details div {
+  display: grid;
+  gap: 4px;
+}
+.training-restart-details dt {
+  font-weight: 600;
+  font-size: 13px;
+}
+.training-restart-details dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--theme-muted);
+  font-size: 13px;
+}
+.training-validation-content > .training-muted:first-child {
+  margin-top: 0;
+}
+.training-examples-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 8px 18px;
+  margin-bottom: 14px;
+}
+.training-examples-toolbar label {
+  display: grid;
+  gap: 6px;
+  max-width: 100%;
+}
+.training-examples-toolbar select {
+  min-height: 44px;
+  max-width: 100%;
+}
+.training-examples-toolbar p {
+  margin: 0;
+}
+.training-validation-content {
+  padding: 16px;
+  overflow: auto;
+}
+.training-validation-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  border: 0;
+  padding: 0;
+  margin: 16px 0;
+  min-width: 0;
+}
+.training-validation-fields label {
+  display: grid;
+  gap: 6px;
+  align-content: start;
+  font-size: 13px;
+}
+.training-validation-fields select,
+.training-validation-fields input {
+  width: 100%;
+  min-width: 0;
+  min-height: 44px;
+}
+.training-validation-fields small {
+  color: var(--theme-muted);
+}
+.training-restart-confirmation {
+  border-top: 1px solid var(--line);
+  margin-top: 16px;
+  padding-top: 12px;
+}
+@media (max-width: 480px) {
+  .training-validation-fields {
+    grid-template-columns: 1fr;
+  }
+}
+@media (max-width: 760px) {
+  .training-controls label,
+  .training-controls button:not(.modal-close) {
+    font-size: 14px;
+  }
+  .training-controls input:not([type="checkbox"]):not([type="radio"]),
+  .training-controls select {
+    font-size: 16px;
+  }
 }

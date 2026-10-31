@@ -55,6 +55,7 @@ export function CheckpointChat({
   const [contextLength, setContextLength] = useState(2048);
   const [temperature, setTemperature] = useState(0.7);
   const [topP, setTopP] = useState(0.9);
+  const [repetitionPenalty, setRepetitionPenalty] = useState(1);
   const [seed, setSeed] = useState(42);
   const [error, setError] = useState("");
   const [catalogError, setCatalogError] = useState("");
@@ -230,6 +231,7 @@ export function CheckpointChat({
       context_length: contextLength,
       temperature,
       top_p: topP,
+      repetition_penalty: repetitionPenalty,
       seed,
     });
   return (
@@ -315,12 +317,15 @@ export function CheckpointChat({
             !checkpoint ||
             !!catalog?.problem ||
             generating ||
-            session?.state === "loading"
+            session?.state === "loading" ||
+            selectedLoaded
           }
         >
           {session?.state === "loading"
             ? "Loading checkpoint…"
-            : "Load checkpoint"}
+            : selectedLoaded
+              ? "Checkpoint loaded"
+              : "Load checkpoint"}
         </button>
         <button
           type="button"
@@ -461,6 +466,25 @@ export function CheckpointChat({
             <small>
               Sample from tokens covering this share of the probability mass.
               Ignored for greedy decoding at temperature 0.
+            </small>
+          </label>
+          <label>
+            Repetition penalty
+            <input
+              aria-label="Repetition penalty"
+              type="number"
+              min={1}
+              max={2}
+              step={0.05}
+              value={repetitionPenalty}
+              onChange={(event) =>
+                setRepetitionPenalty(event.target.valueAsNumber)
+              }
+            />
+            <small>
+              1 disables the penalty. Values above 1 discourage tokens already
+              in the prompt or generated text. This changes decoding, not the
+              model’s learned weights.
             </small>
           </label>
           <label>

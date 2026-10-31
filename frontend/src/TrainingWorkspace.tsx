@@ -24,6 +24,8 @@ import { GPUTuningStatus } from "./GPUTuningStatus";
 import { FP16Status } from "./FP16Status";
 import { TrainingMessages } from "./TrainingMessages";
 import { ValidationStatus } from "./ValidationStatus";
+import { GeneratedExamples } from "./GeneratedExamples";
+import { RunValidationControls } from "./RunValidationControls";
 import { RunOverview } from "./RunOverview";
 import { ExecutionStatus } from "./ExecutionStatus";
 import { TrainingCounters } from "./TrainingCounters";
@@ -118,7 +120,6 @@ export function TrainingWorkspace({ project }: { project: Project }) {
   const [detail, setDetail] = useState<RunDetail | null>(null);
   const [gpus, setGPUs] = useState<TrainingGPU[]>([]);
   const [initialViewReady, setInitialViewReady] = useState(false);
-  const [modelReady, setModelReady] = useState(false);
   const [model, setModel] = useState<Awaited<
     ReturnType<typeof inspectTrainingModel>
   > | null>(null);
@@ -183,7 +184,6 @@ export function TrainingWorkspace({ project }: { project: Project }) {
   const [smooth, setSmooth] = useState(false);
   const [comparisonId, setComparisonId] = useState("");
   const [comparison, setComparison] = useState<RunDetail | null>(null);
-  const [sampleCheckpoint, setSampleCheckpoint] = useState("");
   const [deletedStage, setDeletedStage] = useState<TrainingStage | null>(null);
   const [preview, setPreview] = useState<z.infer<typeof previewSchema> | null>(
     null,
@@ -213,26 +213,10 @@ export function TrainingWorkspace({ project }: { project: Project }) {
       );
   }, [detail?.run.id, detail?.reporting_url]);
   useEffect(() => {
-    if (
-      !initialViewReady &&
-      loaded &&
-      modelReady &&
-      (!stage || pythonEnvironment || environmentError) &&
-      (!runId || detail || monitorError)
-    ) {
+    if (!initialViewReady && loaded && (!runId || detail || monitorError)) {
       setInitialViewReady(true);
     }
-  }, [
-    initialViewReady,
-    loaded,
-    modelReady,
-    stage?.id,
-    pythonEnvironment,
-    environmentError,
-    runId,
-    detail,
-    monitorError,
-  ]);
+  }, [initialViewReady, loaded, runId, detail, monitorError]);
   const cacheKey = `weave:training:${project.id}`;
 
   useEffect(() => {
@@ -342,19 +326,18 @@ export function TrainingWorkspace({ project }: { project: Project }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [capabilities?.authenticated, project.id, cacheKey]);
   useEffect(() => {
-    if (!capabilities?.authenticated) return;
+    if (!capabilities?.authenticated || !setupOpen) return;
     const controller = new AbortController();
-    setModelReady(false);
+    setModel(null);
     void inspectTrainingModel(project)
       .then((value) => {
         if (!controller.signal.aborted) setModel(value);
       })
-      .catch(() => setModel(null))
-      .finally(() => {
-        if (!controller.signal.aborted) setModelReady(true);
+      .catch(() => {
+        if (!controller.signal.aborted) setModel(null);
       });
     return () => controller.abort();
-  }, [project, capabilities?.authenticated]);
+  }, [project, capabilities?.authenticated, setupOpen]);
   useEffect(() => {
     if (loaded) {
       try {
@@ -382,7 +365,7 @@ export function TrainingWorkspace({ project }: { project: Project }) {
     setPromptsText(JSON.stringify(stage?.config.prompts ?? [], null, 2));
   }, [stage?.id]);
   useEffect(() => {
-    if (!capabilities?.authenticated) return;
+    if (!capabilities?.authenticated || !setupOpen) return;
     const controller = new AbortController();
     setPythonEnvironment(null);
     setEnvironmentError("");
@@ -404,7 +387,12 @@ export function TrainingWorkspace({ project }: { project: Project }) {
       window.clearTimeout(timer);
       controller.abort();
     };
-  }, [config?.python, capabilities?.python, capabilities?.authenticated]);
+  }, [
+    config?.python,
+    capabilities?.python,
+    capabilities?.authenticated,
+    setupOpen,
+  ]);
   useEffect(() => {
     if (!stage?.script_path || !capabilities?.authenticated) return;
     const controller = new AbortController();
@@ -791,7 +779,6 @@ export function TrainingWorkspace({ project }: { project: Project }) {
   }
   const checkpoints =
     detail?.events.filter((e) => e.kind === "checkpoint") ?? [];
-  const sampleEvents = detail?.events.filter((e) => e.kind === "sample") ?? [];
   const metrics = metricsForDisplay(
     detail?.events ?? [],
     Boolean(detail?.run.code_first),
@@ -920,7 +907,7 @@ export function TrainingWorkspace({ project }: { project: Project }) {
         createPortal(
           <Dialog
             label="Stages and run history"
-            className="training-history-dialog"
+            className="training-controls training-history-dialog"
             onClose={() => setHistoryOpen(false)}
           >
             <header className="training-history-heading">
@@ -1103,6 +1090,7 @@ export function TrainingWorkspace({ project }: { project: Project }) {
             <section className="training-card training-setup-card">
               <button
                 className="training-setup-devices"
+                title="Configure devices for the next training launch. Use Validation settings on the run below for live changes."
                 onClick={() => {
                   setSetupOpen(true);
                   setEditor("settings");
@@ -1140,6 +1128,13 @@ export function TrainingWorkspace({ project }: { project: Project }) {
                     </button>
                   </div>
                 </div>
+                {active && editor === "settings" && (
+                  <p className="training-muted">
+                    These launch settings apply to the next run. To change
+                    validation now, use <strong>Validation settings</strong>{" "}
+                    beside the running stage below.
+                  </p>
+                )}
                 <details
                   key={editor}
                   open={editor === "script"}
@@ -2379,6 +2374,26 @@ export function TrainingWorkspace({ project }: { project: Project }) {
                 </div>
                 <div className="training-actions">
                   {historyButton}
+                  {detail.run.code_first && (
+                    <RunValidationControls
+                      key={detail.run.id}
+                      detail={detail}
+                      gpus={gpus}
+                      enabled={capabilities.enabled}
+                      onRestart={(run) => {
+                        setRuns((current) => [
+                          run,
+                          ...current.filter((item) => item.id !== run.id),
+                        ]);
+                        setDetail(null);
+                        setRunId(run.id);
+                        setSetupOpen(false);
+                        setNotice(
+                          "Restart requested. Restoring the saved checkpoint in a new process. Your editable script was preserved.",
+                        );
+                      }}
+                    />
+                  )}
                   {active && (
                     <>
                       <button
@@ -2778,67 +2793,7 @@ export function TrainingWorkspace({ project }: { project: Project }) {
                 </>
               )}
               {dashboard === "samples" && (
-                <>
-                  <label>
-                    Checkpoint
-                    <select
-                      value={sampleCheckpoint}
-                      onChange={(e) => setSampleCheckpoint(e.target.value)}
-                    >
-                      <option value="">All checkpoints</option>
-                      {[
-                        ...new Set(
-                          sampleEvents.map((e) =>
-                            String(e.payload.checkpoint ?? "Unspecified"),
-                          ),
-                        ),
-                      ].map((name) => (
-                        <option key={name} value={name}>
-                          {name}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <div className="training-samples">
-                    {sampleEvents
-                      .filter(
-                        (e) =>
-                          !sampleCheckpoint ||
-                          String(e.payload.checkpoint ?? "Unspecified") ===
-                            sampleCheckpoint,
-                      )
-                      .map((event) => (
-                        <article key={event.id} className="training-sample">
-                          <header>
-                            <strong>Step {event.step}</strong>
-                            <small>
-                              {String(
-                                event.payload.checkpoint ??
-                                  "Checkpoint unspecified",
-                              )}
-                            </small>
-                          </header>
-                          <h4>Prompt</h4>
-                          <pre>{String(event.payload.prompt)}</pre>
-                          <h4>Model output</h4>
-                          <pre>{String(event.payload.output)}</pre>
-                          <details>
-                            <summary>Decoding and evaluation details</summary>
-                            <pre>
-                              {JSON.stringify(event.payload.metadata, null, 2)}
-                            </pre>
-                          </details>
-                        </article>
-                      ))}
-                  </div>
-                  {!sampleEvents.length && (
-                    <p className="training-muted">
-                      No generated examples received yet. They appear when
-                      evaluation reaches sample generation. Set sample_prompts
-                      in train.py, or use run.sample() in a custom loop.
-                    </p>
-                  )}
-                </>
+                <GeneratedExamples key={detail.run.id} events={detail.events} />
               )}
               {dashboard === "hardware" && (
                 <>

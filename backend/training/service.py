@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import threading
 import sys
 import time
 import uuid
@@ -394,6 +395,7 @@ class TrainingService:
 
         self.workspaces = WorkspaceStore(self.root)
         self.token_path = self.root / "operator.token"
+        self.controls_lock = threading.RLock()
 
     @property
     def token(self):
@@ -477,7 +479,7 @@ class TrainingService:
                 }
         return preparing() if progress else {"state": "prepared"}
 
-    def launch(self, request):
+    def launch(self, request, *, frozen_source=None, validation_settings=None):
         project, stage = request.project, request.stage
         stage = stage.model_copy(
             update={"script": normalize_script(stage.script, stage.config.recipe)}
@@ -536,9 +538,38 @@ class TrainingService:
                 info["id"]: self.tokenizer_root / valid_id(info["id"])
                 for info in input_tokenizers(project).values()
             }
-            bundle = export_zip(project, tokenizer_dirs=directories)
-            write_support(directory, bundle)
-            extras = self.workspaces.freeze_extras(project["id"], stage.id, directory)
+            if frozen_source is None:
+                bundle = export_zip(project, tokenizer_dirs=directories)
+                write_support(directory, bundle)
+                extras = self.workspaces.freeze_extras(
+                    project["id"], stage.id, directory
+                )
+            else:
+                from .layout import rewrite_imports
+                from .run_controls import VALIDATION_UPGRADE_FROM
+
+                previous_trainer = frozen_source / PACKAGE / "trainer.py"
+                current_trainer = rewrite_imports(
+                    (HERE / "trainer.py").read_text(), "."
+                )
+                if (
+                    file_hash(previous_trainer) not in VALIDATION_UPGRADE_FROM
+                    and previous_trainer.read_text() != current_trainer
+                ):
+                    raise ValueError(
+                        "This trainer revision needs a new stage from weights; its exact-resume upgrade has not been verified."
+                    )
+                shutil.copytree(frozen_source / PACKAGE, directory / PACKAGE)
+                (directory / PACKAGE / "trainer.py").write_text(current_trainer)
+                extras = json.loads(
+                    (frozen_source / ".workspace-files.json").read_text()
+                )
+                for name in extras:
+                    source, target = inside(frozen_source, name), inside(
+                        directory, name
+                    )
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(source, target)
             atomic_json(directory / ".workspace-files.json", extras)
             files = {"model.py": (directory / PACKAGE / "model.py").read_text()}
             metadata = model_metadata(files, project)
@@ -753,6 +784,21 @@ class TrainingService:
                         "or clear all assignments to use saved tuning."
                     )
             (directory / "train.py").write_text(stage.script)
+            if frozen_source is not None:
+                from .run_controls import code_hash
+
+                atomic_json(
+                    directory / PACKAGE / "resume-compatibility.json",
+                    {
+                        "previous_code_sha256": code_hash(frozen_source),
+                        "current_code_sha256": code_hash(directory),
+                        "reason": "Verified validation-controls trainer upgrade; frozen model, recipe and user helpers preserved.",
+                    },
+                )
+            if validation_settings is not None:
+                atomic_json(
+                    directory / PACKAGE / "validation-initial.json", validation_settings
+                )
 
             atomic_json(directory / "config.json", config)
             if code_first:
@@ -819,7 +865,102 @@ class TrainingService:
                     directory, matching, request["include_data"], request["id"]
                 )
 
-    def command(self, run_id, kind, include_data=False):
+    def restart(self, run_id, validation_settings=None):
+        """Resume a stopped local run without reading or overwriting editable files."""
+        with self.controls_lock:
+            source = self.run_dir(run_id)
+            info = json.loads((source / "run.json").read_text())
+            if info["execution"] != "local" or not info.get("code_first"):
+                raise ValueError(
+                    "Checkpoint restart currently requires a local hook-Trainer run."
+                )
+            if self.status(source)["state"] not in (
+                "stopped",
+                "failed",
+                "killed",
+                "completed",
+            ):
+                raise ValueError(
+                    "Stop training safely before restarting from its checkpoint."
+                )
+            receipt = source / "restart.json"
+            if receipt.is_file():
+                return json.loads(
+                    (
+                        self.run_dir(json.loads(receipt.read_text())["run_id"])
+                        / "run.json"
+                    ).read_text()
+                )
+            checkpoint = next(
+                (
+                    event
+                    for event in reversed(events(source, kind="checkpoint"))
+                    if not event["payload"].get("remote")
+                ),
+                None,
+            )
+            if not checkpoint or not checkpoint["payload"].get("metadata", {}).get(
+                "exact_resume"
+            ):
+                raise ValueError(
+                    "No checkpoint with restorable optimizer and data-loader state is available. Create a new stage from weights instead."
+                )
+            project = json.loads((source / PACKAGE / "project.json").read_text())
+            stage = Stage(**json.loads((source / "stage.json").read_text()))
+            stage.script = (source / "train.py").read_text()
+            stage.config = stage.config.model_copy(
+                update={
+                    "execution": "local",
+                    "start_mode": "resume",
+                    "parent_run": run_id,
+                    "parent_checkpoint": checkpoint["payload"]["path"],
+                }
+            )
+            if validation_settings is None:
+                from .run_controls import validation_state
+
+                validation_settings = validation_state(
+                    source, events(source), self.status(source)
+                )["current"]
+            restarted = self.launch(
+                Launch(project=project, stage=stage),
+                frozen_source=source,
+                validation_settings=validation_settings,
+            )
+            atomic_json(
+                receipt,
+                {
+                    "run_id": restarted["id"],
+                    "checkpoint": checkpoint["payload"]["path"],
+                },
+            )
+            return restarted
+
+    def set_validation(self, run_id, settings):
+        from .run_controls import validation_state
+
+        with self.controls_lock:
+            directory = self.run_dir(run_id)
+            state = validation_state(
+                directory, events(directory), self.status(directory)
+            )
+            if not state["supported"]:
+                raise ValueError(
+                    "Restart from a checkpoint to enable live validation controls for this frozen trainer."
+                )
+            if not state["active"]:
+                raise ValueError(
+                    "Training is not running; choose validation settings when restarting."
+                )
+            if state["pending"]:
+                raise ValueError(
+                    "Wait for the trainer to acknowledge the pending validation change."
+                )
+            command = self.command(run_id, "validation", settings=settings)
+            atomic_json(directory / "validation-request.json", command)
+            return command
+
+    def command(self, run_id, kind, include_data=False, *, settings=None):
         directory = self.run_dir(run_id)
         identifier = uuid.uuid4().hex
         command = {
@@ -828,6 +969,8 @@ class TrainingService:
             "include_data": include_data,
             "time": time.time(),
         }
+        if settings is not None:
+            command["settings"] = settings
         atomic_json(directory / "commands" / (identifier + ".json"), command)
         remote = (directory / "reporting-status.json").exists() and json.loads(
             (directory / "reporting-status.json").read_text()

@@ -248,6 +248,7 @@ test("launch saves first, reports failures beside Start, and selects the new run
       page.getByText("Waiting for the first datapoints", { exact: true }),
     ).toHaveCount(4);
     await expect(page.locator(".training-chart svg circle")).toHaveCount(0);
+    let sampleStep = 1000;
     await page.route(`**/api/training/runs/${newRun}`, async (route) => {
       const fixture = structuredClone(detail);
       fixture.status.state = "running";
@@ -274,6 +275,22 @@ test("launch saves first, reports failures beside Start, and selects the new run
         tokens: 8,
         payload: { "train/loss": 2.5 },
       });
+      for (const step of [500, sampleStep])
+        fixture.events.push({
+          version: 1,
+          id: `sample-${step}`,
+          time: Date.now() / 1000,
+          kind: "sample",
+          step,
+          tokens: 0,
+          channel: "evaluation",
+          payload: {
+            checkpoint: `checkpoints/step-${step}.pt`,
+            prompt: "Hello",
+            output: `Output at ${step}`,
+            metadata: { decoding: "greedy" },
+          },
+        });
       fixture.hardware = [
         {
           time: Date.now() / 1000,
@@ -324,6 +341,28 @@ test("launch saves first, reports failures beside Start, and selects the new run
       .filter({ hasText: "GPU 1 utilization" });
     await expect(empty).toContainText("No utilization readings received");
     await expect(empty.locator("svg")).toHaveCount(0);
+    await page
+      .getByRole("button", { name: "Generated examples", exact: true })
+      .click();
+    const examples = page.getByRole("combobox", {
+      name: "Generated example checkpoint",
+      exact: true,
+    });
+    await expect(examples).toHaveValue("latest");
+    await expect(page.locator(".training-sample")).toHaveCount(1);
+    await expect(page.locator(".training-sample")).toContainText(
+      "Output at 1000",
+    );
+    sampleStep = 1500;
+    await expect(page.locator(".training-sample")).toContainText(
+      "Output at 1500",
+      { timeout: 10000 },
+    );
+    await examples.selectOption("all");
+    await expect(page.locator(".training-sample")).toHaveCount(2);
+    await expect(page.locator(".training-sample").first()).toContainText(
+      "Output at 1500",
+    );
   } finally {
     releaseInitial();
     releaseSave();

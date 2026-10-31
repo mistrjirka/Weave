@@ -36,6 +36,7 @@ class ChatMessage(BaseModel):
     context_length: int = Field(default=2048, ge=2, le=32768)
     temperature: FiniteFloat = Field(default=0.7, ge=0, le=2)
     top_p: FiniteFloat = Field(default=0.9, gt=0, le=1)
+    repetition_penalty: FiniteFloat = Field(default=1.0, ge=1, le=2)
     seed: int = Field(default=42, ge=0, le=2**32 - 1)
 
 

@@ -636,8 +636,26 @@ def test_async_validation_is_independent_of_cpu_ddp_and_gui_override(tmp_path):
     launch = json.loads(launch_path.read_text())
     launch.update(evaluation_mode="async", evaluation_device="cpu")
     atomic_json(launch_path, launch)
+    service.command(
+        directory.name,
+        "validation",
+        settings={
+            "mode": "async",
+            "device": "cpu",
+            "eval_every": 2,
+            "eval_batches": 1,
+        },
+    )
     execute(directory)
     records = events(directory)
+    applied = [event for event in records if event["kind"] == "validation_settings"]
+    assert len(applied) == 1 and applied[0]["payload"]["eval_every"] == 2
+    checkpoint = events(directory, kind="checkpoint")[-1]
+    saved = torch.load(
+        directory / checkpoint["payload"]["path"], weights_only=True, map_location="cpu"
+    )
+    assert len(saved["rank_state"]) == 2
+    assert saved["config"]["eval_every"] == 2
     assert [e["step"] for e in records if e["kind"] == "progress"][-1] == 2
     validations = [
         e for e in records if e["channel"] == "evaluation" and e["kind"] == "metrics"
@@ -704,7 +722,7 @@ def test_gui_compute_override_reaches_runtime_and_preserves_user_script(tmp_path
 
 def test_safe_stop_cancels_background_evaluator_and_removes_private_snapshots(tmp_path):
     _, directory, _ = make_hook_run(tmp_path)
-    source = r'''
+    source = r"""
 import subprocess, sys, time
 from pathlib import Path
 from types import SimpleNamespace
@@ -723,6 +741,7 @@ checkpoint.parent.mkdir(exist_ok=True)
 checkpoint.write_bytes(b"retained resumable checkpoint")
 trainer.evaluation_active = str(active)
 trainer.evaluation_active_step = 10
+trainer.evaluation_active_device = 0  # The running job keeps its original device.
 trainer.evaluation_pending = str(pending)
 records = []
 trainer.run = SimpleNamespace(emit=lambda kind, payload: records.append((kind, payload)))
@@ -739,15 +758,18 @@ try:
     assert checkpoint.read_bytes() == b"retained resumable checkpoint"
     assert records[-1][0] == "evaluation"
     assert records[-1][1]["state"] == "cancelled"
-    assert records[-1][1]["device"] == "cpu"
+    assert records[-1][1]["device"] == 0
 finally:
     if job.poll() is None:
         job.kill()
         job.wait()
-'''
+"""
     result = subprocess.run(
         [sys.executable, "-c", textwrap.dedent(source)],
-        cwd=directory, capture_output=True, text=True, timeout=30,
+        cwd=directory,
+        capture_output=True,
+        text=True,
+        timeout=30,
     )
     assert result.returncode == 0, result.stdout + result.stderr
 

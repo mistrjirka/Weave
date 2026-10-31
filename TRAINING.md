@@ -4,6 +4,14 @@ Open a project and choose **Training**. Stages and run records are separate from
 
 Use **Stages & history** to select or manage stages and past runs. Standard metric charts stay empty until their first reported point arrives. Active bounded runs show an estimated finish beside progress after enough measurements; this uses the last five minutes of progress and excludes final validation/checkpoint writing. Variable sequence lengths and background work can change that estimate.
 
+**Validation settings**, beside the run controls, changes validation execution, CPU/GPU device, optimizer-update interval and maximum batch count for a running hook Trainer. The UI distinguishes a queued request from the trainer's acknowledgement. DDP workers apply the same change between optimizer updates; an evaluation already running keeps its original settings, while the next job uses the new ones. These run controls do not edit train.py or change next-launch stage settings.
+
+Older frozen trainers require one checkpoint restart to enable live controls. **Restart from checkpoint… → Save checkpoint & restart** stops safely and starts a new run from the saved state; stopped runs offer **Resume training**. The frozen recipe, model and user helpers are preserved, and optimizer, scheduler, scaler, RNG and loader cursor are restored. Restart does not pick up edits from your editable stage script. A missing loader cursor or an unverified framework upgrade is rejected rather than silently starting over from weights. Run history preserves both processes. If you reload while waiting for a safe stop, select the stopped run and use Resume training.
+
+Dashboard loading does not wait for Python/PyTorch inspection. Environment checks run when Stage setup opens and are reused for up to a minute. A **Reload UI** button appears after a newer browser build is detected; reloading the interface leaves training processes running.
+
+Generated examples follow the newest evaluated checkpoint by default, ordered by optimizer-update number even if evaluations arrive out of order. You can select an older checkpoint or all checkpoints. Automatic built-in examples use greedy decoding and label that choice; custom sample hooks can use their own decoder and metadata. An asynchronous evaluator can lag behind the training step, which the UI labels explicitly.
+
 ## Enable local execution
 
 The default `bash scripts/install.sh` installs CPU PyTorch in a separate environment and saves training settings. For an existing GPU environment, run:
@@ -125,6 +133,8 @@ Choose **CPU** or a particular GPU, then **Load checkpoint**. Inference uses the
 - **Text completion** continues only the text in the current prompt. It adds no chat wrappers or previous turns and ignores the system-message field. This is useful for inspecting pretraining checkpoints.
 
 Both modes stop at the saved tokenizer's end-of-sequence token or **Maximum new tokens** (default 128; maximum 2,048). **Stop generation** requests a stop between tokens; **Unload model** terminates inference and releases memory. The context token budget must cover the prompt plus requested new tokens and stay within the model's trained limits. Overlong prompts raise an error rather than silently dropping conversation turns. Temperature zero is greedy decoding; positive temperatures support top-p sampling and a reproducible seed within a fixed runtime/device.
+
+An optional **Repetition penalty** discourages tokens already present in the prompt or generated prefix: 1 disables it, larger values penalize positive logits by division and negative logits by multiplication. It works with greedy decoding as well as sampling and is saved in generation metadata. This changes inference choices, not training or validation loss. The load control reads **Checkpoint loaded** and is disabled when the selected checkpoint and device already match the loaded session.
 
 The model stays loaded between messages in a separate worker process. There is one loaded chat model per server; loading another replaces it, and an idle model unloads after ten minutes. CPU is the default. A GPU needs another model copy and can compete with training/evaluation on the same device. Decoding currently recomputes the full prefix without a KV cache, so long generations may be slow. Tool-call text is displayed, never executed. Chat-status polling reads only worker state; it does not rescan checkpoints each second.
 

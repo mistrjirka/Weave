@@ -7,6 +7,7 @@ import React, {
 } from "react";
 import { GPUTuning } from "./GPUTuning";
 import { TrainingWorkspace } from "./TrainingWorkspace";
+import { UIUpdateNotice } from "./UIUpdateNotice";
 import { createRoot } from "react-dom/client";
 import {
   ReactFlow,
@@ -2779,6 +2780,7 @@ function Workbench({
             </button>
           </div>
           <div className="view-actions">
+            <UIUpdateNotice />
             <GPUTuning project={project} />
             <ThemePicker />
             <button

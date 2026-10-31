@@ -68,6 +68,13 @@ def generate(model, tokenizer, request, device, cancel):
             scores = logits[0, -1].float().to(device)
             if not torch.isfinite(scores).all():
                 raise ValueError("Model logits contain NaN or infinity.")
+            penalty = request.get("repetition_penalty", 1.0)
+            if penalty != 1.0:
+                seen = generated[0].unique()
+                values = scores[seen]
+                scores[seen] = torch.where(
+                    values < 0, values * penalty, values / penalty
+                )
             if request["temperature"] == 0:
                 token = scores.argmax().reshape(1)
             else:

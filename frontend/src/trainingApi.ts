@@ -137,7 +137,28 @@ export const templateSchema = z.object({
     custom: z.string(),
   }),
 });
+export const validationSettingsSchema = z.object({
+  mode: z.enum(["inline", "async"]),
+  device: z.union([z.number().int().nonnegative(), z.literal("cpu")]),
+  eval_every: z.number().int().positive(),
+  eval_batches: z.number().int().positive(),
+});
+export type ValidationSettings = z.infer<typeof validationSettingsSchema>;
+
 export const detailSchema = z.object({
+  validation_control: z
+    .object({
+      supported: z.boolean(),
+      active: z.boolean(),
+      current: validationSettingsSchema,
+      pending: z
+        .object({ id: z.string(), settings: validationSettingsSchema })
+        .passthrough()
+        .nullable(),
+      applied_at_step: z.number().nullable(),
+      applied_command_id: z.string().nullable(),
+    })
+    .optional(),
   run: runSchema,
   status: z.object({
     state: z.string(),

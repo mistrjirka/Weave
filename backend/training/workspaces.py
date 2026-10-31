@@ -136,7 +136,7 @@ class WorkspaceStore:
             registry = self.root / "project-locations.json"
             state = json.loads(registry.read_text()) if registry.exists() else {}
             previous = state.get("roots", [])
-            known_directories = state.get("directories", {})
+            known_directories = dict(state.get("directories", {}))
 
             if project_name is None:
                 known = root / known_directories.get(project_id, "")
@@ -208,10 +208,9 @@ class WorkspaceStore:
             if str(root) not in previous:
                 previous = [*previous, str(root)]
             known_directories[project_id] = destination_name
-            atomic_json(
-                registry,
-                {"roots": previous, "directories": known_directories},
-            )
+            updated = {"roots": previous, "directories": known_directories}
+            if updated != state:
+                atomic_json(registry, updated)
             return destination
 
     def normalize_existing_script(self, directory, recipe):

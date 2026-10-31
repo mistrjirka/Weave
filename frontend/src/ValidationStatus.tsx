@@ -10,7 +10,12 @@ export function ValidationStatus({ events }: { events: RunDetail["events"] }) {
     )
     .at(-1);
   const configuration = events
-    .filter((event) => event.kind === "configuration")
+    .filter(
+      (event) =>
+        (event.kind === "configuration" ||
+          event.kind === "validation_settings") &&
+        event.channel !== "evaluation",
+    )
     .at(-1);
   const interval = configuration?.payload.eval_every;
   const progress = events
