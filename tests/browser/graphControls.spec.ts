@@ -1,7 +1,7 @@
 import { test, expect } from "@playwright/test";
 import type { Page, Locator } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
-import { projectSchema } from "../../frontend/src/api";
+import { projectSchema, reportSchema } from "../../frontend/src/api";
 import { openExample } from "./helpers";
 const document = async (page: Page) =>
   projectSchema.parse(
@@ -120,7 +120,7 @@ test("dropping an output on empty space searches, adds and connects a node in on
   });
   await expect(search).toBeFocused();
   await search.fill("embedding");
-  await expect(picker.getByRole("option")).toHaveCount(2);
+  await expect(picker.getByRole("option")).toHaveCount(1);
   await expect(picker.getByRole("option").first()).toContainText("Embedding");
   await search.press("Enter");
   await expect(picker).toHaveCount(0);
@@ -616,4 +616,99 @@ test("attention explanations remain usable on a narrow screen", async ({
       .locator(".setting-explanation")
       .filter({ hasText: "earlier tokens" }),
   ).toBeVisible();
+});
+
+test("mask suggestions exclude incompatible feature inputs and connect attention to its mask port", async ({
+  page,
+  context,
+}) => {
+  const id = `project-picker-mask-${Date.now()}`;
+  const source = {
+    version: 1,
+    id,
+    name: "Mask picker fixture",
+    description: "Temporary connection test",
+    config: { width: 128, heads: 8, ffn_width: 256, vocab: 128 },
+    graph: {
+      nodes: [
+        {
+          id: "mask",
+          type: "architecture",
+          position: { x: 0, y: 160 },
+          data: {
+            kind: "input",
+            label: "Boolean mask",
+            params: { index: 0, shape: [16, 16], dtype: "bool" },
+          },
+        },
+        {
+          id: "out",
+          type: "architecture",
+          position: { x: 500, y: 160 },
+          data: { kind: "output", label: "Output", params: {} },
+        },
+      ],
+      edges: [
+        { id: "mask-out", source: "mask", target: "out", targetHandle: "a" },
+      ],
+    },
+  };
+  page.on("dialog", (dialog) => dialog.accept());
+  try {
+    expect(
+      (await context.request.put(`/api/projects/${id}`, { data: source })).ok(),
+    ).toBeTruthy();
+    await page.goto(`/?model=${id}`);
+    await expect(
+      page.getByRole("button", { name: "Shapes compatible", exact: true }),
+    ).toBeVisible();
+    await dropOutput(
+      page,
+      page.locator('.flow-wrap .react-flow__node[data-id="mask"]'),
+    );
+    const picker = page.getByRole("dialog", {
+      name: "Add connected block",
+      exact: true,
+    });
+    const search = picker.getByRole("combobox", {
+      name: "Search connected blocks",
+      exact: true,
+    });
+    await search.fill("embedding");
+    await expect(picker).toContainText(
+      "No matching blocks with compatible inputs",
+    );
+    await search.fill("Attention (MHA");
+    const attention = picker.getByRole("option");
+    await expect(attention).toHaveCount(1);
+    await expect(attention).toContainText("Input b");
+    await attention.click();
+    const edited = await document(page);
+    const added = edited.graph.nodes.find(
+      (node) => node.data.kind === "attention",
+    );
+    expect(added).toBeTruthy();
+    expect(
+      edited.graph.edges.some(
+        (edge) =>
+          edge.source === "mask" &&
+          edge.target === added?.id &&
+          edge.targetHandle === "b",
+      ),
+    ).toBeTruthy();
+    const validation = reportSchema.parse(
+      await (
+        await context.request.post("/api/validate", { data: edited })
+      ).json(),
+    );
+    expect(
+      validation.errors.filter(
+        (error) => error.node === added?.id && error.port === "b",
+      ),
+    ).toEqual([]);
+    await page.screenshot({ path: "/tmp/weave-mask-connected-picker.png" });
+  } finally {
+    await page.goto("about:blank");
+    await context.request.delete(`/api/projects/${id}`);
+  }
 });

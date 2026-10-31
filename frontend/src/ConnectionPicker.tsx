@@ -1,21 +1,37 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Search, X } from "lucide-react";
-import type { CatalogEntry, NodeData } from "./types";
+import { z } from "zod";
+import { responseData } from "./api";
+import type { NodeData, Project } from "./types";
 
 export type ConnectionBlockChoice = {
   id: string;
   label: string;
   description: string;
   category: string;
-} & (
-  | { source: "catalog"; preset: CatalogEntry }
-  | { source: "saved"; preset: NodeData }
-);
+  data: NodeData;
+};
+const compatibilitySchema = z.object({
+  source: z
+    .object({
+      shape: z.array(z.union([z.string(), z.number()])),
+      dtype: z.string(),
+    })
+    .nullable(),
+  matches: z.array(
+    z.object({ id: z.string(), ports: z.array(z.string()).min(1) }),
+  ),
+  message: z.string().nullable(),
+});
 
 export function ConnectionPicker({
   position,
   bounds,
   choices,
+  project,
+  path,
+  sourceId,
+  sourceHandle,
   sourceLabel,
   onChoose,
   onClose,
@@ -23,8 +39,12 @@ export function ConnectionPicker({
   position: { x: number; y: number };
   bounds: { left: number; top: number; right: number; bottom: number };
   choices: ConnectionBlockChoice[];
+  project: Project;
+  path: string[];
+  sourceId: string;
+  sourceHandle: string;
   sourceLabel: string;
-  onChoose: (choice: ConnectionBlockChoice) => void;
+  onChoose: (choice: ConnectionBlockChoice, port: string) => void;
   onClose: () => void;
 }) {
   const root = useRef<HTMLDivElement>(null),
@@ -32,14 +52,85 @@ export function ConnectionPicker({
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
   const id = useId();
-  const words = query.toLocaleLowerCase().trim().split(/\s+/).filter(Boolean);
-  const matches = choices.filter((choice) =>
-    words.every((word) =>
-      `${choice.label} ${choice.description} ${choice.category}`
-        .toLocaleLowerCase()
-        .includes(word),
-    ),
+  const [attempt, setAttempt] = useState(0);
+  const [resolution, setResolution] = useState<{
+    request: string;
+    data: z.infer<typeof compatibilitySchema>;
+  } | null>(null);
+  const [failure, setFailure] = useState<{
+    request: string;
+    message: string;
+  } | null>(null);
+  const requestBody = useMemo(
+    () =>
+      JSON.stringify({
+        project,
+        path,
+        source: sourceId,
+        handle: sourceHandle,
+        candidates: choices.map((choice) => ({
+          id: choice.id,
+          data: choice.data,
+        })),
+      }),
+    [project, path, sourceId, sourceHandle, choices],
   );
+  useEffect(() => {
+    const controller = new AbortController();
+    let disposed = false;
+    const timeout = window.setTimeout(() => controller.abort(), 15000);
+    void fetch("/api/connections/compatible", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: requestBody,
+      signal: controller.signal,
+    })
+      .then(responseData)
+      .then((value) => {
+        if (!disposed)
+          setResolution({
+            request: requestBody,
+            data: compatibilitySchema.parse(value),
+          });
+      })
+      .catch((error) => {
+        if (!disposed)
+          setFailure({
+            request: requestBody,
+            message: controller.signal.aborted
+              ? "Checking compatible inputs timed out."
+              : error instanceof Error
+                ? error.message
+                : String(error),
+          });
+      })
+      .finally(() => window.clearTimeout(timeout));
+    return () => {
+      disposed = true;
+      controller.abort();
+      window.clearTimeout(timeout);
+    };
+  }, [requestBody, attempt]);
+  const result = resolution?.request === requestBody ? resolution.data : null;
+  const error = failure?.request === requestBody ? failure.message : null;
+  const loading = !result && !error;
+  const available = new Map(
+    result?.matches.map((match) => [match.id, match.ports]) ?? [],
+  );
+  const words = query.toLocaleLowerCase().trim().split(/\s+/).filter(Boolean);
+  const matches = choices.filter(
+    (choice) =>
+      available.has(choice.id) &&
+      words.every((word) =>
+        `${choice.label} ${choice.description} ${choice.category}`
+          .toLocaleLowerCase()
+          .includes(word),
+      ),
+  );
+  function choose(choice: ConnectionBlockChoice) {
+    const port = available.get(choice.id)?.[0];
+    if (port) onChoose(choice, port);
+  }
   const index = Math.min(active, Math.max(0, matches.length - 1));
   useEffect(() => {
     input.current?.focus();
@@ -99,14 +190,19 @@ export function ConnectionPicker({
         }
         if (event.key === "Enter" && matches[index]) {
           event.preventDefault();
-          onChoose(matches[index]);
+          choose(matches[index]);
         }
       }}
     >
       <div className="connection-picker-heading">
         <div>
           <strong>Add connected block</strong>
-          <small>From {sourceLabel}</small>
+          <small>
+            From {sourceLabel}
+            {result?.source
+              ? ` · ${result.source.dtype} [${result.source.shape.join(", ")}]`
+              : ""}
+          </small>
         </div>
         <button aria-label="Cancel adding block" onClick={onClose}>
           <X size={16} />
@@ -144,19 +240,46 @@ export function ConnectionPicker({
             aria-selected={i === index}
             tabIndex={-1}
             onPointerMove={() => setActive(i)}
-            onClick={() => onChoose(choice)}
+            onClick={() => choose(choice)}
           >
             <span>
               <strong>{choice.label}</strong>
               <small>{choice.description}</small>
             </span>
-            <small>{choice.category}</small>
+            <small>
+              {choice.category}
+              {available.get(choice.id)?.[0] !== "a" && (
+                <span> · Input {available.get(choice.id)?.[0]}</span>
+              )}
+            </small>
           </button>
         ))}
-        {!matches.length && <p>No matching blocks. Try another name.</p>}
+        {loading && <p role="status">Checking compatible inputs…</p>}
+        {error && (
+          <div role="alert">
+            <p>{error}</p>
+            <button
+              onClick={() => {
+                setFailure(null);
+                setResolution(null);
+                setAttempt((value) => value + 1);
+              }}
+            >
+              Retry compatibility check
+            </button>
+          </div>
+        )}
+        {result?.message && <p role="status">{result.message}</p>}
+        {result && !result.message && !matches.length && (
+          <p>
+            {query
+              ? "No matching blocks with compatible inputs. Try another name."
+              : "No compatible blocks for this tensor."}
+          </p>
+        )}
       </div>
       <p className="connection-picker-hint">
-        ↑ ↓ to choose · Enter to add · Esc to cancel
+        Compatible inputs only · ↑ ↓ to choose · Enter to add · Esc to cancel
       </p>
     </div>
   );

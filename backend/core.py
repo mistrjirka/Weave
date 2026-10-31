@@ -171,7 +171,7 @@ def moe_structure(node, settings):
         raise ValueError('Connect the router and every expert to the weighted combine as shown in the MoE scaffold; edit expert internals inside each expert block.')
     return router, experts
 
-def validate_project(project):
+def validate_project(project, *, input_contracts=None, moe_body=False, include_advice=True):
     project, token_domains, binding_errors = bind_input_tokenizers(project, ordered)
     errors, warnings, shapes, counts, raw_counts = binding_errors, [], {}, {}, {}
     cfg = project.get('config', {})
@@ -613,7 +613,7 @@ def validate_project(project):
         return [s for _, s in sorted(outputs, key=lambda item: item[0])], total
 
     try:
-        outputs, total = visit(project.get('graph', {}))
+        outputs, total = visit(project.get('graph', {}), inputs=input_contracts, moe_body=moe_body)
     except (KeyError, TypeError, ValueError) as exc:
         errors.append({'node': None, 'message': f'Malformed graph: {exc}'})
         outputs, total = [], 0
@@ -638,6 +638,6 @@ def validate_project(project):
         total=allocation(project['graph'])
     # Advice is independent of export validity, and only inspects resolved nodes.
     # Skip structurally malformed graphs rather than hiding the original error.
-    if not any(e.get('node') is None for e in errors):
+    if include_advice and not any(e.get('node') is None for e in errors):
         warnings.extend(design_advice(project, shapes, counts, resolve))
     return {'valid': not errors, 'errors': errors, 'warnings': warnings, 'shapes': shapes, 'counts': counts, 'parameters': total, 'outputs': outputs, 'tokenizers': token_domains}

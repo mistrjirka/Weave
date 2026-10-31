@@ -1700,11 +1700,7 @@ function Workbench({
     if (typeof data.params.top_k === "number" && data.params.top_k > value)
       data.params.top_k = value;
   }
-  function addNode(
-    entry: CatalogEntry,
-    screenPosition?: { x: number; y: number },
-    source?: { id: string; handle: string },
-  ) {
+  function catalogNodeData(entry: CatalogEntry): NodeData {
     const { kind, label, params: p } = entry;
     let body: Graph | undefined;
     if (["loop", "block"].includes(kind)) {
@@ -1771,12 +1767,19 @@ function Workbench({
       const theta = graphVariableScope(project, path).effective.theta;
       data.params.theta = typeof theta === "number" ? "$theta" : 1_000_000;
     }
-    addGraphNode(data, screenPosition, source);
+    return data;
+  }
+  function addNode(
+    entry: CatalogEntry,
+    screenPosition?: { x: number; y: number },
+    source?: { id: string; handle: string; targetHandle?: string },
+  ) {
+    addGraphNode(catalogNodeData(entry), screenPosition, source);
   }
   function addGraphNode(
     data: NodeData,
     screenPosition?: { x: number; y: number },
-    source?: { id: string; handle: string },
+    source?: { id: string; handle: string; targetHandle?: string },
   ) {
     const id = uid();
     const position = reactFlow.screenToFlowPosition(
@@ -1796,7 +1799,9 @@ function Workbench({
         data: copy(data),
         selected: true,
       };
-      const port = nodePorts(node)[0];
+      const port = source?.targetHandle ?? nodePorts(node)[0];
+      if (port && !nodePorts(node).includes(port))
+        throw new Error("The target input port is no longer available.");
       if (source && !port)
         throw new Error("Choose a block with an input port.");
       graph.nodes.push(node);
@@ -1818,36 +1823,36 @@ function Workbench({
         (source ? " added and connected" : " added · connect its ports"),
     );
   }
-  const connectionChoices: ConnectionBlockChoice[] = [
-    ...catalog
-      .filter((entry) => entry.kind !== "input")
-      .map((entry) => ({
-        id: "catalog:" + entry.label,
-        source: "catalog" as const,
-        label: entry.label,
-        description: entry.description,
-        category: entry.category,
-        preset: entry,
-      })),
-    ...customBlocks
-      .filter(
-        (data) =>
-          nodePorts({
-            id: "preset",
-            type: "architecture",
-            position: { x: 0, y: 0 },
+  const connectionChoices: ConnectionBlockChoice[] = connectionPicker
+    ? [
+        ...catalog
+          .filter((entry) => entry.kind !== "input")
+          .map((entry) => ({
+            id: "catalog:" + entry.label,
+            label: entry.label,
+            description: entry.description,
+            category: entry.category,
+            data: catalogNodeData(entry),
+          })),
+        ...customBlocks
+          .filter(
+            (data) =>
+              nodePorts({
+                id: "preset",
+                type: "architecture",
+                position: { x: 0, y: 0 },
+                data,
+              }).length > 0,
+          )
+          .map((data, index) => ({
+            id: "saved:" + index,
+            label: data.label,
+            description: data.description ?? "Your reusable block",
+            category: "Your blocks",
             data,
-          }).length > 0,
-      )
-      .map((data, index) => ({
-        id: "saved:" + index,
-        source: "saved" as const,
-        label: data.label,
-        description: data.description ?? "Your reusable block",
-        category: "Your blocks",
-        preset: data,
-      })),
-  ];
+          })),
+      ]
+    : [];
   const closeConnectionPicker = useCallback(() => {
     setConnectionPicker(null);
     canvasRef.current?.focus({ preventScroll: true });
@@ -4220,20 +4225,22 @@ function Workbench({
             position={connectionPicker.position}
             bounds={connectionPicker.bounds}
             choices={connectionChoices}
+            project={project}
+            path={path}
+            sourceId={connectionPicker.source}
+            sourceHandle={connectionPicker.sourceHandle}
             sourceLabel={
               graph.nodes.find((node) => node.id === connectionPicker.source)
                 ?.data.label ?? "Output"
             }
             onClose={closeConnectionPicker}
-            onChoose={(choice) => {
+            onChoose={(choice, targetHandle) => {
               const source = {
                 id: connectionPicker.source,
                 handle: connectionPicker.sourceHandle,
+                targetHandle,
               };
-              if (choice.source === "catalog")
-                addNode(choice.preset, connectionPicker.position, source);
-              else
-                addGraphNode(choice.preset, connectionPicker.position, source);
+              addGraphNode(choice.data, connectionPicker.position, source);
               setConnectionPicker(null);
             }}
           />

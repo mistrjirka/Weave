@@ -98,6 +98,23 @@ def delete_project(project_id:str):
 @app.post('/api/validate')
 def validate(project:dict):return validate_project(project)
 
+class ConnectionOptionsRequest(BaseModel):
+    project: dict
+    path: list[str] = Field(default_factory=list, max_length=32)
+    source: str
+    handle: str = "out"
+    candidates: list[dict] = Field(max_length=512)
+
+
+@app.post('/api/connections/compatible')
+def compatible_connections(request: ConnectionOptionsRequest):
+    from .connections import connection_options
+    try:
+        return connection_options(request.project, request.path, request.source, request.handle, request.candidates)
+    except (ValueError, KeyError, TypeError, IndexError) as exc:
+        raise HTTPException(422, str(exc))
+
+
 
 @app.post('/api/attention/expand')
 def expand(request:dict):
