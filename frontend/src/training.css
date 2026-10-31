@@ -81,6 +81,12 @@
   justify-content: flex-start;
   gap: 8px;
 }
+.training-actions button {
+  min-height: 44px;
+}
+.training-device-heading {
+  scroll-margin-top: 16px;
+}
 .training-layout {
   display: grid;
   grid-template-columns: 220px minmax(0, 1fr);

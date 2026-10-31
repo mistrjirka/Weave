@@ -100,9 +100,21 @@ test("code-owned configuration, training hooks, provenance and snapshots", async
         exact: true,
       }),
     ).toHaveCount(0);
-    await page
-      .getByRole("button", { name: "Launch settings", exact: true })
-      .click();
+    await page.setViewportSize({ width: 390, height: 844 });
+    const deviceShortcut = page.getByRole("button", {
+      name: "Training devices",
+      exact: true,
+    });
+    await expect(deviceShortcut).toBeInViewport();
+    await deviceShortcut.click();
+    const deviceHeading = page.getByRole("heading", {
+      name: "Training devices and validation",
+      exact: true,
+    });
+    await expect(deviceHeading).toBeInViewport();
+    await expect(deviceHeading).toBeFocused();
+    await page.screenshot({ path: "data/training-device-settings-phone.png" });
+    await page.setViewportSize({ width: 1600, height: 1000 });
     const computeMode = page.getByRole("combobox", {
       name: "Training device settings",
     });

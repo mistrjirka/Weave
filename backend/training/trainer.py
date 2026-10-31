@@ -854,7 +854,10 @@ class Trainer:
                 if skipped:
                     overflow_count += 1
                     run.warning(
-                        "FP16 gradient overflow: optimizer and scheduler update skipped",
+                        "FP16 gradient overflow: optimizer and scheduler update skipped. "
+                        f"Loss scale reduced from {old_scale:g} to {self.scaler.get_scale():g}; "
+                        "training will retry on the next batch. This can happen while "
+                        "automatic loss scaling settles at startup.",
                         code="amp-overflow",
                     )
                     if overflow_count > 20:

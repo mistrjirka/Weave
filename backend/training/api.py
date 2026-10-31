@@ -420,9 +420,29 @@ actual training code when your model/data/optimizer are ready.
                 "No training metrics received yet. The script may be preparing data or missing a logging hook."
             )
         if not any(e["kind"] == "sample" for e in records):
-            diagnostics.append(
-                "No generated examples received. Configure evaluation prompts and a tokenizer, or add run.sample()."
+            configuration = next(
+                (
+                    e["payload"]
+                    for e in reversed(records)
+                    if e["kind"] == "configuration"
+                ),
+                {},
             )
+            interval = configuration.get("eval_every")
+            steps = max((e.get("step", 0) for e in records), default=0)
+            if type(interval) is int and interval > steps:
+                diagnostics.append(
+                    f"No generated examples yet: this run reached update {steps}; "
+                    f"the first scheduled evaluation is at update {interval}. "
+                    "This does not indicate a tokenizer error."
+                )
+            else:
+                diagnostics.append(
+                    "No generated examples received. Samples may be disabled or pending; "
+                    "check sample_prompts and validation settings in train.py. "
+                    "For a custom training loop, report examples with run.sample(). "
+                    "This message does not diagnose a tokenizer error."
+                )
         if not capabilities or not capabilities[-1].get("commands"):
             diagnostics.append(
                 "Cooperative stop/snapshot support has not been reported by this script."

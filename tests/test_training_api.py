@@ -140,3 +140,29 @@ def test_local_supervisor_runs_real_custom_script(training_client):
     assert detail["status"]["state"] == "completed", detail
     assert any(e["kind"] == "metrics" for e in detail["events"])
     assert detail["hardware"]
+
+
+def test_no_samples_before_first_evaluation_is_not_a_tokenizer_diagnostic(
+    training_client,
+):
+    client, root = training_client
+    client.post("/api/training/session", json={"token": "test-training-secret"})
+    stage = {
+        "id": "sample-schedule",
+        "name": "Sample schedule",
+        "config": TrainingConfig(recipe="custom", execution="monitor").model_dump(),
+        "script": "from weave_training import Run\nwith Run() as run: pass\n",
+    }
+    response = client.post(
+        "/api/training/runs", json={"project": tiny_project(), "stage": stage}
+    )
+    assert response.status_code == 200, response.text
+    run_id = response.json()["id"]
+    with Run(root / "training/runs" / run_id) as report:
+        report.emit("configuration", {"eval_every": 500, "sample_prompts": ["Hello"]})
+        report.log({"train/loss": 9.8}, step=14, tokens=752928)
+    detail = client.get("/api/training/runs/" + run_id).json()
+    diagnostics = " ".join(detail["diagnostics"])
+    assert "reached update 14" in diagnostics
+    assert "evaluation is at update 500" in diagnostics
+    assert "Configure evaluation prompts and a tokenizer" not in diagnostics

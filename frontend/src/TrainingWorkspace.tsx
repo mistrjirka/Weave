@@ -6,6 +6,7 @@ import {
   ArrowDown,
   ArrowUp,
   Copy,
+  Cpu,
   Download,
   Play,
   Plus,
@@ -119,6 +120,13 @@ export function TrainingWorkspace({ project }: { project: Project }) {
   const stageSavesRef = useRef(new Map<string, Promise<void>>());
   const [loaded, setLoaded] = useState(false);
   const [editor, setEditor] = useState<"settings" | "script">("script");
+  const [deviceRequest, setDeviceRequest] = useState(0);
+  const deviceHeadingRef = useRef<HTMLHeadingElement>(null);
+  useEffect(() => {
+    if (!deviceRequest) return;
+    deviceHeadingRef.current?.scrollIntoView({ block: "start" });
+    deviceHeadingRef.current?.focus({ preventScroll: true });
+  }, [deviceRequest]);
   const [dashboard, setDashboard] = useState<
     "metrics" | "samples" | "hardware" | "logs" | "checkpoints" | "chat"
   >("metrics");
@@ -771,6 +779,16 @@ export function TrainingWorkspace({ project }: { project: Project }) {
           <p>Editable stages · frozen run history · reproducible snapshots</p>
         </div>
         <div className="training-actions">
+          <button
+            disabled={!stage}
+            onClick={() => {
+              setEditor("settings");
+              setDeviceRequest((value) => value + 1);
+            }}
+          >
+            <Cpu aria-hidden="true" size={14} />
+            Training devices
+          </button>
           <button onClick={() => fileRef.current?.click()} disabled={busy}>
             <Upload aria-hidden="true" size={14} />
             Import snapshot
@@ -1406,7 +1424,13 @@ export function TrainingWorkspace({ project }: { project: Project }) {
                       )}
                     </>
                   )}
-                  <h3>Compute</h3>
+                  <h3
+                    ref={deviceHeadingRef}
+                    tabIndex={-1}
+                    className="training-device-heading"
+                  >
+                    Training devices and validation
+                  </h3>
                   <label className="gpu-tuning-toggle">
                     <input
                       type="checkbox"

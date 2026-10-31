@@ -22,6 +22,14 @@ from .tokenizer_bindings import input_tokenizers
 ROOT=Path(__file__).parent.parent
 DATA=Path(os.environ.get('WEAVE_DATA', ROOT/'data'));DATA.mkdir(parents=True,exist_ok=True)
 app=FastAPI(title='Weave Neural Graph Studio',version='0.1.0')
+
+@app.middleware("http")
+async def revalidate_frontend(request, call_next):
+    response = await call_next(request)
+    if request.url.path in ("/", "/index.html"):
+        response.headers["Cache-Control"] = "no-cache"
+    return response
+
 tokenizers=TokenizerService(DATA/'tokenizers')
 
 
