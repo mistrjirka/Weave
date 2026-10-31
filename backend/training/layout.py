@@ -19,6 +19,8 @@ MANAGED_MODULES = {
     "load_tokenizer",
     "weave_training",
     "text_training",
+    "trainer",
+    "data_stream",
 }
 
 
@@ -150,14 +152,19 @@ def write_helpers(package):
     package = Path(package)
     package.mkdir(parents=True, exist_ok=True)
     generated = []
-    for name in ("text_training.py", "weave_training.py"):
+    for name in (
+        "text_training.py",
+        "weave_training.py",
+        "trainer.py",
+        "data_stream.py",
+    ):
         source = rewrite_imports((HERE / name).read_text(), ".")
         target = package / name
         if not target.exists() or target.read_text() != source:
             target.write_text(source)
         generated.append(PACKAGE + "/" + name)
     target = package / "__init__.py"
-    source = '"""Generated support. Edit train.py and config.json in the parent folder."""\nfrom .weave_training import Run, atomic_checkpoint_path\n'
+    source = '"""Generated support. Edit train.py and your own helpers in the parent folder."""\nfrom .weave_training import Run, atomic_checkpoint_path\n'
     if not target.exists() or target.read_text() != source:
         target.write_text(source)
     generated.append(PACKAGE + "/__init__.py")

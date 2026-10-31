@@ -125,6 +125,7 @@ def test_workspace_helpers_freeze_into_run_and_later_edits_do_not_change_it(tmp_
     service = TrainingService(tmp_path / "training", tmp_path / "tokenizers")
     saved = service.workspaces.save_stage("training-test", stage())
     service.workspaces.prepare_model(tiny_project(), saved, service.tokenizer_root)
+    saved = service.workspaces.read("training-test", saved)
     helper = Path(saved.script_path).parent / "my_helpers.py"
     helper.write_text("VALUE=7\n")
     result = service.launch(Launch(project=tiny_project(), stage=saved))
@@ -192,6 +193,7 @@ def test_support_package_and_user_files_are_separated(tmp_path):
     service = TrainingService(tmp_path / "training", tmp_path / "tokenizers")
     saved = service.workspaces.save_stage("training-test", stage())
     service.workspaces.prepare_model(tiny_project(), saved, service.tokenizer_root)
+    saved = service.workspaces.read("training-test", saved)
     directory = Path(saved.script_path).parent
     assert {p.name for p in directory.iterdir() if not p.name.startswith(".")} == {
         "train.py",
@@ -237,6 +239,7 @@ def test_generated_custom_block_uses_relative_package_imports(tmp_path):
     }
     saved = service.workspaces.save_stage("training-test", stage())
     service.workspaces.prepare_model(project, saved, service.tokenizer_root)
+    saved = service.workspaces.read("training-test", saved)
     directory = Path(saved.script_path).parent
     assert "from .custom_" in (directory / "weave_support/model.py").read_text()
     result = subprocess.run(

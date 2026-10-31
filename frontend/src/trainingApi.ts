@@ -72,6 +72,7 @@ export const runSchema = z.object({
   recipe: z.string(),
   strategy: z.string(),
   execution: z.string(),
+  code_first: z.boolean().optional(),
   parent: z
     .object({ run_id: z.string(), checkpoint: z.string(), sha256: z.string() })
     .nullable(),
@@ -172,7 +173,13 @@ export const detailSchema = z.object({
   script: z.string(),
   datasets: z.record(
     z.string(),
-    z.object({ path: z.string(), sha256: z.string(), bytes: z.number() }),
+    z.object({
+      path: z.string(),
+      sha256: z.string().optional(),
+      bytes: z.number(),
+      fingerprint: z.string().optional(),
+      mtime_ns: z.number().optional(),
+    }),
   ),
 });
 export type RunDetail = z.infer<typeof detailSchema>;

@@ -372,6 +372,20 @@ def instrumentation_warnings(source):
         for alias in node.names
         if alias.name == "main"
     }
+    trainer_classes = {
+        alias.asname or alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.module == "weave_support.trainer"
+        for alias in node.names
+        if alias.name == "Trainer"
+    }
+    if trainer_classes and any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "train"
+        for node in ast.walk(tree)
+    ):
+        return []  # The optional Trainer owns the reporting/checkpoint hooks.
     if any(
         isinstance(node, ast.Call)
         and isinstance(node.func, ast.Name)

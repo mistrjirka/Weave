@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hmac
+from contextlib import closing
 import json
 import os
 import secrets
@@ -75,9 +76,9 @@ class ReportStore:
         with self.lock:
             # The durable event index deduplicates retries by event ID.
             events(directory, limit=0)
-            with sqlite3.connect(
-                directory / "event-index.sqlite", timeout=30
-            ) as connection:
+            with closing(
+                sqlite3.connect(directory / "event-index.sqlite", timeout=30)
+            ) as connection, connection:
                 ids = [event.id for event in batch.events]
                 existing = (
                     {

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+from contextlib import closing
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -20,6 +21,7 @@ from ..compiler import export_zip
 from ..core import validate_project
 from .weave_training import atomic_json, file_hash, instrumentation_warnings
 from .layout import PACKAGE, normalize_script, write_support
+from .recipe import is_code_first, literal_settings
 
 HERE = Path(__file__).parent
 
@@ -128,7 +130,7 @@ def events(directory, *, limit=None, kind=None, after=None):
     import sqlite3
 
     database = directory / "event-index.sqlite"
-    with sqlite3.connect(database, timeout=30) as connection:
+    with closing(sqlite3.connect(database, timeout=30)) as connection, connection:
         connection.execute("PRAGMA journal_mode=WAL")
         connection.execute(
             "CREATE TABLE IF NOT EXISTS offsets (path TEXT PRIMARY KEY, offset INTEGER)"
@@ -444,7 +446,28 @@ class TrainingService:
         stage = stage.model_copy(
             update={"script": normalize_script(stage.script, stage.config.recipe)}
         )
-        stage.config.validate_execution()
+        code_first = is_code_first(stage.script)
+        if code_first:
+            settings = literal_settings(stage.script)
+            controls = stage.config.model_dump(
+                include={
+                    "recipe",
+                    "execution",
+                    "python",
+                    "start_mode",
+                    "parent_run",
+                    "parent_checkpoint",
+                }
+            )
+            stage = stage.model_copy(
+                update={"config": TrainingConfig(**{**controls, **settings})}
+            )
+        if not code_first:
+            stage.config.validate_execution()
+        elif stage.config.start_mode != "random" and not (
+            stage.config.parent_run and stage.config.parent_checkpoint
+        ):
+            raise ValueError("Choose a parent run and checkpoint.")
         report = validate_project(project)
         if not report["valid"]:
             raise ValueError(
@@ -528,7 +551,7 @@ class TrainingService:
                 raise ValueError("The split-model template currently requires FP32.")
             config["prepared_sha256"] = None
             datasets = {}
-            for key in ("dataset", "eval_dataset"):
+            for key in (() if code_first else ("dataset", "eval_dataset")):
                 value = config[key]
                 if value:
                     path = Path(value).expanduser().resolve()
@@ -542,14 +565,20 @@ class TrainingService:
                         "sha256": file_hash(path),
                         "bytes": path.stat().st_size,
                     }
-            if stage.config.recipe != "custom" and not config["dataset"]:
+            if (
+                not code_first
+                and stage.config.recipe != "custom"
+                and not config["dataset"]
+            ):
                 raise ValueError("Select a training dataset file.")
             config["dataset_sha256"] = datasets.get("dataset", {}).get("sha256")
             config["eval_dataset_sha256"] = datasets.get("eval_dataset", {}).get(
                 "sha256"
             )
-            if config["strategy"] == "split" and set(config["placement"]) != set(
-                metadata["modules"]
+            if (
+                not code_first
+                and config["strategy"] == "split"
+                and set(config["placement"]) != set(metadata["modules"])
             ):
                 raise ValueError(
                     "Assign every top-level module in split placement: "
@@ -648,6 +677,8 @@ class TrainingService:
             (directory / "train.py").write_text(stage.script)
 
             atomic_json(directory / "config.json", config)
+            if code_first:
+                atomic_json(directory / PACKAGE / "launch.json", config)
             atomic_json(directory / "stage.json", stage.model_dump())
             atomic_json(directory / "datasets.json", datasets)
             warnings = instrumentation_warnings(stage.script)
@@ -661,6 +692,7 @@ class TrainingService:
                 "recipe": config["recipe"],
                 "strategy": config["strategy"],
                 "execution": config["execution"],
+                "code_first": code_first,
                 "warnings": warnings,
                 "model": metadata,
             }
@@ -899,7 +931,17 @@ def build_snapshot(
                 for scope, dataset_manifest in sources:
                     for key, info in json.loads(dataset_manifest.read_text()).items():
                         path = Path(info["path"])
-                        if not path.is_file() or file_hash(path) != info["sha256"]:
+                        changed = not path.is_file()
+                        if not changed:
+                            changed = (
+                                (file_hash(path) != info["sha256"])
+                                if info.get("sha256")
+                                else (
+                                    path.stat().st_size != info["bytes"]
+                                    or path.stat().st_mtime_ns != info.get("mtime_ns")
+                                )
+                            )
+                        if changed:
                             manifest["missing_data"].append(
                                 {
                                     "source": scope + key,
@@ -910,7 +952,10 @@ def build_snapshot(
                         else:
                             name = f"source-data/{scope}{key}/{path.name}"
                             add_path(archive, name, path)
-                            if manifest["files"][name]["sha256"] != info["sha256"]:
+                            if (
+                                info.get("sha256")
+                                and manifest["files"][name]["sha256"] != info["sha256"]
+                            ):
                                 raise ValueError(
                                     "Source data changed while making the snapshot"
                                 )
@@ -988,7 +1033,8 @@ def import_snapshot(service, file):
                 bundled = directory / "source-data" / key / Path(dataset["path"]).name
                 if bundled.is_file():
                     dataset["path"] = str(bundled)
-                    config[key] = str(bundled)
+                    if key in ("dataset", "eval_dataset"):
+                        config[key] = str(bundled)
             atomic_json(directory / "datasets.json", datasets)
             atomic_json(directory / "config.json", config)
             return info

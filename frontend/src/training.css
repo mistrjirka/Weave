@@ -359,6 +359,7 @@
   margin: 0;
 }
 .training-progress {
+  flex-wrap: wrap;
   display: flex;
   align-items: center;
   gap: 12px;
@@ -837,4 +838,21 @@
   .training-code-editor .cm-editor {
     height: 480px !important;
   }
+}
+
+.training-counters {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 12px;
+  width: 100%;
+  margin: 4px 0 0;
+}
+.training-counters dt {
+  color: var(--theme-muted, #59685d);
+  font-size: 12px;
+}
+.training-counters dd {
+  margin: 4px 0 0;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
 }

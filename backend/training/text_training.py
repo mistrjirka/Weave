@@ -379,7 +379,10 @@ def evaluate(
                     continue
                 generated = torch.tensor([ids], device=device)
                 for _ in range(config["generation_tokens"]):
-                    logits = model(generated[:, -config["sequence_length"] :])[
+                    context = config.get(
+                        "generation_context_length", config.get("sequence_length")
+                    )
+                    logits = model(generated[:, -context:] if context else generated)[
                         :, -1
                     ].float()
                     token = logits.argmax(-1).to(device)

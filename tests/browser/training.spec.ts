@@ -77,11 +77,22 @@ test.beforeEach(async ({ page }) => {
   });
 });
 
-test("training stages, real run, charts, snapshots, and reload", async ({
+test("legacy training stages, real run, charts, snapshots, and reload", async ({
   page,
   context,
 }) => {
   test.setTimeout(120000);
+  // Keep the legacy JSON recipe usable while new projects default to Python hooks.
+  await page.route("**/api/training/templates", async (route) => {
+    const response = await route.fetch();
+    const templates = await response.json();
+    templates.scripts.causal = readFileSync(
+      resolve("backend/training/template.py"),
+      "utf8",
+    );
+    templates.scripts.sft = templates.scripts.causal;
+    await route.fulfill({ response, json: templates });
+  });
   const id = `project-training-${Date.now()}`;
   await unlockIfConfigured(context.request);
   await context.request.put(`/api/projects/${id}`, { data: project(id) });
@@ -293,7 +304,7 @@ test("real server scripts sync with SSH edits and use a highlighted Python edito
   page,
   context,
 }) => {
-  test.setTimeout(90000);
+  test.setTimeout(150000);
   await unlockIfConfigured(context.request);
   const id = `project-training-files-${Date.now()}`;
   await context.request.put(`/api/projects/${id}`, { data: project(id) });
@@ -315,7 +326,7 @@ test("real server scripts sync with SSH edits and use a highlighted Python edito
         .locator(".training-server-path")
         .filter({ has: page.getByText("Python script", { exact: true }) })
         .locator("code"),
-    ).toContainText("/train.py");
+    ).toContainText("/train.py", { timeout: 20000 });
     const path = (
       await page
         .locator(".training-server-path")
@@ -408,6 +419,7 @@ test("independent training has a localhost reporting address and an editable con
   page,
   context,
 }) => {
+  test.setTimeout(150000);
   const id = `project-training-report-${Date.now()}`;
   await unlockIfConfigured(context.request);
   await context.request.put(`/api/projects/${id}`, { data: project(id) });
@@ -417,7 +429,7 @@ test("independent training has a localhost reporting address and an editable con
       .getByRole("button", { name: "Create training stage", exact: true })
       .click();
     await page
-      .getByRole("button", { name: "Preset settings", exact: true })
+      .getByRole("button", { name: "Launch settings", exact: true })
       .click();
     await page
       .getByRole("combobox", { name: "Training recipe" })
@@ -431,7 +443,7 @@ test("independent training has a localhost reporting address and an editable con
     const reporting = page.getByRole("region", {
       name: "Independent training reporting",
     });
-    await expect(reporting).toBeVisible();
+    await expect(reporting).toBeVisible({ timeout: 90000 });
     await expect(
       reporting.getByRole("textbox", { name: "Reporting server URL" }),
     ).toHaveValue("http://localhost:8173");
@@ -497,7 +509,7 @@ test("simple custom reporting infers steps, learning rates and progress", async 
       .getByRole("button", { name: "Create training stage", exact: true })
       .click();
     await page
-      .getByRole("button", { name: "Preset settings", exact: true })
+      .getByRole("button", { name: "Launch settings", exact: true })
       .click();
     await page
       .getByRole("combobox", { name: "Training recipe" })

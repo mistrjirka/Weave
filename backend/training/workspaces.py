@@ -9,8 +9,10 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import tempfile
+import unicodedata
 from threading import RLock
 
 from .service import Stage, Plan, TrainingConfig, valid_id, inside
@@ -23,12 +25,21 @@ from .layout import (
     write_support,
     write_helpers,
 )
+from .recipe import is_code_first
 
 MIGRATION_LOCK = RLock()
 
 
 class WorkspaceConflict(ValueError):
     pass
+
+
+def project_slug(name):
+    """Turn a display name into a portable, readable directory name."""
+    normalized = unicodedata.normalize("NFKD", str(name or ""))
+    ascii_name = normalized.encode("ascii", "ignore").decode("ascii").casefold()
+    slug = re.sub(r"[^a-z0-9]+", "-", ascii_name).strip("-")
+    return (slug or "untitled")[:80].strip("-") or "untitled"
 
 
 def atomic_text(path, text):
@@ -118,37 +129,88 @@ class WorkspaceStore:
                     )
             return destination
 
-    def project_directory(self, project_id):
+    def project_directory(self, project_id, project_name=None):
         with MIGRATION_LOCK:
             root = projects_directory()
-            destination = root / valid_id(project_id)
             registry = self.root / "project-locations.json"
-            previous = (
-                json.loads(registry.read_text())["roots"] if registry.exists() else []
-            )
+            state = json.loads(registry.read_text()) if registry.exists() else {}
+            previous = state.get("roots", [])
+            known_directories = state.get("directories", {})
+
+            if project_name is None:
+                known = root / known_directories.get(project_id, "")
+                project_file = known / "project.json"
+                if project_file.is_file():
+                    try:
+                        project_name = json.loads(project_file.read_text()).get("name")
+                    except (ValueError, OSError):
+                        pass
+            requested_name = project_slug(project_name) if project_name else None
+            previous_name = known_directories.get(project_id)
+            legacy_id = valid_id(project_id)
+
+            destination_name = requested_name or previous_name or legacy_id
+
+            def owner(path):
+                try:
+                    return json.loads((path / "project.json").read_text()).get("id")
+                except (ValueError, OSError):
+                    return (
+                        project_id if path.name in (previous_name, legacy_id) else None
+                    )
+
+            # Keep the common case readable and add an ID suffix for duplicates.
+            names = [destination_name]
+            if requested_name:
+                names.extend(
+                    (
+                        f"{requested_name}-{legacy_id[-8:]}",
+                        f"{requested_name}-{legacy_id}",
+                    )
+                )
+            destination = None
+            for name in names:
+                candidate = root / name
+                if not candidate.exists() or owner(candidate) == project_id:
+                    destination_name, destination = name, candidate
+                    break
+            if destination is None:
+                raise WorkspaceConflict(
+                    f"Cannot create project directory under {root}: all names for {project_id} are already in use."
+                )
+
             candidates = [
                 self.root.parent / "projects",
                 *(Path(value) for value in previous),
             ]
-            sources = []
+            sources = set()
             for location in candidates:
-                source = location / project_id
-                if (
-                    source.resolve() != destination.resolve()
-                    and source.exists()
-                    and source.resolve() not in {item.resolve() for item in sources}
-                ):
-                    sources.append(source)
+                old_names = {legacy_id, previous_name} - {None}
+                for name in old_names:
+                    source = location / name
+                    if (
+                        source.resolve() != destination.resolve()
+                        and source.exists()
+                        and owner(source) == project_id
+                    ):
+                        sources.add(source.resolve())
             if sources and (destination.exists() or len(sources) > 1):
-                locations = ", ".join(str(value) for value in [*sources, destination])
+                locations = ", ".join(
+                    str(value) for value in [*sorted(sources), destination]
+                )
                 raise WorkspaceConflict(
                     f"Both project locations exist: {locations}. Files were not overwritten; move the older folder aside after comparing them."
                 )
             if sources:
                 destination.parent.mkdir(parents=True, exist_ok=True)
-                shutil.move(str(sources[0]), str(destination))
+                shutil.move(str(next(iter(sources))), str(destination))
             if str(root) not in previous:
-                atomic_json(registry, {"roots": [*previous, str(root)]})
+                previous = [*previous, str(root)]
+            known_directories[project_id] = destination_name
+            atomic_json(
+                registry,
+                {"roots": previous, "directories": known_directories},
+            )
             return destination
 
     def normalize_existing_script(self, directory, recipe):
@@ -180,14 +242,23 @@ class WorkspaceStore:
     def read(self, project_id, stage):
         directory = self.directory(project_id, stage.id)
         script = directory / "train.py"
-        config_path = directory / "config.json"
         self.normalize_existing_script(directory, stage.config.recipe)
+        source = script.read_text() if script.exists() else stage.script
+        config_path = self.config_path(directory, source)
         result = stage.model_copy(deep=True)
         result.project_path = str(self.project_directory(project_id))
         result.model_path = str(directory / PACKAGE / "model.py")
         result.support_path = str(directory / PACKAGE)
-        backup = directory / PACKAGE / "migrations" / "train.original.py"
-        result.previous_script = backup.read_text() if backup.exists() else None
+        backups = (
+            directory / PACKAGE / "migrations" / name
+            for name in (
+                "previous-script.py",
+                "train.before-hooks.py",
+                "train.original.py",
+            )
+        )
+        backup = next((path for path in backups if path.exists()), None)
+        result.previous_script = backup.read_text() if backup else None
         result.script_path = str(script)
         result.config_path = str(config_path)
         if script.exists():
@@ -208,7 +279,10 @@ class WorkspaceStore:
 
     def check(self, project_id, stage):
         directory = self.directory(project_id, stage.id)
-        script, config = directory / "train.py", directory / "config.json"
+        script = directory / "train.py"
+        config = self.config_path(
+            directory, script.read_text() if script.exists() else stage.script
+        )
         if (
             script.exists()
             and normalize_script(script.read_text(), stage.config.recipe)
@@ -243,7 +317,14 @@ class WorkspaceStore:
             if not backup.exists():
                 atomic_text(backup, original)
         directory.mkdir(parents=True, exist_ok=True)
-        script, config = directory / "train.py", directory / "config.json"
+        script = directory / "train.py"
+        config = self.config_path(directory, stage.script)
+        legacy_config = directory / "config.json"
+        if is_code_first(stage.script) and legacy_config.exists():
+            backup = directory / PACKAGE / "migrations" / "config.original.json"
+            if not backup.exists():
+                atomic_text(backup, legacy_config.read_text())
+            legacy_config.unlink()
         if not script.exists() or script.read_text() != stage.script:
             atomic_text(script, stage.script)
         try:
@@ -257,6 +338,14 @@ class WorkspaceStore:
         if not same_config:
             atomic_json(config, stage.config.model_dump())
         return self.read(project_id, stage)
+
+    @staticmethod
+    def config_path(directory, source):
+        return (
+            directory / PACKAGE / "launch.json"
+            if is_code_first(source)
+            else directory / "config.json"
+        )
 
     def load_plan(self, project_id):
         with self.lock:
@@ -311,7 +400,7 @@ class WorkspaceStore:
         from ..compiler import export_zip
         from ..tokenizer_bindings import input_tokenizers
 
-        project_directory = self.project_directory(project["id"])
+        project_directory = self.project_directory(project["id"], project.get("name"))
         atomic_json(project_directory / "project.json", project)
         directory = self.directory(project["id"], stage.id)
         directory.mkdir(parents=True, exist_ok=True)
@@ -323,7 +412,7 @@ class WorkspaceStore:
         generated = write_support(directory, bundle)
         atomic_text(
             project_directory / "README.md",
-            "# Weave project\n\nproject.json is the saved graph. Edit stages/<stage-id>/train.py, config.json and your own helpers. Generated model code, tokenizer assets and the reusable trainer live in each stage's weave_support/ folder and are refreshed by Weave. Migration originals are kept in weave_support/migrations/. Run python train.py --config config.json from the stage folder. Install training dependencies from weave_support/requirements.txt into your chosen environment. UI-launched run histories and checkpoints stay in Weave's application data directory. Standalone training writes its outputs under runs/.\n",
+            "# Weave project\n\nproject.json is the saved graph. Edit stages/<stage-id>/train.py and your own helpers. New recipes define typed TrainingConfig and data/loss/optimizer/scheduler hooks directly in Python; run python train.py. Legacy recipes may still use config.json and --config config.json. Generated model code, tokenizer assets, launch metadata and the reusable trainer live in each stage's weave_support/ folder and are refreshed by Weave. Migration originals are kept in weave_support/migrations/. Install training dependencies from weave_support/requirements.txt into your chosen environment. UI-launched run histories and checkpoints stay in Weave's application data directory. Standalone training writes its outputs under runs/.\n",
         )
         atomic_json(directory / ".weave-generated.json", {"files": generated})
 
@@ -344,6 +433,7 @@ class WorkspaceStore:
                 or source.name.startswith(".")
                 or "__pycache__" in source.parts
                 or name.startswith(PACKAGE + "/")
+                or name.startswith("runs/")
                 or name in generated
                 or name in ("train.py", "config.json")
             ):

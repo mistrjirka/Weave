@@ -39,6 +39,7 @@ from .workspaces import WorkspaceConflict
 from .environment import inspect_python
 from .reporting import ReportStore, ReportBatch
 from .layout import PACKAGE, normalize_script
+from .recipe import is_code_first, starter_script
 from ..paths import projects_directory
 from ..compiler import compile_project
 
@@ -141,8 +142,8 @@ actual training code when your model/data/optimizer are ready.
         return {
             "config": TrainingConfig().model_dump(),
             "scripts": {
-                "causal": (HERE / "template.py").read_text(),
-                "sft": (HERE / "template.py").read_text(),
+                "causal": starter_script("causal"),
+                "sft": starter_script("sft"),
                 "custom": normalize_script(custom, "custom"),
             },
         }
@@ -259,6 +260,11 @@ actual training code when your model/data/optimizer are ready.
                 )
             except ValueError:
                 saved.workspace_warning = "Script saved. Resolve architecture errors, then save again to generate weave_support/model.py."
+            # Generating a previously unsaved graph can assign its readable folder.
+            # Return paths after that move rather than the earlier ID-based paths.
+            refreshed = service.workspaces.read(body.project["id"], saved)
+            refreshed.workspace_warning = saved.workspace_warning
+            saved = refreshed
             return saved
         except WorkspaceConflict as exc:
             raise HTTPException(409, str(exc))
@@ -503,7 +509,10 @@ actual training code when your model/data/optimizer are ready.
             destination, "w", compression=zipfile.ZIP_DEFLATED, allowZip64=True
         ) as archive:
             extras_path = directory / ".workspace-files.json"
-            editable = ["train.py", "config.json", "reporting.json"]
+            code_first = is_code_first((directory / "train.py").read_text())
+            editable = ["train.py", "reporting.json"] + (
+                [] if code_first else ["config.json"]
+            )
             if extras_path.exists():
                 editable.extend(json.loads(extras_path.read_text()))
             for name in editable:
@@ -525,13 +534,20 @@ actual training code when your model/data/optimizer are ready.
                         and "__pycache__" not in path.parts
                         and "migrations" not in path.parts
                     ):
-                        archive.write(path, str(path.relative_to(directory)))
+                        name = str(path.relative_to(directory))
+                        if name == PACKAGE + "/launch.json":
+                            launch = json.loads(path.read_text())
+                            if (directory / "starting-weights/parent.pt").is_file():
+                                launch["checkpoint"] = "starting-weights/parent.pt"
+                            archive.writestr(name, json.dumps(launch, indent=2))
+                        else:
+                            archive.write(path, name)
             lock = directory / "requirements-lock.txt"
             if lock.is_file():
                 archive.write(lock, PACKAGE + "/requirements-lock.txt")
             archive.writestr(
                 "README.md",
-                "# Training project\n\nEdit train.py, config.json and your own helpers. weave_support/ contains generated network code, tokenizers, reporting and the standard trainer; it is refreshed by Weave.\n\nInstall dependencies in your chosen Python environment: pip install -r weave_support/requirements.txt (select a suitable PyTorch CUDA wheel for your GPU). Run python train.py --config config.json from this folder. reporting.json supplies the optional reporting connection.\n",
+                "# Training project\n\nEdit train.py and your own helpers. Code-owned recipes define TrainingConfig and hooks directly in Python; run python train.py. Legacy recipes use config.json and python train.py --config config.json. weave_support/ contains generated network code, tokenizers, launch context, reporting and the optional trainer; it is refreshed by Weave.\n\nInstall dependencies in your chosen Python environment: pip install -r weave_support/requirements.txt (select a suitable PyTorch CUDA wheel for your GPU). reporting.json supplies the optional reporting connection. Source paths/size/mtime are recorded by default; SHA256 fingerprints are opt-in. Consumed batch traces identify source records when the loader supplies _weave_source metadata.\n",
             )
         return FileResponse(
             destination, filename=run_id + "-training.zip", media_type="application/zip"

@@ -12,6 +12,7 @@ import time
 
 from .service import build_snapshot, events, hardware
 from .weave_training import Run, atomic_json
+from .recipe import is_code_first
 
 
 def main():
@@ -29,8 +30,13 @@ def main():
     )
     # Operator credentials must never enter an editable training script.
     environment.pop("WEAVE_TRAINING_TOKEN", None)
-    command = [python, "train.py", "--config", "config.json"]
-    if config["strategy"] == "ddp":
+    code_first = is_code_first((directory / "train.py").read_text())
+    command = (
+        [python, "train.py"]
+        if code_first
+        else [python, "train.py", "--config", "config.json"]
+    )
+    if config["strategy"] == "ddp" and not code_first:
         command = [
             python,
             "-m",
@@ -170,7 +176,7 @@ def main():
                                 request["id"],
                             )
                             completed_commands.add(request["id"])
-                if config["strategy"] == "train_eval":
+                if config["strategy"] == "train_eval" and not code_first:
                     if evaluation and evaluation.poll() is not None:
                         if evaluation.returncode:
                             reporter.warning(
