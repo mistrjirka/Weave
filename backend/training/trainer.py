@@ -456,6 +456,11 @@ class Trainer:
             )
             if self.rank == 0:
                 print(f"Run outputs: {directory}", flush=True)
+                print(
+                    f"Compute: {cfg.resolved_strategy} · devices={cfg.devices or 'CPU'} "
+                    f"· workers={self.world} · precision={cfg.precision}",
+                    flush=True,
+                )
                 atomic_json(report_directory / "resolved-config.json", asdict(cfg))
                 run.emit("configuration", asdict(cfg))
             self.manifest = self._sources(report_directory, run)
@@ -519,10 +524,13 @@ class Trainer:
             if not self.resuming:
                 random.seed(cfg.seed + self.rank)
                 torch.manual_seed(cfg.seed + self.rank)
-            self._loop(directory)
+            stopped = self._loop(directory)
             if self.rank == 0 and cfg.background_evaluation:
-                while self.evaluation_job or self.evaluation_pending:
-                    self._evaluation_worker(directory, wait=True)
+                if stopped:
+                    self._cancel_evaluation(directory)
+                else:
+                    while self.evaluation_job or self.evaluation_pending:
+                        self._evaluation_worker(directory, wait=True)
             if self.rank == 0:
                 for info in self.manifest.values():
                     path = Path(info["path"])
@@ -892,6 +900,14 @@ class Trainer:
                     self._progress()
                     continue
                 if run.step % cfg.log_every == 0 or run.step == 1:
+                    profile = {
+                        "rank": self.rank,
+                        "device": self.device,
+                        "microbatches": [
+                            self._batch_shapes(batch) for batch in batches
+                        ],
+                    }
+                    profiles = [profile]
                     values = {
                         "train/loss": stats[1].item() / stats[0].item(),
                         "train/gradient_norm": float(norm),
@@ -900,11 +916,24 @@ class Trainer:
                     }
                     if self.world > 1:
                         all_metrics = [None] * self.world
-                        dist.all_gather_object(all_metrics, metrics)
+                        dist.all_gather_object(
+                            all_metrics, {"metrics": metrics, "profile": profile}
+                        )
+                        profiles = [item["profile"] for item in all_metrics]
                         metrics = {
-                            key: sum(item.get(key, 0.0) for item in all_metrics)
-                            for key in {k for item in all_metrics for k in item}
+                            key: sum(
+                                item["metrics"].get(key, 0.0) for item in all_metrics
+                            )
+                            for key in {
+                                k for item in all_metrics for k in item["metrics"]
+                            }
                         }
+                    run.emit("batch_profile", {"ranks": profiles})
+                    if self.rank == 0:
+                        print(
+                            f"Update {run.step} · input batches: {json.dumps(profiles)}",
+                            flush=True,
+                        )
                     values.update(
                         {
                             "train/" + key: value / stats[0].item()
@@ -951,6 +980,9 @@ class Trainer:
                     self._evaluate(checkpoint)
             if self.world > 1:
                 dist.barrier()
+        if stopped and self.rank == 0:
+            run.emit("stopped", {"checkpoint": checkpoint, "reason": "user"})
+        return stopped
 
     def _training_done(self):
         cfg = self.config
@@ -999,12 +1031,31 @@ class Trainer:
             },
         )
 
+    @staticmethod
+    def _batch_shapes(batch):
+        shapes = {}
+
+        def visit(value, path):
+            if isinstance(value, Tensor):
+                shapes[path or "input"] = list(value.shape)
+            elif isinstance(value, dict):
+                for name, item in value.items():
+                    if not str(name).startswith("_weave"):
+                        visit(item, f"{path}.{name}" if path else str(name))
+            elif isinstance(value, (tuple, list)):
+                for index, item in enumerate(value):
+                    visit(item, f"{path}.{index}" if path else str(index))
+
+        visit(batch, "")
+        return shapes
+
     def _batch_trace(self, batch):
         result = (
             {"source": batch.get("_weave_source")}
             if isinstance(batch, dict) and "_weave_source" in batch
             else {"source": None}
         )
+        result["shapes"] = self._batch_shapes(batch)
         if self.config.trace_batches == "sha256":
             digest = hashlib.sha256()
 
@@ -1167,6 +1218,34 @@ class Trainer:
             )
             self.evaluation_pending = None
 
+    def _cancel_evaluation(self, directory):
+        self._discard_evaluation_snapshot(self.evaluation_pending)
+        self.evaluation_pending = None
+        job = self.evaluation_job
+        if job is None:
+            return
+        if job.poll() is not None:
+            self._evaluation_worker(directory)
+            return
+        job.terminate()
+        try:
+            job.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            job.kill()
+            job.wait()
+        self.run.emit(
+            "evaluation",
+            {
+                "state": "cancelled",
+                "checkpoint": self.evaluation_active,
+                "checkpoint_step": self.evaluation_active_step,
+                "device": self.config.evaluation_device or "cpu",
+                "reason": "training stopped by user",
+            },
+        )
+        self._discard_evaluation_snapshot(self.evaluation_active)
+        self.evaluation_job = None
+
     def _evaluation_snapshot(self, directory):
         """Immutable weights only; no optimizer/loader serialization for validation."""
         path = (
@@ -1232,7 +1311,13 @@ class Trainer:
             with torch.inference_mode(), self._amp():
                 loss, weight, metrics = 0.0, 0.0, {}
                 if self.val_loader is not None:
-                    for batch in itertools.islice(self.val_loader, cfg.eval_batches):
+                    run.emit(
+                        "evaluation_progress",
+                        {"completed": 0, "total": cfg.eval_batches},
+                    )
+                    for batch_index, batch in enumerate(
+                        itertools.islice(self.val_loader, cfg.eval_batches), 1
+                    ):
                         value = self._result(
                             self.evaluation_step_fn(raw, batch, self.device)
                         )
@@ -1242,6 +1327,18 @@ class Trainer:
                             metrics[key] = (
                                 metrics.get(key, 0.0) + float(item) * value.weight
                             )
+                        run.emit(
+                            "evaluation_progress",
+                            {
+                                "completed": batch_index,
+                                "total": cfg.eval_batches,
+                                "loss_running": (
+                                    loss / weight
+                                    if weight and math.isfinite(loss / weight)
+                                    else None
+                                ),
+                            },
+                        )
                     if weight:
                         run.log(
                             {

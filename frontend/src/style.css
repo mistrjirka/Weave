@@ -4349,6 +4349,10 @@ textarea:focus-visible {
   .example-card-actions button {
     min-height: 44px;
   }
+  .inspector .property-field .source-editor {
+    font-size: 16px;
+    line-height: 1.6;
+  }
   .reference-use-example span {
     display: none;
   }
@@ -4940,4 +4944,102 @@ textarea:focus-visible {
   max-height: 125px;
   overflow-y: auto;
   overscroll-behavior: contain;
+}
+
+/* Phone settings prioritize readable explanations and deliberate touch input. */
+@media (max-width: 760px) {
+  .inspector-heading,
+  .inspector-description,
+  .inspector .property-field > span,
+  .inspector .property-row,
+  .inspector .setting-boolean label,
+  .inspector .setting-heading,
+  .inspector .section-label,
+  .inspector .eyebrow,
+  .inspector .reference-details,
+  .modal .property-field > span {
+    font-size: 14px;
+    line-height: 1.5;
+  }
+  .inspector .property-field small,
+  .inspector .field-help,
+  .inspector .field-error,
+  .inspector .setting-explanation,
+  .inspector .shape-card > small,
+  .inspector .shape-card > span,
+  .modal .field-help,
+  .modal .property-field small,
+  .mask-matrix-editor,
+  .mask-matrix-editor small {
+    font-size: 13px;
+    line-height: 1.6;
+  }
+  .inspector input:not([type="checkbox"]):not([type="radio"]),
+  .inspector select,
+  .inspector textarea,
+  .modal input:not([type="checkbox"]):not([type="radio"]),
+  .modal select,
+  .modal textarea {
+    font-size: 16px;
+    min-height: 44px;
+  }
+  .inspector button,
+  .modal button {
+    min-height: 44px;
+  }
+  .inspector .setting-help-button,
+  .reference-setting-help .setting-help-button {
+    min-width: 32px;
+    width: 32px;
+    min-height: 32px;
+    height: 32px;
+    flex-shrink: 0;
+  }
+  .inspector .drawer-close {
+    min-width: 44px;
+    min-height: 44px;
+  }
+  .mask-matrix-viewport {
+    max-width: 100%;
+    max-height: 320px;
+    overflow: auto;
+    overscroll-behavior: contain;
+  }
+  .mask-matrix-cells {
+    width: max-content;
+    max-width: none;
+    gap: 4px;
+  }
+  .inspector .mask-matrix-cells button {
+    width: 32px;
+    min-width: 32px;
+    height: 32px;
+    min-height: 32px;
+    padding: 0;
+    touch-action: manipulation;
+  }
+  .graph-variable-card {
+    width: 300px;
+    font-size: 14px;
+  }
+  .variable-card-heading button,
+  .graph-variables.compact button {
+    min-width: 32px;
+    min-height: 32px;
+    width: auto;
+  }
+  .graph-variables.compact td:last-child,
+  .graph-variables.compact th:last-child {
+    width: 40px;
+  }
+  .graph-variables.compact input {
+    font-size: 16px;
+    min-height: 44px;
+    min-width: 0;
+    width: 100%;
+  }
+  .graph-variables.compact th,
+  .graph-variables.compact p {
+    font-size: 13px;
+  }
 }

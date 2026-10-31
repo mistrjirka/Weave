@@ -6,6 +6,7 @@ import asyncio
 import hmac
 import json
 import os
+import stat
 from pathlib import Path
 from urllib.parse import urlsplit
 import zipfile
@@ -54,6 +55,19 @@ class Login(BaseModel):
 class Command(BaseModel):
     kind: str
     include_data: bool = False
+
+
+def directory_size(directory):
+    """A live run may atomically replace/delete files while it is inspected."""
+    total = 0
+    for path in directory.rglob("*"):
+        try:
+            info = path.stat()
+        except FileNotFoundError:
+            continue
+        if stat.S_ISREG(info.st_mode):
+            total += info.st_size
+    return total
 
 
 def router(data):
@@ -506,9 +520,7 @@ actual training code when your model/data/optimizer are ready.
                 ]
                 for info in json.loads(manifest.read_text()).values()
             ),
-            "disk_bytes": sum(
-                p.stat().st_size for p in directory.rglob("*") if p.is_file()
-            ),
+            "disk_bytes": directory_size(directory),
             "config": json.loads((directory / "config.json").read_text()),
             "datasets": json.loads((directory / "datasets.json").read_text()),
             "module_nodes": (
@@ -575,7 +587,10 @@ actual training code when your model/data/optimizer are ready.
         async def generate():
             cursor = last or ""
             while not await request.is_disconnected():
-                for event in events(directory, after=cursor, limit=1000):
+                batch = await asyncio.to_thread(
+                    events, directory, after=cursor, limit=1000
+                )
+                for event in batch:
                     cursor = event["id"]
                     yield "id: " + event["id"] + "\ndata: " + json.dumps(event) + "\n\n"
                 yield ": heartbeat\n\n"

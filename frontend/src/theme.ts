@@ -26,6 +26,6 @@ export function applyTheme(preference: ThemePreference, systemDark: boolean) {
     .querySelector('meta[name="theme-color"]')
     ?.setAttribute(
       "content",
-      { light: "#f7f9f5", dark: "#101a15", black: "#111113" }[theme],
+      { light: "#f7f9f5", dark: "#111113", black: "#111111" }[theme],
     );
 }

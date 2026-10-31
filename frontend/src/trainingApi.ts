@@ -198,6 +198,7 @@ export async function trainingRequest<T>(
   signal?: AbortSignal,
 ): Promise<T> {
   const response = await fetch("/api/training" + path, {
+    cache: "no-store",
     method: method ?? (body === undefined ? "GET" : "POST"),
     signal,
     headers:
@@ -211,7 +212,14 @@ export async function trainingRequest<T>(
           ? body
           : JSON.stringify(body),
   });
-  const result: unknown = await response.json();
+  let result: unknown;
+  try {
+    result = JSON.parse(await response.text());
+  } catch {
+    throw new Error(
+      `Training server returned a non-JSON response (HTTP ${response.status}) for ${method ?? (body === undefined ? "GET" : "POST")} /api/training${path}.`,
+    );
+  }
   if (!response.ok) {
     const parsed = z.object({ detail: z.unknown() }).safeParse(result);
     throw new Error(

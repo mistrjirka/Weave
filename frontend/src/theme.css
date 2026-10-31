@@ -1,29 +1,31 @@
-/* Components retain their original light colors as fallbacks in style.css.
-   A shared dark palette covers surfaces, text, borders, and computation motifs. */
+/* Light retains its existing palette. Dark neutral steps use Radix Colors 3.0
+   Slate / Gray scales: https://www.radix-ui.com/colors/docs/palette-composition/understanding-the-scale
+   Category hues are reserved for graph families and selected actions. */
 :root {
   color-scheme: light;
 }
 html:is([data-theme="dark"], [data-theme="black"]) {
   color-scheme: dark;
-  --theme-base: #101a15;
-  --theme-raised: #24352b;
-  --theme-deep: #132219;
-  --theme-sidebar: #294333;
-  --theme-input: #17271d;
-  --theme-text: #edf3ed;
-  --theme-muted: #bdcebf;
+  --theme-base: #111113;
+  --theme-raised: #212225;
+  --theme-deep: #18191b;
+  --theme-sidebar: #18191b;
+  --theme-input: #111113;
+  --theme-input-border: #696e77;
+  --theme-text: #edeef0;
+  --theme-muted: #b0b4ba;
   --theme-on-strong: #f1f7ed;
   --theme-overlay-highlight: #ffffff;
 
-  --theme-neutral-surface: #25352b;
-  --theme-neutral-strong: #35463b;
-  --theme-neutral-visual: #9bae9d;
-  --theme-neutral-border: #59725f;
+  --theme-neutral-surface: #272a2d;
+  --theme-neutral-strong: #363a3f;
+  --theme-neutral-visual: #777b84;
+  --theme-neutral-border: #43484e;
 
   --theme-green-surface: #22372a;
   --theme-green-strong: #3d6247;
   --theme-green-visual: #9ac39c;
-  --theme-green-text: #deecd6;
+  --theme-green-text: #edeef0;
   --theme-green-accent: #a4d49f;
   --theme-green-border: #63826b;
   --theme-green-line: #82ad7c;
@@ -57,36 +59,37 @@ html:is([data-theme="dark"], [data-theme="black"]) {
   --theme-coral-border: #8b5e4f;
   --theme-coral-line: #dc9a83;
 
-  --graph-dots: #3e5345;
-  --graph-edge: #9ab4a0;
+  --graph-dots: #363a3f;
+  --graph-edge: #b0b4ba;
   --graph-bypass-edge: #9bc7e8;
   --graph-weight-edge: #c4a2e5;
-  --graph-minimap-mask: #0e1912b3;
+  --graph-minimap-mask: #111113b3;
 }
 
 /* Neutral dark surfaces keep diagram families colored without tinting the workspace. */
 html[data-theme="black"] {
-  --theme-base: #111113;
-  --theme-raised: #242427;
-  --theme-deep: #161619;
-  --theme-sidebar: #1a1a1d;
-  --theme-input: #151518;
-  --theme-text: #f1f1f3;
-  --theme-muted: #c0c0c8;
+  --theme-base: #111111;
+  --theme-raised: #222222;
+  --theme-deep: #191919;
+  --theme-sidebar: #191919;
+  --theme-input: #111111;
+  --theme-input-border: #6e6e6e;
+  --theme-text: #eeeeee;
+  --theme-muted: #b4b4b4;
   --theme-on-strong: #f5f5f7;
-  --theme-neutral-surface: #303034;
-  --theme-neutral-strong: #3b3b40;
-  --theme-neutral-visual: #aeb1ba;
-  --theme-neutral-border: #62626b;
+  --theme-neutral-surface: #2a2a2a;
+  --theme-neutral-strong: #3a3a3a;
+  --theme-neutral-visual: #7b7b7b;
+  --theme-neutral-border: #484848;
   --theme-green-surface: #2b2b30;
   --theme-green-strong: #41414a;
   --theme-green-visual: #b6cbb0;
-  --theme-green-text: #e6e6eb;
+  --theme-green-text: #eeeeee;
   --theme-green-accent: #c6dcb6;
   --theme-green-border: #62626b;
   --theme-green-line: #9baba0;
-  --graph-dots: #39393f;
-  --graph-edge: #b7bbc6;
+  --graph-dots: #3a3a3a;
+  --graph-edge: #b4b4b4;
   --graph-minimap-mask: #0a0a0ab3;
 }
 
@@ -182,5 +185,37 @@ html:is([data-theme="dark"], [data-theme="black"]) .project-browser-search {
   }
   .view-tabs {
     gap: 4px;
+  }
+}
+
+/* Inputs have their own well and outline, distinct from neutral cards and text. */
+html:is([data-theme="dark"], [data-theme="black"])
+  :is(input:not([type="checkbox"]):not([type="radio"]), select, textarea) {
+  background-color: var(--theme-input);
+  border-color: var(--theme-input-border);
+  color: var(--theme-text);
+}
+html:is([data-theme="dark"], [data-theme="black"]) .arch-node.mint {
+  --tint: var(--theme-green-surface);
+}
+html:is([data-theme="dark"], [data-theme="black"]) .arch-node.violet {
+  --tint: var(--theme-violet-surface);
+}
+html:is([data-theme="dark"], [data-theme="black"]) .arch-node.blue {
+  --tint: var(--theme-blue-surface);
+}
+html:is([data-theme="dark"], [data-theme="black"]) .arch-node {
+  border-left: 3px solid var(--accent);
+}
+
+@media (max-width: 760px) {
+  .theme-picker select,
+  html:is([data-theme="dark"], [data-theme="black"]) .theme-picker select {
+    width: 44px;
+    min-height: 44px;
+    color: transparent;
+  }
+  .theme-picker > svg {
+    left: 14px;
   }
 }

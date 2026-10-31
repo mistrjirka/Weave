@@ -1,5 +1,7 @@
 import { useState } from "react";
+import type { CSSProperties } from "react";
 import type { TrainingEvent } from "./trainingApi";
+import { formatMetric, metricPresentation } from "./trainingMetrics";
 
 export function TrainingChart({
   events,
@@ -15,6 +17,10 @@ export function TrainingChart({
   smooth: boolean;
 }) {
   const [hover, setHover] = useState<number | null>(null);
+  const presentation = metricPresentation(metric);
+  const chartStyle: CSSProperties & { "--chart-color": string } = {
+    "--chart-color": presentation.color,
+  };
   const points = (items: TrainingEvent[]) => {
     const start = items[0]?.time ?? 0;
     let average: number | undefined;
@@ -81,12 +87,12 @@ export function TrainingChart({
           undefined,
         );
   return (
-    <figure className="training-chart">
+    <figure className="training-chart" style={chartStyle}>
       <figcaption>
-        <strong>{metric}</strong>
+        <strong title={metric}>{presentation.label}</strong>
         <span>
           {active
-            ? `${active.raw.toPrecision(4)} · step ${active.step}`
+            ? `${formatMetric(active.raw)} · update ${formatMetric(active.step)}`
             : "Comparison"}
         </span>
       </figcaption>
@@ -118,15 +124,15 @@ export function TrainingChart({
               className="training-chart-grid"
             />
             <text x="2" y={30 + t * 124}>
-              {(y1 - t * (y1 - y0)).toPrecision(tickDigits)}
+              {formatMetric(y1 - t * (y1 - y0), tickDigits)}
             </text>
           </g>
         ))}
         <text x="64" y="174">
-          {x0.toFixed(0)}
+          {formatMetric(x0)}
         </text>
         <text x="480" y="174">
-          {x1.toFixed(0)}
+          {formatMetric(x1)}
         </text>
         <path d={path(other)} className="training-chart-compare" />
         <path d={path(current)} className="training-chart-line" />
@@ -154,7 +160,12 @@ export function TrainingChart({
               <tr key={i}>
                 <td>{p.step}</td>
                 <td>{p.x.toFixed(1)}</td>
-                <td>{p.raw.toPrecision(5)}</td>
+                <td>
+                  {p.raw.toLocaleString("en", {
+                    notation: "standard",
+                    maximumSignificantDigits: 10,
+                  })}
+                </td>
               </tr>
             ))}
           </tbody>

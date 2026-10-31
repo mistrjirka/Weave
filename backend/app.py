@@ -1,6 +1,8 @@
 from __future__ import annotations
 import io
 import json
+import logging
+import shutil
 import os
 from pathlib import Path
 import re
@@ -8,7 +10,7 @@ import sqlite3
 import uuid
 import zipfile
 from fastapi import FastAPI, HTTPException, UploadFile, File
-from fastapi.responses import Response
+from fastapi.responses import Response, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from .core import validate_project, params, graph_context
@@ -22,6 +24,18 @@ from .tokenizer_bindings import input_tokenizers
 ROOT=Path(__file__).parent.parent
 DATA=Path(os.environ.get('WEAVE_DATA', ROOT/'data'));DATA.mkdir(parents=True,exist_ok=True)
 app=FastAPI(title='Weave Neural Graph Studio',version='0.1.0')
+
+@app.exception_handler(Exception)
+async def internal_error(request, exc):
+    error_id = uuid.uuid4().hex[:12]
+    logging.getLogger("uvicorn.error").error(
+        "Request %s failed (%s %s)", error_id, request.method, request.url.path,
+        exc_info=(type(exc), exc, exc.__traceback__),
+    )
+    return JSONResponse(
+        status_code=500,
+        content={"detail": f"Internal server error (reference {error_id}). Check the server logs."},
+    )
 
 @app.middleware("http")
 async def revalidate_frontend(request, call_next):
@@ -143,18 +157,21 @@ def inspect_tokenizer(request:TokenizerRequest):
 @app.post('/api/tokenizers/upload')
 async def upload_tokenizer(files:list[UploadFile]=File(...)):
     target=DATA/'uploads'/uuid.uuid4().hex;target.mkdir(parents=True)
-    total=0
-    for f in files:
-        content=await f.read(64*1024*1024+1);total+=len(content)
-        if total>64*1024*1024:raise HTTPException(413,'Tokenizer bundle exceeds 64 MB')
-        name=Path(f.filename or '').name
-        if Path(name).suffix not in ALLOWED_SUFFIXES:raise HTTPException(422,'Upload tokenizer JSON, model, vocabulary, or merges files.')
-        (target/name).write_bytes(content)
-    source=target
-    names=list(target.iterdir())
-    if len(names)==1 and names[0].suffix in ('.json','.model') and names[0].name not in ('tokenizer_config.json','config.json'):source=names[0]
-    try:return tokenizers.load(source)
-    except Exception as exc:raise HTTPException(422,str(exc))
+    try:
+        total=0
+        for f in files:
+            content=await f.read(64*1024*1024+1);total+=len(content)
+            if total>64*1024*1024:raise HTTPException(413,'Tokenizer bundle exceeds 64 MB')
+            name=Path(f.filename or '').name
+            if Path(name).suffix not in ALLOWED_SUFFIXES:raise HTTPException(422,'Upload tokenizer JSON, model, vocabulary, or merges files.')
+            (target/name).write_bytes(content)
+        source=target
+        names=list(target.iterdir())
+        if len(names)==1 and names[0].suffix in ('.json','.model') and names[0].name not in ('tokenizer_config.json','config.json'):source=names[0]
+        try:return tokenizers.load(source)
+        except Exception as exc:raise HTTPException(422,str(exc))
+    finally:
+        shutil.rmtree(target, ignore_errors=True)
 
 
 class PreviewRequest(BaseModel):

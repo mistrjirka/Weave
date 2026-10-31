@@ -1934,8 +1934,15 @@ function Workbench({
         setProject(current);
         ref.current = current;
       }
-      setSaved(savedProjectsSchema.parse(await api("/projects")));
-      notify("Project saved on server");
+      try {
+        setSaved(savedProjectsSchema.parse(await api("/projects")));
+        notify("Project saved on server");
+      } catch (refreshError) {
+        notify(
+          "Project saved on server; project list refresh failed: " +
+            describeError(refreshError),
+        );
+      }
       return true;
     } catch (e) {
       notify(String(e));
@@ -2882,7 +2889,9 @@ function Workbench({
                       <span className="variables-button-label">Variables</span>
                     </button>
                     <button
-                      aria-label="Auto arrange"
+                      aria-label={
+                        arranging ? "Auto arrange: Arranging…" : "Auto arrange"
+                      }
                       title="Auto arrange: reduce crossings and reserve label space"
                       className="auto-arrange-button"
                       disabled={arranging}

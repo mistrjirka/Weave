@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 import pytest
 
 from backend.training.api import router
+from backend.training.api import directory_size
 from backend.training.service import TrainingConfig
 from backend.training.weave_training import Run
 from test_training import tiny_project
@@ -166,3 +167,42 @@ def test_no_samples_before_first_evaluation_is_not_a_tokenizer_diagnostic(
     assert "reached update 14" in diagnostics
     assert "evaluation is at update 500" in diagnostics
     assert "Configure evaluation prompts and a tokenizer" not in diagnostics
+
+
+def test_live_disk_size_tolerates_files_replaced_during_inspection(
+    tmp_path, monkeypatch
+):
+    stable = tmp_path / "model.py"
+    stable.write_text("model")
+    temporary = tmp_path / ".pending-metric"
+    temporary.write_text("metric")
+    original_stat = Path.stat
+
+    def disappear_after_stat(path, *args, **kwargs):
+        info = original_stat(path, *args, **kwargs)
+        if path == temporary:
+            temporary.unlink()
+        return info
+
+    monkeypatch.setattr(Path, "stat", disappear_after_stat)
+    assert directory_size(tmp_path) == len("modelmetric")
+    assert not temporary.exists()
+
+
+def test_unhandled_errors_return_json_with_server_log_reference(caplog):
+    from backend.app import internal_error
+
+    app = FastAPI()
+    app.add_exception_handler(Exception, internal_error)
+
+    @app.get("/broken")
+    def broken():
+        raise RuntimeError("private traceback detail")
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.get("/broken")
+    assert response.status_code == 500
+    assert response.headers["content-type"] == "application/json"
+    assert "reference" in response.json()["detail"]
+    assert "private traceback detail" not in response.text
+    assert "private traceback detail" in caplog.text

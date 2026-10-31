@@ -429,6 +429,20 @@ def test_event_readers_close_sqlite_files_without_waiting_for_gc(tmp_path):
             gc.enable()
 
 
+def test_unchanged_event_poll_does_not_write_index(tmp_path):
+    import sqlite3
+    from contextlib import closing
+    from backend.training.weave_training import Run
+
+    with Run(tmp_path) as run:
+        run.log({"loss": 1.0}, step=1)
+    expected = events(tmp_path)
+    with closing(sqlite3.connect(tmp_path / "event-index.sqlite")) as observer:
+        version = observer.execute("PRAGMA data_version").fetchone()
+        assert events(tmp_path) == expected
+        assert observer.execute("PRAGMA data_version").fetchone() == version
+
+
 def test_epoch_limits_partial_accumulation_cosine_and_resume(tmp_path):
     script = filled_starter(
         tmp_path / "rows.jsonl",
@@ -678,6 +692,64 @@ def test_gui_compute_override_reaches_runtime_and_preserves_user_script(tmp_path
         row["channel"] == "evaluation" and row["kind"] == "metrics"
         for row in events(directory)
     )
+    validation_progress = events(directory, kind="evaluation_progress")
+    assert validation_progress
+    assert validation_progress[-1]["payload"]["completed"] > 0
+    assert validation_progress[-1]["payload"]["loss_running"] > 0
+    profiles = events(directory, kind="batch_profile")
+    assert profiles
+    assert profiles[-1]["payload"]["ranks"][0]["device"] == "cpu"
+    assert profiles[-1]["payload"]["ranks"][0]["microbatches"]
+
+
+def test_safe_stop_cancels_background_evaluator_and_removes_private_snapshots(tmp_path):
+    _, directory, _ = make_hook_run(tmp_path)
+    source = r'''
+import subprocess, sys, time
+from pathlib import Path
+from types import SimpleNamespace
+from weave_support.trainer import Trainer
+
+trainer = Trainer.__new__(Trainer)
+trainer.config = SimpleNamespace(evaluation_device=None)
+private = Path("evaluation-weights")
+private.mkdir()
+active = private / "active.pt"
+pending = private / "pending.pt"
+active.write_bytes(b"private weights")
+pending.write_bytes(b"queued weights")
+checkpoint = Path("checkpoints/final.pt")
+checkpoint.parent.mkdir(exist_ok=True)
+checkpoint.write_bytes(b"retained resumable checkpoint")
+trainer.evaluation_active = str(active)
+trainer.evaluation_active_step = 10
+trainer.evaluation_pending = str(pending)
+records = []
+trainer.run = SimpleNamespace(emit=lambda kind, payload: records.append((kind, payload)))
+job = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+trainer.evaluation_job = job
+try:
+    started = time.monotonic()
+    trainer._cancel_evaluation(Path.cwd())
+    assert time.monotonic() - started < 10
+    assert job.poll() is not None
+    assert trainer.evaluation_job is None
+    assert trainer.evaluation_pending is None
+    assert not active.exists() and not pending.exists()
+    assert checkpoint.read_bytes() == b"retained resumable checkpoint"
+    assert records[-1][0] == "evaluation"
+    assert records[-1][1]["state"] == "cancelled"
+    assert records[-1][1]["device"] == "cpu"
+finally:
+    if job.poll() is None:
+        job.kill()
+        job.wait()
+'''
+    result = subprocess.run(
+        [sys.executable, "-c", textwrap.dedent(source)],
+        cwd=directory, capture_output=True, text=True, timeout=30,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_script_device_settings_remain_authoritative_without_override(tmp_path):

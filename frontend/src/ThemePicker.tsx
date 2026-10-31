@@ -53,7 +53,7 @@ export function ThemePicker() {
       >
         <option value="system">System</option>
         <option value="light">Light</option>
-        <option value="dark">Forest</option>
+        <option value="dark">Slate</option>
         <option value="black">Black</option>
       </select>
     </label>

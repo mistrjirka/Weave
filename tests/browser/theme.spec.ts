@@ -126,8 +126,8 @@ for (const theme of ["light", "dark", "black"]) {
       "background-color",
       {
         light: "rgb(247, 249, 245)",
-        dark: "rgb(16, 26, 21)",
-        black: "rgb(17, 17, 19)",
+        dark: "rgb(17, 17, 19)",
+        black: "rgb(17, 17, 17)",
       }[theme],
     );
     await expect(page.locator(".app-shell")).toHaveCount(0);

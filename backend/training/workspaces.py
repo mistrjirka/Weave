@@ -7,6 +7,7 @@ by a stale browser draft. Run directories remain separate immutable snapshots.
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 from pathlib import Path
 import re
@@ -264,43 +265,48 @@ class WorkspaceStore:
         if script.exists():
             if script.stat().st_size > 1024 * 1024:
                 raise ValueError("Training script exceeds the 1 MB editor limit")
-            result.script = script.read_text()
-            result.script_revision = file_hash(script)
+            content = script.read_bytes()
+            result.script = content.decode()
+            result.script_revision = hashlib.sha256(content).hexdigest()
         if config_path.exists():
+            config_content = config_path.read_bytes()
             try:
-                result.config = TrainingConfig.model_validate_json(
-                    config_path.read_text()
-                )
+                result.config = TrainingConfig.model_validate_json(config_content)
                 result.workspace_warning = None
             except ValueError:
                 result.workspace_warning = "config.json contains invalid settings. Fix it in your SSH editor before launching."
-            result.config_revision = file_hash(config_path)
+            result.config_revision = hashlib.sha256(config_content).hexdigest()
         return result
 
     def check(self, project_id, stage):
         directory = self.directory(project_id, stage.id)
         script = directory / "train.py"
+        script_content = script.read_bytes() if script.exists() else None
         config = self.config_path(
-            directory, script.read_text() if script.exists() else stage.script
+            directory,
+            script_content.decode() if script_content is not None else stage.script,
         )
         if (
-            script.exists()
-            and normalize_script(script.read_text(), stage.config.recipe)
+            script_content is not None
+            and normalize_script(script_content.decode(), stage.config.recipe)
             != normalize_script(stage.script, stage.config.recipe)
-            and stage.script_revision != file_hash(script)
+            and stage.script_revision != hashlib.sha256(script_content).hexdigest()
         ):
             raise WorkspaceConflict(
                 "train.py changed on the server. Reload the server file, or save your browser draft as another stage."
             )
         if config.exists():
+            config_content = config.read_bytes()
             try:
                 same = (
-                    TrainingConfig.model_validate_json(config.read_text())
-                    == stage.config
+                    TrainingConfig.model_validate_json(config_content) == stage.config
                 )
             except ValueError:
                 same = False
-            if not same and stage.config_revision != file_hash(config):
+            if (
+                not same
+                and stage.config_revision != hashlib.sha256(config_content).hexdigest()
+            ):
                 raise WorkspaceConflict(
                     "config.json changed on the server. Reload the server files before saving these settings."
                 )

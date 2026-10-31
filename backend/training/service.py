@@ -210,10 +210,11 @@ def events(directory, *, limit=None, kind=None, after=None):
                         )
                     except (ValueError, KeyError, AttributeError):
                         continue
-                connection.execute(
-                    "INSERT OR REPLACE INTO offsets(path,offset) VALUES(?,?)",
-                    (name, stream.tell()),
-                )
+                if row is None or row[0] != stream.tell():
+                    connection.execute(
+                        "INSERT OR REPLACE INTO offsets(path,offset) VALUES(?,?)",
+                        (name, stream.tell()),
+                    )
         query = "SELECT document FROM events"
         values, filters = [], []
         if kind:

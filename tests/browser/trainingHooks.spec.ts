@@ -132,6 +132,22 @@ test("code-owned configuration, training hooks, provenance and snapshots", async
     ) {
       await strategy.selectOption("ddp");
       const devices = page.getByRole("group", { name: "Training devices" });
+      await expect(
+        devices.getByRole("checkbox", { name: /GPU 0/ }),
+      ).toBeChecked();
+      await expect(
+        devices.getByRole("checkbox", { name: /GPU 1/ }),
+      ).toBeChecked();
+      await devices.getByRole("checkbox", { name: /GPU 1/ }).uncheck();
+      await expect(strategy).toHaveValue("single");
+      await devices.getByRole("checkbox", { name: /GPU 0/ }).uncheck();
+      await expect(
+        devices.getByRole("checkbox", { name: "CPU", exact: true }),
+      ).toBeChecked();
+      await expect(
+        page.getByRole("combobox", { name: "Precision", exact: true }),
+      ).toHaveValue("fp32");
+      await strategy.selectOption("ddp");
       await devices.getByRole("checkbox", { name: /GPU 0/ }).check();
       await devices.getByRole("checkbox", { name: /GPU 1/ }).check();
       await expect(
@@ -280,15 +296,37 @@ test("code-owned configuration, training hooks, provenance and snapshots", async
       await (await context.request.get(`/api/training/runs/${runId}`)).json(),
     );
     runDirectory = detail.directory;
+    const runEndpoint = `**/api/training/runs/${runId}`;
+    await page.route(runEndpoint, (route) =>
+      route.fulfill({
+        status: 500,
+        contentType: "text/plain",
+        body: "Internal Server Error",
+      }),
+    );
+    await expect(page.getByRole("alert")).toContainText(
+      "Live updates interrupted",
+    );
+    await expect(page.getByRole("alert")).toContainText("HTTP 500");
+    await expect(page.getByRole("alert")).not.toContainText("Unexpected token");
+    await expect(page.getByTestId("run-freshness")).toContainText(
+      "Showing last successful update",
+    );
+    await page.unroute(runEndpoint);
+    await expect(page.getByRole("alert")).toHaveCount(0, { timeout: 15000 });
+    await expect(page.getByTestId("run-freshness")).toContainText(
+      /Live monitoring|Run data refreshed/,
+    );
     expect(detail.run.code_first).toBeTruthy();
     expect(detail.datasets["train-0"].path).toBe(data);
     expect(detail.datasets["train-0"].sha256).toBeUndefined();
     expect(
       detail.events.some((event) => event.kind === "data_trace"),
     ).toBeTruthy();
+    await page.getByText("Run files & diagnostics", { exact: true }).click();
     const counters = page.getByLabel("Training work counters");
     await expect(counters).toBeVisible();
-    await expect(counters).toContainText("Epochs completed");
+    await expect(counters).toContainText("Epoch tracking");
     await expect(counters).toContainText("Microbatches processed");
     await expect(
       counters.locator("div").filter({ hasText: "Optimizer updates" }),
@@ -324,6 +362,13 @@ test("code-owned configuration, training hooks, provenance and snapshots", async
       fullPage: true,
     });
     await page.reload();
+    await expect(
+      page.getByText(`Stage setup · ${saved.name}`, { exact: true }),
+    ).toBeVisible();
+    await expect(editor).not.toBeVisible();
+    await page
+      .getByText(`Stage setup · ${saved.name}`, { exact: true })
+      .click();
     await expect(editor).toContainText("TrainingConfig(", { timeout: 30000 });
     await page.setViewportSize({ width: 390, height: 844 });
     expect(
@@ -335,6 +380,30 @@ test("code-owned configuration, training hooks, provenance and snapshots", async
       path: "data/training-code-hooks-phone.png",
       fullPage: true,
     });
+    // A terminal stop must not look like an active process. Reopen the next
+    // launch controls without launching anything or changing the real run.
+    await page.route(runEndpoint, async (route) => {
+      const response = await route.fetch();
+      const stopped = detailSchema.parse(await response.json());
+      stopped.status.state = "stopped";
+      await route.fulfill({ response, json: stopped });
+    });
+    await page.reload();
+    await expect(
+      page.getByRole("status", { name: "Training stopped", exact: true }),
+    ).toBeVisible();
+    await expect(
+      page.locator(".training-setup-card > details"),
+    ).toHaveAttribute("open", "");
+    await expect(
+      page.getByRole("button", { name: "Start training stage", exact: true }),
+    ).toBeVisible();
+    await expect(page.getByTestId("run-freshness")).toContainText(
+      "Run data refreshed",
+    );
+    await expect(
+      page.getByRole("button", { name: "Stop safely", exact: true }),
+    ).toHaveCount(0);
     expect(errors).toEqual([]);
   } finally {
     releaseInitialSave();

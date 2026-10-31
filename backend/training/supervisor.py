@@ -140,8 +140,8 @@ def main():
                     stream.write(json.dumps(record) + "\n")
                 checkpoints = [
                     e
-                    for e in events(directory)
-                    if e["kind"] == "checkpoint" and e.get("channel") == "training"
+                    for e in events(directory, kind="checkpoint")
+                    if e.get("channel") == "training"
                 ]
                 for path in (directory / "commands").glob("*.json"):
                     request = json.loads(path.read_text())
@@ -209,7 +209,7 @@ def main():
                             )
                 if process.poll() is not None and evaluation is None:
                     state = "completed" if process.returncode == 0 else "failed"
-                    if any(e["kind"] == "stopped" for e in events(directory)):
+                    if events(directory, kind="stopped", limit=1):
                         state = "stopped"
                     status(
                         state,
@@ -223,9 +223,7 @@ def main():
                     break
                 status(
                     "running" if process.poll() is None else "evaluating",
-                    metrics_received=any(
-                        e["kind"] == "metrics" for e in events(directory)
-                    ),
+                    metrics_received=bool(events(directory, kind="metrics", limit=1)),
                 )
                 time.sleep(2)
     except BaseException as exc:

@@ -106,7 +106,7 @@ test("legacy training stages, real run, charts, snapshots, and reload", async ({
   try {
     await page.goto(`/?model=${id}&view=training`);
     await expect(
-      page.getByRole("heading", { name: "Training", exact: true }),
+      page.getByRole("region", { name: "Training workspace", exact: true }),
     ).toBeVisible();
     await page
       .getByRole("button", { name: "Create training stage", exact: true })
@@ -193,7 +193,7 @@ test("legacy training stages, real run, charts, snapshots, and reload", async ({
       .getByRole("button", { name: "Generated examples", exact: true })
       .click();
     await expect(page.locator(".training-dashboard")).toContainText(
-      "Add fixed evaluation prompts",
+      "Set sample_prompts in train.py",
     );
     await page
       .getByRole("button", { name: "Checkpoints & snapshots", exact: true })
@@ -221,6 +221,7 @@ test("legacy training stages, real run, charts, snapshots, and reload", async ({
     ).toBeVisible();
     await page.getByRole("button", { name: "Metrics", exact: true }).click();
     await expect(page.locator(".training-chart")).toHaveCount(4);
+    await page.getByText("Chart options", { exact: true }).click();
     await page
       .getByRole("combobox", { name: "Horizontal axis", exact: true })
       .selectOption("tokens");
@@ -443,6 +444,9 @@ test("independent training has a localhost reporting address and an editable con
     const reporting = page.getByRole("region", {
       name: "Independent training reporting",
     });
+    await page
+      .getByText("Independent training & reporting", { exact: true })
+      .click();
     await expect(reporting).toBeVisible({ timeout: 90000 });
     await expect(
       reporting.getByRole("textbox", { name: "Reporting server URL" }),
@@ -469,6 +473,9 @@ test("independent training has a localhost reporting address and an editable con
     );
     expect(connection.token.length).toBeGreaterThan(20);
     await page.reload();
+    await page
+      .getByText("Independent training & reporting", { exact: true })
+      .click();
     await expect(
       page.getByRole("region", { name: "Independent training reporting" }),
     ).toContainText(connection.url);

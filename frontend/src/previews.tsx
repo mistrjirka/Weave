@@ -273,27 +273,34 @@ export function MaskMatrixEditor({
     <div className="mask-matrix-editor">
       <span>Allowed query → key pairs</span>
       <div
-        className="mask-matrix-cells"
-        style={{
-          gridTemplateColumns: `repeat(${Math.min(matrix[0]?.length || 0, 16)},1fr)`,
-        }}
+        className="mask-matrix-viewport"
+        role="region"
+        aria-label="Attention mask cells"
+        tabIndex={0}
       >
-        {shown.flatMap((row, q) =>
-          row.slice(0, 16).map((allowed, k) => (
-            <button
-              key={`${q}:${k}`}
-              aria-label={`Query ${q}, key ${k}`}
-              aria-pressed={allowed}
-              title={`Query ${q} → key ${k}: ${allowed ? "allowed" : "blocked"}`}
-              className={allowed ? "allowed" : ""}
-              onClick={() => {
-                const next = structuredClone(matrix);
-                next[q][k] = !allowed;
-                onChange(next);
-              }}
-            />
-          )),
-        )}
+        <div
+          className="mask-matrix-cells"
+          style={{
+            gridTemplateColumns: `repeat(${Math.min(matrix[0]?.length || 0, 16)},1fr)`,
+          }}
+        >
+          {shown.flatMap((row, q) =>
+            row.slice(0, 16).map((allowed, k) => (
+              <button
+                key={`${q}:${k}`}
+                aria-label={`Query ${q}, key ${k}`}
+                aria-pressed={allowed}
+                title={`Query ${q} → key ${k}: ${allowed ? "allowed" : "blocked"}`}
+                className={allowed ? "allowed" : ""}
+                onClick={() => {
+                  const next = structuredClone(matrix);
+                  next[q][k] = !allowed;
+                  onChange(next);
+                }}
+              />
+            )),
+          )}
+        </div>
       </div>
       <small>
         {matrix.length} × {matrix[0]?.length || 0} fixed positions. Click a cell
