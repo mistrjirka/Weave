@@ -1,7 +1,11 @@
 import { useState } from "react";
 import type { CSSProperties } from "react";
 import type { TrainingEvent } from "./trainingApi";
-import { formatMetric, metricPresentation } from "./trainingMetrics";
+import {
+  formatMetric,
+  metricPresentation,
+  metricDomain,
+} from "./trainingMetrics";
 
 export function TrainingChart({
   events,
@@ -47,17 +51,22 @@ export function TrainingChart({
     other = points(comparison),
     all = [...current, ...other];
   if (!all.length)
-    return <div className="training-chart-empty">Waiting for {metric}…</div>;
+    return (
+      <figure
+        className="training-chart training-chart-empty"
+        style={chartStyle}
+      >
+        <figcaption>
+          <strong>{presentation.label}</strong>
+        </figcaption>
+        <p>{presentation.empty ?? "No values recorded for this metric."}</p>
+      </figure>
+    );
   const x0 = Math.min(...all.map((p) => p.x)),
     x1 = Math.max(x0 + 1, ...all.map((p) => p.x));
   const minimum = Math.min(...all.map((p) => p.y));
   const maximum = Math.max(...all.map((p) => p.y));
-  const padding =
-    maximum === minimum
-      ? Math.max(Math.abs(minimum) * 0.03, 1e-6)
-      : (maximum - minimum) * 0.08;
-  const y0 = minimum - padding,
-    y1 = maximum + padding;
+  const [y0, y1] = metricDomain(metric, minimum, maximum);
   const tickDigits = Math.min(
     8,
     Math.max(

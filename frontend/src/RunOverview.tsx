@@ -1,20 +1,29 @@
 import type { RunDetail } from "./trainingApi";
 import { formatMetric, metricPresentation } from "./trainingMetrics";
 
+const headlineMetrics = [
+  "train/loss",
+  "eval/loss",
+  "train/tokens_per_second",
+  "lr/group_0",
+] as const;
+
 export function RunOverview({ detail }: { detail: RunDetail }) {
+  const hasMetrics = detail.events.some((event) => event.kind === "metrics");
+  if (!hasMetrics) return null;
   return (
     <dl className="training-overview" aria-label="Latest training metrics">
-      {["train/loss", "eval/loss", "train/tokens_per_second", "lr/group_0"].map(
-        (metric) => {
-          const event = detail.events
-            .filter(
-              (item) =>
-                item.kind === "metrics" &&
-                typeof item.payload[metric] === "number",
-            )
-            .at(-1);
-          const value = event?.payload[metric];
-          return (
+      {headlineMetrics.map((metric) => {
+        const event = detail.events
+          .filter(
+            (item) =>
+              item.kind === "metrics" &&
+              typeof item.payload[metric] === "number",
+          )
+          .at(-1);
+        const value = event?.payload[metric];
+        return (
+          typeof value === "number" && (
             <div key={metric}>
               <dt>{metricPresentation(metric).label}</dt>
               <dd title={typeof value === "number" ? String(value) : undefined}>
@@ -28,9 +37,9 @@ export function RunOverview({ detail }: { detail: RunDetail }) {
                 </small>
               </dd>
             </div>
-          );
-        },
-      )}
+          )
+        );
+      })}
     </dl>
   );
 }

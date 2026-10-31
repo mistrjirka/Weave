@@ -125,7 +125,27 @@ export function TrainingWorkspace({ project }: { project: Project }) {
   );
   const [busy, setBusy] = useState(false);
   const pendingTasksRef = useRef(0);
-  const stageSavesRef = useRef(new Map<string, Promise<void>>());
+  const stageSavesRef = useRef(new Map<string, Promise<TrainingStage>>());
+  const launchInFlight = useRef(false);
+  const [launchPhase, setLaunchPhase] = useState<
+    "idle" | "saving" | "starting"
+  >("idle");
+  const [launchError, setLaunchError] = useState("");
+  const launchErrorRef = useRef<HTMLDivElement>(null);
+  const dashboardRef = useRef<HTMLElement>(null);
+  const scrollToRun = useRef<string | null>(null);
+  useEffect(() => {
+    if (launchError) {
+      launchErrorRef.current?.focus({ preventScroll: true });
+      launchErrorRef.current?.scrollIntoView({ block: "nearest" });
+    }
+  }, [launchError]);
+  useEffect(() => {
+    if (detail && scrollToRun.current === detail.run.id) {
+      dashboardRef.current?.scrollIntoView({ block: "start" });
+      scrollToRun.current = null;
+    }
+  }, [detail?.run.id]);
   const [loaded, setLoaded] = useState(false);
   const [editor, setEditor] = useState<"settings" | "script">("script");
   const [setupOpen, setSetupOpen] = useState(true);
@@ -471,7 +491,7 @@ export function TrainingWorkspace({ project }: { project: Project }) {
     return () => controller.abort();
   }, [comparisonId]);
 
-  async function task(action: () => Promise<void>) {
+  async function task(action: () => Promise<unknown>) {
     pendingTasksRef.current += 1;
     setBusy(true);
     setError("");
@@ -521,7 +541,7 @@ export function TrainingWorkspace({ project }: { project: Project }) {
       ),
     }));
   }
-  async function saveStageFile(submitted = stage) {
+  async function saveStageFile(submitted = stage, announce = true) {
     if (!submitted) return;
     const key = `${project.id}/${submitted.id}`;
     const previous = stageSavesRef.current.get(key);
@@ -545,12 +565,13 @@ export function TrainingWorkspace({ project }: { project: Project }) {
         "PUT",
       );
       applySavedStage(saved, submitted);
-      setNotice(`Saved server file: ${saved.script_path}`);
+      if (announce) setNotice(`Saved server file: ${saved.script_path}`);
+      return saved;
     };
     const pending = previous ? previous.then(persist) : persist();
     stageSavesRef.current.set(key, pending);
     try {
-      await pending;
+      return await pending;
     } finally {
       if (stageSavesRef.current.get(key) === pending)
         stageSavesRef.current.delete(key);
@@ -634,37 +655,51 @@ export function TrainingWorkspace({ project }: { project: Project }) {
     });
   }
   async function launch() {
-    if (!stage) return;
-    const prompts: unknown = JSON.parse(promptsText);
-    const checked = z
-      .array(z.union([z.string(), z.record(z.string(), z.unknown())]))
-      .parse(prompts);
-    const updated = { ...stage, config: { ...stage.config, prompts: checked } };
-    updateStage(updated);
-    const savedPlan = await trainingRequest(
-      `/plans/${encodeURIComponent(project.id)}`,
-      planSchema,
-      {
-        ...plan,
-        stages: plan.stages.map((s) => (s.id === stage.id ? updated : s)),
-      },
-      "PUT",
-    );
-    const run = await trainingRequest("/runs", runSchema, {
-      project,
-      stage: savedPlan.stages.find((item) => item.id === updated.id) ?? updated,
-    });
-    for (const saved of savedPlan.stages) {
-      const submitted = plan.stages.find((item) => item.id === saved.id);
-      if (submitted) applySavedStage(saved, submitted);
+    if (!stage || launchInFlight.current) return;
+    launchInFlight.current = true;
+    setLaunchError("");
+    setLaunchPhase("saving");
+    try {
+      // The Python recipe owns its prompts. Only legacy preset recipes expose
+      // the editable JSON field, so a hidden draft must not block code-first runs.
+      const submitted = codeFirst
+        ? stage
+        : {
+            ...stage,
+            config: {
+              ...stage.config,
+              prompts: z
+                .array(z.union([z.string(), z.record(z.string(), z.unknown())]))
+                .parse(JSON.parse(promptsText)),
+            },
+          };
+      const saved = await saveStageFile(submitted, false);
+      if (!saved) throw new Error("Select a training stage before launching.");
+      setLaunchPhase("starting");
+      const run = await trainingRequest("/runs", runSchema, {
+        project,
+        stage: saved,
+      });
+      scrollToRun.current = run.id;
+      setDetail(null);
+      setDashboard("metrics");
+      setRuns((current) => [
+        run,
+        ...current.filter((item) => item.id !== run.id),
+      ]);
+      setRunId(run.id);
+      setSetupOpen(false);
+      setNotice(
+        run.execution === "monitor"
+          ? "Stage saved. Package prepared for terminal training."
+          : "Stage saved. New training run created.",
+      );
+    } catch (error) {
+      setLaunchError(message(error));
+    } finally {
+      setLaunchPhase("idle");
+      launchInFlight.current = false;
     }
-    setRuns((current) => [run, ...current]);
-    setRunId(run.id);
-    setNotice(
-      run.execution === "monitor"
-        ? "Package prepared. Download it and launch its script in your terminal."
-        : "Training started from a frozen copy of this graph and script.",
-    );
   }
   async function command(kind: string) {
     const result = await trainingRequest(
@@ -800,7 +835,7 @@ export function TrainingWorkspace({ project }: { project: Project }) {
 
   return (
     <section className="training-workspace" aria-label="Training workspace">
-      {detail?.status.state === "stopped" && (
+      {detail?.status.state === "stopped" && launchPhase === "idle" && (
         <p
           className="training-stopped-banner"
           role="status"
@@ -2156,11 +2191,33 @@ export function TrainingWorkspace({ project }: { project: Project }) {
                     onClick={() => void task(launch)}
                   >
                     <Play aria-hidden="true" size={15} />
-                    {config.execution === "monitor"
-                      ? "Prepare training package"
-                      : "Start training stage"}
+                    {launchPhase === "saving"
+                      ? "Saving stage…"
+                      : launchPhase === "starting"
+                        ? "Starting training…"
+                        : config.execution === "monitor"
+                          ? "Prepare training package"
+                          : "Start training stage"}
                   </button>
                 </footer>
+                {launchPhase !== "idle" && (
+                  <p role="status" aria-label="Training launch progress">
+                    {launchPhase === "saving"
+                      ? "Saving this stage and its generated model on the server…"
+                      : "Stage saved. Creating the new run…"}
+                  </p>
+                )}
+                {launchError && (
+                  <div
+                    className="training-alert"
+                    role="alert"
+                    aria-label="Training launch failed"
+                    ref={launchErrorRef}
+                    tabIndex={-1}
+                  >
+                    <strong>Training did not start.</strong> {launchError}
+                  </div>
+                )}
                 {!capabilities.enabled && (
                   <p className="training-alert">
                     Local execution is disabled. Run{" "}
@@ -2190,13 +2247,22 @@ export function TrainingWorkspace({ project }: { project: Project }) {
             </section>
           )}
 
-          {detail && (
+          {runId && !detail && launchPhase === "idle" && (
+            <p role="status">Loading selected run…</p>
+          )}
+          {detail && launchPhase === "idle" && (
             <section
               className="training-card training-dashboard"
               aria-label="Run dashboard"
+              ref={dashboardRef}
             >
               <div className="training-section-heading">
                 <div>
+                  {launchError && (
+                    <p className="training-muted">
+                      Previous run · the new launch failed
+                    </p>
+                  )}
                   <h3>
                     {detail.run.name}{" "}
                     <small className="training-run-state">
@@ -2603,7 +2669,11 @@ export function TrainingWorkspace({ project }: { project: Project }) {
                   )}
                   {!metrics.length && (
                     <p className="training-muted">
-                      Metrics appear when the script calls run.log().
+                      {active
+                        ? "No training metrics yet. Check Logs for data preparation and startup progress."
+                        : detail.status.state === "prepared"
+                          ? "Start the prepared package to receive training metrics."
+                          : "No training metrics were recorded for this run."}
                     </p>
                   )}
                   <TrainingMessages key={detail.run.id} detail={detail} />
@@ -2685,18 +2755,29 @@ export function TrainingWorkspace({ project }: { project: Project }) {
                         <h4>
                           GPU {gpu.index} · {gpu.name}
                         </h4>
-                        <p>{gpu.utilization ?? "—"}% utilization</p>
-                        <meter
-                          aria-label={`GPU ${gpu.index} VRAM used`}
-                          min={0}
-                          max={gpu.memory_total_mb ?? 1}
-                          value={gpu.memory_used_mb ?? 0}
-                        />
                         <p>
-                          {((gpu.memory_used_mb ?? 0) / 1024).toFixed(1)} /{" "}
-                          {((gpu.memory_total_mb ?? 0) / 1024).toFixed(1)} GB
-                          VRAM
+                          {gpu.utilization == null
+                            ? "Utilization unavailable"
+                            : `${gpu.utilization}% utilization`}
                         </p>
+                        {gpu.memory_total_mb != null &&
+                        gpu.memory_used_mb != null ? (
+                          <>
+                            <meter
+                              aria-label={`GPU ${gpu.index} VRAM used`}
+                              min={0}
+                              max={gpu.memory_total_mb ?? 1}
+                              value={gpu.memory_used_mb ?? 0}
+                            />
+                            <p>
+                              {((gpu.memory_used_mb ?? 0) / 1024).toFixed(1)} /{" "}
+                              {((gpu.memory_total_mb ?? 0) / 1024).toFixed(1)}{" "}
+                              GB VRAM
+                            </p>
+                          </>
+                        ) : (
+                          <p>VRAM readings unavailable</p>
+                        )}
                         <p>
                           {gpu.temperature ?? "—"} °C · {gpu.power_watts ?? "—"}{" "}
                           W

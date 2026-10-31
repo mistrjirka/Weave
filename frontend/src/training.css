@@ -589,7 +589,7 @@
   overflow-wrap: anywhere;
 }
 .training-chart-empty {
-  padding: 30px;
+  padding: 16px;
   color: var(--theme-muted, #59685d);
 }
 @media (min-width: 2200px) {
@@ -1065,7 +1065,7 @@
 }
 .training-overview {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
   gap: 12px;
   margin: 14px 0;
 }
