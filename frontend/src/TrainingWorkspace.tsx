@@ -16,6 +16,7 @@ import {
   Upload,
 } from "lucide-react";
 import type { Project } from "./types";
+import { GPUTuningStatus } from "./GPUTuningStatus";
 import { TrainingChart } from "./TrainingChart";
 import { CheckpointChat } from "./CheckpointChat";
 import { newId, copyText } from "./ui";
@@ -1406,6 +1407,21 @@ export function TrainingWorkspace({ project }: { project: Project }) {
                     </>
                   )}
                   <h3>Compute</h3>
+                  <label className="gpu-tuning-toggle">
+                    <input
+                      type="checkbox"
+                      checked={config.use_gpu_tuning}
+                      onChange={(event) =>
+                        setting("use_gpu_tuning", event.target.checked)
+                      }
+                    />
+                    Use matching saved GPU tuning for this stage
+                  </label>
+                  <p className="training-muted">
+                    Manage benchmarks in Weave settings. The runtime checks
+                    hardware and reports whether the saved allocation was
+                    applied. Explicit block placement takes precedence.
+                  </p>
                   <div className="training-form-grid">
                     <label>
                       Run on
@@ -2029,6 +2045,7 @@ export function TrainingWorkspace({ project }: { project: Project }) {
               >
                 Create stage from this run
               </button>
+              <GPUTuningStatus events={detail.events} />
               {detail.status.message && (
                 <p role="status" className="training-alert">
                   {detail.status.message}

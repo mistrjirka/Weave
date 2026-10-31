@@ -36,6 +36,7 @@ from text_training import (
 from runtime import SparseMoE
 from weave_training import Run, atomic_json, atomic_checkpoint_path, file_hash
 from token_cache import cache_progress_reporting
+from tuning_runtime import load_tuning, tune_loader, WeightedBatchSampler
 
 
 @dataclass
@@ -43,6 +44,8 @@ class TrainingConfig:
     devices: list[int] = field(default_factory=list)
     strategy: Literal["auto", "single", "ddp", "split", "train_eval"] = "auto"
     placement: dict[str, int] = field(default_factory=dict)
+    use_gpu_tuning: bool = True
+    rank_micro_batch_sizes: list[int] = field(default_factory=list, init=False)
     evaluation_device: int | Literal["cpu"] | None = None
     async_evaluation: bool = False
     precision: Literal["fp32", "fp16", "bf16"] = "fp32"
@@ -128,6 +131,15 @@ class TrainingConfig:
             raise ValueError("Invalid provenance mode")
 
     @property
+    def local_micro_batch_size(self):
+        rank = int(os.environ.get("RANK", "0"))
+        return (
+            self.rank_micro_batch_sizes[rank]
+            if self.rank_micro_batch_sizes
+            else self.micro_batch_size
+        )
+
+    @property
     def resolved_strategy(self):
         return (
             ("ddp" if len(self.devices) > 1 else "single")
@@ -200,6 +212,11 @@ class Trainer:
             cfg.evaluation_device = launch.get("evaluation_device")
             if mode == "inline" and cfg.strategy == "train_eval":
                 cfg.strategy = "single"
+        self.tuning_profile, self.tuning_note = (None, "")
+        if not args.evaluate:
+            self.tuning_profile, self.tuning_note = load_tuning(
+                cfg, launch, Path(__file__).parent
+            )
         # Evaluation is a standalone process, even when launched from torchrun.
         if args.evaluate:
             cfg.evaluation_only = True
@@ -344,6 +361,15 @@ class Trainer:
                     },
                 )
                 raise
+        self.tuning_applied = bool(
+            self.tuning_profile and cfg.resolved_strategy == "split"
+        )
+        if self.tuning_profile and cfg.resolved_strategy == "ddp" and not args.evaluate:
+            self.train_loader, self.tuning_applied = tune_loader(
+                self.train_loader, cfg, self.rank
+            )
+            if not self.tuning_applied:
+                self.tuning_note = "GPU allocation not applied: custom loader owns batching. Use config.rank_micro_batch_sizes with matched steps and declare loader.weave_tuning_applied=True."
         try:
             self.batches_per_epoch = len(self.train_loader)
         except (TypeError, NotImplementedError):
@@ -437,6 +463,17 @@ class Trainer:
                 elif args.evaluate:
                     step, tokens = state["step"], state["tokens"]
             run.step, run.tokens = step, tokens
+            if self.tuning_profile or self.tuning_note:
+                run.emit(
+                    "gpu_tuning",
+                    {
+                        "applied": self.tuning_applied,
+                        "profile": self.tuning_profile,
+                        "message": self.tuning_note,
+                    },
+                )
+                if self.tuning_note:
+                    run.warning(self.tuning_note, code="gpu-tuning")
             if args.evaluate:
                 self._evaluate(str(args.evaluate))
                 return
@@ -445,8 +482,14 @@ class Trainer:
                 sampler = getattr(self.train_loader, "sampler", None)
                 from torch.utils.data.distributed import DistributedSampler
 
-                if not isinstance(sampler, DistributedSampler) and not getattr(
-                    dataset, "distributed_sharding", False
+                if (
+                    not isinstance(sampler, DistributedSampler)
+                    and not isinstance(
+                        getattr(self.train_loader, "batch_sampler", None),
+                        WeightedBatchSampler,
+                    )
+                    and not getattr(dataset, "distributed_sharding", False)
+                    and not getattr(self.train_loader, "weave_tuning_applied", False)
                 ):
                     raise ValueError(
                         "DDP loader must use DistributedSampler or a sharded IterableDataset with distributed_sharding=True"
@@ -747,9 +790,16 @@ class Trainer:
                         else contextlib.nullcontext()
                     )
                     with sync, self._amp():
-                        result = self._result(
-                            self.training_step_fn(self.model, batch, self.device)
-                        )
+                        value = self.training_step_fn(self.model, batch, self.device)
+                        if (
+                            self.tuning_applied
+                            and len(set(cfg.rank_micro_batch_sizes)) > 1
+                            and not isinstance(value, StepResult)
+                        ):
+                            raise ValueError(
+                                "Unequal tuned DDP batches require StepResult(loss, weight=supervised_token_count) or another correct objective weight. Return a weighted StepResult, or disable GPU tuning for this stage."
+                            )
+                        result = self._result(value)
                         scaled_loss = result.loss * (
                             result.weight / cfg.gradient_accumulation_steps
                         )
@@ -902,6 +952,9 @@ class Trainer:
         sampler = getattr(self.train_loader, "sampler", None)
         if callable(getattr(sampler, "set_epoch", None)):
             sampler.set_epoch(self.epoch)
+        batch_sampler = getattr(self.train_loader, "batch_sampler", None)
+        if callable(getattr(batch_sampler, "set_epoch", None)):
+            batch_sampler.set_epoch(self.epoch)
         dataset = getattr(self.train_loader, "dataset", None)
         if callable(getattr(dataset, "reset", None)):
             dataset.reset()

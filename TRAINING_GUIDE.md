@@ -247,3 +247,11 @@ checks bounds, dtype and token ranges, but cannot prove their provenance.
 On the same filesystem it hard-links the immutable token file; across
 filesystems it copies it. Never modify an imported token file in place.
 Subsequent calls reuse the completed cache without needing `existing`.
+
+## Consuming a saved GPU tuning profile
+
+See [host-wide GPU tuning](TRAINING.md#host-wide-gpu-performance-tuning) for benchmarking and automatic compatibility checks. Default `TrainingConfig(use_gpu_tuning=True)` permits a matching launch profile; set it false to preserve your exact manual allocation. No profile is required to train, and a benchmark does not edit train.py.
+
+For a normal map-style dataset, use a standard `DataLoader(..., sampler=DistributedSampler(dataset), batch_size=config.micro_batch_size)`. The Trainer can rebuild that standard loader with measured unequal batches while preserving the global microbatch and matched step counts. Custom collation is retained. It does not replace DataLoader subclasses, IterableDataset batching, or custom batch samplers.
+
+For a custom stream, `config.rank_micro_batch_sizes` is the proposed full-update allocation, ordered like `config.devices`; `config.local_micro_batch_size` selects this process's share. The original `config.micro_batch_size` remains the untuned per-GPU baseline. Implement weighted data sharding, equal optimizer/accumulation boundaries, appropriate tail handling, and worker sharding yourself. Set `loader.weave_tuning_applied=True` only after doing so; the runtime still checks that rank epoch/batch boundaries agree. A loader that ignores the allocation is allowed and gets an explicit tuning-skipped diagnostic, rather than dropping/slicing its records. Use token-weighted `StepResult` for correct loss weighting across unequal batches; the hook Trainer rejects scalar/tuple losses for an active unequal allocation. A cached-document/VSL sampler remains your experiment code and is not changed by profiling.

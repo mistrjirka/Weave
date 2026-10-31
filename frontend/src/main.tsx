@@ -5,6 +5,7 @@ import React, {
   useRef,
   useState,
 } from "react";
+import { GPUTuning } from "./GPUTuning";
 import { TrainingWorkspace } from "./TrainingWorkspace";
 import { createRoot } from "react-dom/client";
 import {
@@ -2774,6 +2775,7 @@ function Workbench({
             </button>
           </div>
           <div className="view-actions">
+            <GPUTuning project={project} />
             <ThemePicker />
             <button
               ref={splitButton}

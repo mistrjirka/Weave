@@ -12,6 +12,7 @@ export const trainingConfigSchema = z.object({
     .nullable(),
   evaluation_mode: z.enum(["script", "inline", "async"]).default("script"),
   placement: z.record(z.string(), z.number()),
+  use_gpu_tuning: z.boolean().default(true),
   dataset: z.string(),
   eval_dataset: z.string(),
   sequence_length: z.number(),
@@ -117,6 +118,7 @@ export const capabilitySchema = z.object({
   token_file: z.string().nullable(),
   auth_required: z.boolean().default(false),
   remote_launch: z.boolean(),
+  projects_directory: z.string().optional(),
 });
 export const pythonEnvironmentSchema = z.object({
   executable: z.string(),

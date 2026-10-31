@@ -42,6 +42,7 @@ from .reporting import ReportStore, ReportBatch
 from .layout import PACKAGE, normalize_script
 from .recipe import is_code_first, starter_script
 from .chat import ChatService, ChatLoad, ChatMessage, checkpoint_catalog
+from .gpu_tuning import GPUTuning, TuningRequest, matching_profile
 from ..paths import projects_directory
 from ..compiler import compile_project
 
@@ -58,12 +59,14 @@ class Command(BaseModel):
 def router(data):
     service = TrainingService(Path(data) / "training", Path(data) / "tokenizers")
     chat = ChatService()
+    tuning = GPUTuning(Path(data) / "training")
 
     @asynccontextmanager
     async def lifespan(app):
         try:
             yield
         finally:
+            tuning.close()
             chat.close()
 
     api = APIRouter(prefix="/api/training", lifespan=lifespan)
@@ -97,6 +100,41 @@ def router(data):
             return valid_id(value)
         except ValueError as exc:
             raise HTTPException(422, str(exc))
+
+    @api.get("/gpu-tuning", dependencies=[Depends(authenticated)])
+    def tuning_list():
+        return tuning.list()
+
+    @api.put("/gpu-tuning/settings", dependencies=[Depends(authenticated)])
+    def tuning_settings(body: dict):
+        if type(body.get("auto_apply")) is not bool:
+            raise HTTPException(422, "auto_apply must be true or false")
+        return tuning.configure(body["auto_apply"])
+
+    @api.post("/gpu-tuning", dependencies=[Depends(authenticated)])
+    def tuning_start(body: TuningRequest):
+        if os.environ.get("WEAVE_TRAINING_ENABLED") != "1":
+            raise HTTPException(
+                403, "Enable local training before benchmarking server GPUs"
+            )
+        try:
+            return tuning.start(body)
+        except (ValueError, OSError) as exc:
+            raise HTTPException(422, str(exc))
+
+    @api.get("/gpu-tuning/{identifier}", dependencies=[Depends(authenticated)])
+    def tuning_status(identifier: str):
+        try:
+            return tuning.status(identifier)
+        except ValueError as exc:
+            raise HTTPException(404, str(exc))
+
+    @api.post("/gpu-tuning/{identifier}/stop", dependencies=[Depends(authenticated)])
+    def tuning_stop(identifier: str):
+        try:
+            return tuning.stop(identifier)
+        except ValueError as exc:
+            raise HTTPException(404, str(exc))
 
     @api.get("/capabilities")
     def capabilities(request: Request):

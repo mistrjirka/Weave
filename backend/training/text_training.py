@@ -492,6 +492,26 @@ def main(loss_fn=None):
         tokenizer = load_tokenizer()
     if config.get("chat_template") and tokenizer is not None:
         tokenizer.chat_template = config["chat_template"]
+    from types import SimpleNamespace
+    from tuning_runtime import load_tuning
+
+    tuned = SimpleNamespace(
+        use_gpu_tuning=config.get("use_gpu_tuning", True),
+        resolved_strategy=config["strategy"],
+        devices=config["devices"],
+        precision=config["precision"],
+        micro_batch_size=config["batch_size"],
+        placement=config.get("placement", {}),
+        rank_micro_batch_sizes=[],
+    )
+    tuning_profile, tuning_note = (
+        (None, "")
+        if args.evaluate
+        else load_tuning(tuned, config, Path(__file__).parent)
+    )
+    config["placement"] = tuned.placement
+    if tuning_note:
+        print(tuning_note, flush=True)
     model = Model()
     placement_config = dict(config)
     if world > 1:
@@ -670,11 +690,23 @@ def main(loss_fn=None):
             generator = random.Random(config["seed"] + step)
             count = config["batch_size"] * config["accumulation"] * world
             indices = [generator.randrange(len(rows)) for _ in range(count)]
-            local_indices = indices[rank::world]
-            microbatches = [
-                local_indices[i : i + config["batch_size"]]
-                for i in range(0, len(local_indices), config["batch_size"])
-            ]
+            if tuned.rank_micro_batch_sizes:
+                sizes = tuned.rank_micro_batch_sizes
+                global_microbatch = sum(sizes)
+                start = sum(sizes[:rank])
+                microbatches = [
+                    indices[offset + start : offset + start + sizes[rank]]
+                    for offset in range(0, count, global_microbatch)
+                ]
+                local_indices = [
+                    index for batch_indices in microbatches for index in batch_indices
+                ]
+            else:
+                local_indices = indices[rank::world]
+                microbatches = [
+                    local_indices[i : i + config["batch_size"]]
+                    for i in range(0, len(local_indices), config["batch_size"])
+                ]
             label_count = sum(
                 sum(value != -100 for value in rows[i]["labels"][1:])
                 for i in local_indices

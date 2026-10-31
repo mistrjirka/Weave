@@ -23,6 +23,8 @@ MANAGED_MODULES = {
     "data_stream",
     "cache_identity",
     "token_cache",
+    "tuning_math",
+    "tuning_runtime",
 }
 
 
@@ -161,6 +163,8 @@ def write_helpers(package):
         "data_stream.py",
         "cache_identity.py",
         "token_cache.py",
+        "tuning_math.py",
+        "tuning_runtime.py",
     ):
         source = rewrite_imports((HERE / name).read_text(), ".")
         target = package / name

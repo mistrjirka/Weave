@@ -37,6 +37,7 @@ class TrainingConfig(BaseModel):
     evaluation_device: int | Literal["cpu"] | None = None
     evaluation_mode: Literal["script", "inline", "async"] = "script"
     placement: dict[str, int] = Field(default_factory=dict)
+    use_gpu_tuning: bool = True
     dataset: str = ""
     eval_dataset: str = ""
     sequence_length: int = Field(default=128, ge=2, le=1048576)
@@ -491,6 +492,7 @@ class TrainingService:
                     "parent_run",
                     "parent_checkpoint",
                     "evaluation_mode",
+                    "use_gpu_tuning",
                 }
             )
             if stage.config.evaluation_mode != "script":
@@ -672,9 +674,10 @@ class TrainingService:
                     + "\n"
                 )
                 for trace in parent_directory.glob("consumed-rank-*.jsonl"):
-                    with trace.open() as source_trace, (provenance / trace.name).open(
-                        "w"
-                    ) as target_trace:
+                    with (
+                        trace.open() as source_trace,
+                        (provenance / trace.name).open("w") as target_trace,
+                    ):
                         for line in source_trace:
                             try:
                                 if json.loads(line).get("step", 0) <= published["step"]:
@@ -710,6 +713,11 @@ class TrainingService:
                     },
                 )
             config.setdefault("checkpoint", None)
+            from .gpu_tuning import matching_profile
+
+            profile = matching_profile(self.root, project, stage.config)
+            if profile:
+                config["gpu_tuning"] = profile
             (directory / "train.py").write_text(stage.script)
 
             atomic_json(directory / "config.json", config)
@@ -861,9 +869,10 @@ def build_snapshot(
         written = 0
         # Bound to the size observed at opening; logs may continue growing.
         remaining = path.stat().st_size
-        with path.open("rb") as source, archive.open(
-            name, "w", force_zip64=True
-        ) as output:
+        with (
+            path.open("rb") as source,
+            archive.open(name, "w", force_zip64=True) as output,
+        ):
             while remaining > 0:
                 chunk = source.read(min(1024 * 1024, remaining))
                 if not chunk:
@@ -919,9 +928,10 @@ def build_snapshot(
                     and path.name.startswith("consumed-rank-")
                     and checkpoint_event
                 ):
-                    with archive.open(name, "w", force_zip64=True) as output, path.open(
-                        "rb"
-                    ) as source:
+                    with (
+                        archive.open(name, "w", force_zip64=True) as output,
+                        path.open("rb") as source,
+                    ):
                         digest = hashlib.sha256()
                         length = 0
                         for line in source:
