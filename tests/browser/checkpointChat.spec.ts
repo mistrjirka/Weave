@@ -10,6 +10,7 @@ test("chat with the recommended checkpoint and continue raw text without changin
   context,
 }) => {
   test.setTimeout(240000);
+  page.setDefaultTimeout(15000);
   const temporary = mkdtempSync(join(tmpdir(), "weave-chat-browser-"));
   const id = `project-chat-browser-${Date.now()}`;
   const result = spawnSync(
@@ -72,13 +73,77 @@ shutil.copytree(source,destination)
     await expect(
       panel.getByRole("status", { name: "Chat model status" }),
     ).toContainText("ready", { timeout: 90000 });
+    // A slow checkpoint catalog must not block loading/error status polling.
+    const chatURL = `/api/training/runs/${fixture.run}/chat`;
+    const readySession = await (
+      await context.request.get(chatURL + "/session")
+    ).json();
+    let phase: "loading" | "error" | "ready" | "network-error" = "loading";
+    let releaseCatalog: () => void = () => {};
+    const catalogGate = new Promise<void>((resolve) => {
+      releaseCatalog = resolve;
+    });
+    await page.route("**" + chatURL, async (route) => {
+      await catalogGate;
+      await route.continue();
+    });
+    await page.route("**" + chatURL + "/session", async (route) => {
+      if (phase === "network-error") {
+        await route.fulfill({
+          status: 503,
+          contentType: "application/json",
+          body: JSON.stringify({ detail: "Status temporarily unavailable" }),
+        });
+        return;
+      }
+      await route.fulfill({
+        json: {
+          ...readySession,
+          state: phase,
+          loading_stage: phase === "loading" ? "Moving model to cuda:0" : null,
+          loading_started: phase === "loading" ? Date.now() / 1000 - 12 : null,
+          error:
+            phase === "error"
+              ? "CUDA out of memory: choose another device"
+              : null,
+        },
+      });
+    });
+    try {
+      await panel
+        .getByRole("button", { name: "Refresh checkpoints", exact: true })
+        .click();
+      await expect(
+        panel.getByRole("status", { name: "Checkpoint loading progress" }),
+      ).toContainText("Moving model to cuda:0");
+      await expect(
+        panel.getByRole("status", { name: "Checkpoint loading progress" }),
+      ).toContainText("elapsed");
+      phase = "error";
+      await expect(
+        panel.getByRole("alert", { name: "Checkpoint error" }),
+      ).toContainText("CUDA out of memory");
+      phase = "network-error";
+      await expect(
+        panel.getByRole("alert", { name: "Checkpoint error" }),
+      ).toContainText("Retrying automatically");
+      phase = "ready";
+      await expect(
+        panel.getByRole("status", { name: "Chat model status" }),
+      ).toContainText("ready");
+      await expect(
+        panel.getByRole("alert", { name: "Checkpoint error" }),
+      ).toHaveCount(0);
+    } finally {
+      releaseCatalog();
+      await page.unroute("**" + chatURL);
+      await page.unroute("**" + chatURL + "/session");
+    }
     await panel.getByText("Generation settings", { exact: true }).click();
     await panel
       .getByRole("spinbutton", { name: "Maximum new tokens", exact: true })
       .fill("3");
-    await panel
-      .getByRole("spinbutton", { name: "Temperature", exact: false })
-      .fill("0");
+    await panel.getByRole("spinbutton", { name: /^Temperature\b/ }).fill("0");
     await panel
       .getByRole("textbox", { name: "Message or prompt", exact: true })
       .fill("hello");

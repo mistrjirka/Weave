@@ -12,6 +12,8 @@ const sessionSchema = z.object({
   error: z.string().nullable(),
   has_chat_template: z.boolean(),
   finish_reason: z.string().nullable(),
+  loading_stage: z.string().nullable().default(null),
+  loading_started: z.number().nullable().default(null),
 });
 const catalogSchema = z.object({
   checkpoints: z.array(
@@ -55,6 +57,9 @@ export function CheckpointChat({
   const [topP, setTopP] = useState(0.9);
   const [seed, setSeed] = useState(42);
   const [error, setError] = useState("");
+  const [catalogError, setCatalogError] = useState("");
+  const [pollError, setPollError] = useState("");
+  const loadTimedOut = useRef(false);
   const [busy, setBusy] = useState(false);
   const [catalogVersion, setCatalogVersion] = useState(0);
   const requestPending = useRef(false);
@@ -63,63 +68,100 @@ export function CheckpointChat({
   const transcript = useRef<HTMLDivElement>(null);
   const endpoint = `/runs/${encodeURIComponent(runId)}/chat`;
 
+  // Catalog reads and lightweight model status have independent lifetimes.
+  // Refreshing a slow catalog must not leave a completed load looking stuck.
   useEffect(() => {
     const controller = new AbortController();
+    setCatalogError("");
+    let disposed = false;
+    const timeout = window.setTimeout(() => controller.abort(), 15000);
+    void trainingRequest(
+      endpoint,
+      catalogSchema,
+      undefined,
+      undefined,
+      controller.signal,
+    )
+      .then((result) => {
+        if (disposed) return;
+        setCatalog(result);
+        setCheckpoint(
+          (current) =>
+            current ||
+            result.session.checkpoint ||
+            result.recommended_checkpoint ||
+            "",
+        );
+        if (!initialized.current && result.session.checkpoint)
+          setDevice(result.session.device);
+        initialized.current = true;
+      })
+      .catch((failure) => {
+        if (!disposed)
+          setCatalogError(
+            controller.signal.aborted
+              ? "Checkpoint list took too long to load. Use Refresh checkpoints to retry."
+              : failure instanceof Error
+                ? failure.message
+                : String(failure),
+          );
+      })
+      .finally(() => window.clearTimeout(timeout));
+    return () => {
+      disposed = true;
+      window.clearTimeout(timeout);
+      controller.abort();
+    };
+  }, [endpoint, catalogVersion]);
+
+  useEffect(() => {
+    let disposed = false;
     let pending = false;
-    const refresh = async (fullCatalog = false) => {
+    let current: AbortController | null = null;
+    const refresh = async () => {
       if (pending || requestPending.current) return;
       pending = true;
       const revision = operation.current;
+      const controller = new AbortController();
+      current = controller;
+      const timeout = window.setTimeout(() => controller.abort(), 15000);
       try {
-        if (!fullCatalog) {
-          const result = await trainingRequest(
-            endpoint + "/session",
-            sessionSchema,
-            undefined,
-            undefined,
-            controller.signal,
-          );
-          if (!controller.signal.aborted && revision === operation.current)
-            setSession(result);
-          return;
-        }
         const result = await trainingRequest(
-          endpoint,
-          catalogSchema,
+          endpoint + "/session",
+          sessionSchema,
           undefined,
           undefined,
           controller.signal,
         );
-        if (!controller.signal.aborted && revision === operation.current) {
-          setCatalog(result);
-          setSession(result.session);
-          setCheckpoint(
-            (current) =>
-              current ||
-              result.session.checkpoint ||
-              result.recommended_checkpoint ||
-              "",
-          );
-          if (!initialized.current && result.session.checkpoint)
-            setDevice(result.session.device);
-          initialized.current = true;
+        if (!disposed && revision === operation.current) {
+          setSession(result);
+          setPollError("");
+          if (loadTimedOut.current && result.state === "ready") {
+            loadTimedOut.current = false;
+            setError("");
+          }
         }
       } catch (failure) {
-        if (!controller.signal.aborted)
-          setError(
-            failure instanceof Error ? failure.message : String(failure),
+        if (!disposed)
+          setPollError(
+            controller.signal.aborted
+              ? "Model status request timed out. Retrying automatically."
+              : `Cannot refresh model status: ${failure instanceof Error ? failure.message : String(failure)}. Retrying automatically.`,
           );
       } finally {
+        window.clearTimeout(timeout);
+        current = null;
         pending = false;
       }
     };
-    void refresh(true);
+    void refresh();
     const timer = window.setInterval(() => void refresh(), 1000);
     return () => {
-      controller.abort();
+      disposed = true;
+      current?.abort();
       window.clearInterval(timer);
     };
-  }, [endpoint, catalogVersion]);
+  }, [endpoint]);
 
   useEffect(() => {
     const element = transcript.current;
@@ -135,18 +177,30 @@ export function CheckpointChat({
     requestPending.current = true;
     setBusy(true);
     setError("");
+    loadTimedOut.current = false;
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 15000);
     try {
       const result = await trainingRequest(
         endpoint + kind,
         sessionSchema,
         body,
         method,
+        controller.signal,
       );
       setSession(result);
       if (kind === "/messages") setPrompt("");
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : String(failure));
+      loadTimedOut.current = kind === "/load" && controller.signal.aborted;
+      setError(
+        controller.signal.aborted
+          ? "The request took too long. Model status checks will continue; you can unload and retry."
+          : failure instanceof Error
+            ? failure.message
+            : String(failure),
+      );
     } finally {
+      window.clearTimeout(timeout);
       requestPending.current = false;
       setBusy(false);
     }
@@ -297,19 +351,28 @@ export function CheckpointChat({
       >
         {session?.state ?? "unloaded"}
         {session?.checkpoint
-          ? ` · ${session.device} · ${session.checkpoint}`
+          ? ` · ${session.device === "cpu" ? "CPU" : session.device.replace("cuda:", "GPU ")}`
           : ""}
-        . One chat model is kept loaded per server; it unloads after ten idle
-        minutes.
       </p>
       {loaded && !selectedLoaded && (
         <p role="status">
           Load the selected checkpoint and device before sending a message.
         </p>
       )}
-      {(error || session?.error) && (
-        <p role="alert" className="training-alert">
-          {error || session?.error}
+      {session?.state === "loading" && (
+        <p role="status" aria-label="Checkpoint loading progress">
+          {session.loading_stage ?? "Starting inference worker"}
+          {session.loading_started !== null &&
+            ` · ${Math.max(0, Math.floor(Date.now() / 1000 - session.loading_started))}s elapsed`}
+        </p>
+      )}
+      {(error || catalogError || pollError || session?.error) && (
+        <p
+          role="alert"
+          className="training-alert"
+          aria-label="Checkpoint error"
+        >
+          {error || catalogError || pollError || session?.error}
         </p>
       )}
       <div className="training-form-grid">
@@ -479,6 +542,7 @@ export function CheckpointChat({
         <label>
           Message or prompt
           <textarea
+            aria-label="Message or prompt"
             value={prompt}
             onChange={(event) => setPrompt(event.target.value)}
             rows={3}

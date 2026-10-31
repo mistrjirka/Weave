@@ -41,6 +41,11 @@ const metricDefinitions: Record<string, MetricPresentation> = {
     label: "Training speed · tokens/s",
     color: "var(--metric-teal, #0d9488)",
   },
+  "train/learning_rate": {
+    label: "Learning rate",
+    min: 0,
+    color: "var(--metric-pink, #be185d)",
+  },
   "train/gradient_norm": {
     min: 0,
     label: "Gradient norm",
@@ -86,5 +91,33 @@ export function metricDomain(
   return [
     presentation.min ?? minimum - padding,
     presentation.max ?? maximum + padding,
+  ];
+}
+
+export function metricsForDisplay(
+  events: readonly { kind: string; payload: Record<string, unknown> }[],
+  codeFirst: boolean,
+): string[] {
+  const reported = events
+    .filter((event) => event.kind === "metrics")
+    .flatMap((event) =>
+      Object.entries(event.payload)
+        .filter(
+          ([, value]) => typeof value === "number" && Number.isFinite(value),
+        )
+        .map(([key]) => key),
+    );
+  const learningRate =
+    ["lr/group_0", "train/learning_rate"].find((key) =>
+      reported.includes(key),
+    ) ?? (codeFirst ? "lr/group_0" : "train/learning_rate");
+  return [
+    ...new Set([
+      "train/loss",
+      "eval/loss",
+      "train/tokens_per_second",
+      learningRate,
+      ...reported,
+    ]),
   ];
 }

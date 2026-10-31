@@ -4,6 +4,7 @@ import {
   formatMetric,
   metricPresentation,
   metricDomain,
+  metricsForDisplay,
 } from "../frontend/src/trainingMetrics.ts";
 
 test("training metrics use readable units without scientific notation", () => {
@@ -33,4 +34,37 @@ test("utilization always has a 0–100 percent axis, including idle and saturate
     assert.deepEqual(metricDomain("gpu/1/utilization", min, max), [0, 100]);
   assert.equal(metricDomain("train/tokens_per_second", 0, 10)[0], 0);
   assert.ok(metricDomain("custom/signed", -5, 5)[0] < -5);
+});
+
+test("metric charts exist before reporting and retain placeholders after the first point", () => {
+  const initial = metricsForDisplay([], true);
+  assert.deepEqual(initial, [
+    "train/loss",
+    "eval/loss",
+    "train/tokens_per_second",
+    "lr/group_0",
+  ]);
+  assert.deepEqual(
+    metricsForDisplay(
+      [{ kind: "metrics", payload: { "train/loss": 2.5 } }],
+      true,
+    ),
+    initial,
+  );
+  const legacy = metricsForDisplay(
+    [
+      {
+        kind: "metrics",
+        payload: { "train/learning_rate": 0.001, "custom/accuracy": 0.5 },
+      },
+    ],
+    false,
+  );
+  assert.ok(legacy.includes("custom/accuracy"));
+  assert.equal(
+    legacy.filter(
+      (key) => key.includes("learning_rate") || key.startsWith("lr/"),
+    ).length,
+    1,
+  );
 });

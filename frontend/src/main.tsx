@@ -2437,9 +2437,6 @@ function Workbench({
               <Activity size={15} aria-hidden="true" />
               Training
             </span>
-            <small>
-              Training stages and run history are next to your scripts.
-            </small>
           </div>
         ) : (
           <>

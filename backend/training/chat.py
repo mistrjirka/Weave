@@ -136,6 +136,7 @@ class ChatService:
         self.run_id = None
         self.state = self.empty()
         self.timer = None
+        self.loading_timer = None
 
     @staticmethod
     def empty():
@@ -147,6 +148,8 @@ class ChatService:
             "error": None,
             "has_chat_template": False,
             "finish_reason": None,
+            "loading_stage": None,
+            "loading_started": None,
         }
 
     def status(self, run_id):
@@ -173,6 +176,9 @@ class ChatService:
                 return
             if self.timer:
                 self.timer.cancel()
+            if self.loading_timer:
+                self.loading_timer.cancel()
+                self.loading_timer = None
             process, self.process = self.process, None
             if process and process.poll() is None:
                 process.terminate()
@@ -212,6 +218,8 @@ class ChatService:
                 "state": "loading",
                 "checkpoint": path,
                 "device": request.device,
+                "loading_stage": "Starting inference worker",
+                "loading_started": time.time(),
             }
             self.generation_options = None
             self.session = directory / "chat" / uuid.uuid4().hex
@@ -268,6 +276,11 @@ class ChatService:
                 self.state.update(state="error", error=str(exc))
                 raise ValueError(f"Cannot start checkpoint chat: {exc}") from exc
             self._idle_timer()
+            self.loading_timer = threading.Timer(
+                300, self._loading_timeout, args=(self.process, self.session)
+            )
+            self.loading_timer.daemon = True
+            self.loading_timer.start()
             threading.Thread(
                 target=self._read,
                 args=(self.process, self.session),
@@ -275,6 +288,25 @@ class ChatService:
                 name="weave-chat",
             ).start()
             return self.status(directory.name)
+
+    def _loading_timeout(self, process, session):
+        with self.lock:
+            if self.process is not process or self.state["state"] != "loading":
+                return
+            run_id = self.run_id
+            state = {
+                **self.state,
+                "state": "error",
+                "loading_started": None,
+                "error": (
+                    "Checkpoint loading timed out after 300 seconds during "
+                    f"{self.state.get('loading_stage') or 'startup'}. "
+                    f"Retry loading or choose another device. Details: {session / 'worker.log'}"
+                ),
+            }
+            self.close()
+            self.run_id, self.state = run_id, state
+            self._idle_timer()
 
     def _read(self, process, session):
         try:
@@ -284,9 +316,17 @@ class ChatService:
                     if self.process is not process:
                         return
                     kind = event["kind"]
-                    if kind == "ready":
+                    if kind == "loading":
+                        self.state["loading_stage"] = event["stage"]
+                    elif kind == "ready":
+                        if self.loading_timer:
+                            self.loading_timer.cancel()
+                            self.loading_timer = None
                         self.state.update(
-                            state="ready", has_chat_template=event["has_chat_template"]
+                            state="ready",
+                            has_chat_template=event["has_chat_template"],
+                            loading_stage=None,
+                            loading_started=None,
                         )
                         self._idle_timer()
                     elif kind == "text":
@@ -296,11 +336,16 @@ class ChatService:
                             state="ready", finish_reason=event["finish_reason"]
                         )
                     elif kind == "error":
+                        if self.loading_timer:
+                            self.loading_timer.cancel()
+                            self.loading_timer = None
                         self.state.update(
                             state=(
                                 "error" if self.state["state"] == "loading" else "ready"
                             ),
                             error=event["message"],
+                            loading_stage=None,
+                            loading_started=None,
                         )
                     if kind in ("done", "error"):
                         self._idle_timer()
@@ -319,15 +364,32 @@ class ChatService:
             code = process.wait()
             with self.lock:
                 if self.process is process and self.state["state"] != "error":
+                    log = session / "worker.log"
+                    with log.open("rb") as stream:
+                        stream.seek(max(0, log.stat().st_size - 2000))
+                        lines = (
+                            stream.read().decode(errors="replace").strip().splitlines()
+                        )
+                    detail = lines[-1] if lines else "No additional worker output."
                     self.state.update(
                         state="error",
-                        error=f"Chat worker exited ({code}); see {session / 'worker.log'}",
+                        error=f"Chat worker exited ({code}): {detail} Details: {log}",
+                        loading_stage=None,
+                        loading_started=None,
                     )
-        except (OSError, ValueError, KeyError) as exc:
+        except (OSError, ValueError, KeyError, TypeError, IndexError) as exc:
             with self.lock:
                 if self.process is process:
                     self.state.update(state="error", error=str(exc))
         finally:
+            with self.lock:
+                if (
+                    self.process is process
+                    and self.state["state"] == "error"
+                    and self.loading_timer
+                ):
+                    self.loading_timer.cancel()
+                    self.loading_timer = None
             process.stdout.close()
 
     def send(self, run_id, request):

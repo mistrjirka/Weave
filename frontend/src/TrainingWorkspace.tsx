@@ -1,8 +1,11 @@
 import "./training.css";
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { z } from "zod";
+import { createPortal } from "react-dom";
 import {
   Activity,
+  History,
+  X,
   ArrowDown,
   ArrowUp,
   Copy,
@@ -25,8 +28,10 @@ import { RunOverview } from "./RunOverview";
 import { ExecutionStatus } from "./ExecutionStatus";
 import { TrainingCounters } from "./TrainingCounters";
 import { TrainingChart } from "./TrainingChart";
+import { TrainingETA } from "./TrainingETA";
+import { metricsForDisplay } from "./trainingMetrics";
 import { CheckpointChat } from "./CheckpointChat";
-import { newId, copyText } from "./ui";
+import { newId, copyText, Dialog } from "./ui";
 import type { PythonEditorHandle } from "./PythonEditor";
 const PythonEditor = lazy(() =>
   import("./PythonEditor").then((module) => ({ default: module.PythonEditor })),
@@ -112,6 +117,8 @@ export function TrainingWorkspace({ project }: { project: Project }) {
   const [runs, setRuns] = useState<TrainingRun[]>([]);
   const [detail, setDetail] = useState<RunDetail | null>(null);
   const [gpus, setGPUs] = useState<TrainingGPU[]>([]);
+  const [initialViewReady, setInitialViewReady] = useState(false);
+  const [modelReady, setModelReady] = useState(false);
   const [model, setModel] = useState<Awaited<
     ReturnType<typeof inspectTrainingModel>
   > | null>(null);
@@ -149,7 +156,7 @@ export function TrainingWorkspace({ project }: { project: Project }) {
   const [loaded, setLoaded] = useState(false);
   const [editor, setEditor] = useState<"settings" | "script">("script");
   const [setupOpen, setSetupOpen] = useState(true);
-  const [historyOpen, setHistoryOpen] = useState(true);
+  const [historyOpen, setHistoryOpen] = useState(false);
   useEffect(() => {
     if (runId) {
       setSetupOpen(false);
@@ -205,6 +212,27 @@ export function TrainingWorkspace({ project }: { project: Project }) {
         detail.reporting_url.replace(/\/api\/training\/reports\/[^/]+$/, ""),
       );
   }, [detail?.run.id, detail?.reporting_url]);
+  useEffect(() => {
+    if (
+      !initialViewReady &&
+      loaded &&
+      modelReady &&
+      (!stage || pythonEnvironment || environmentError) &&
+      (!runId || detail || monitorError)
+    ) {
+      setInitialViewReady(true);
+    }
+  }, [
+    initialViewReady,
+    loaded,
+    modelReady,
+    stage?.id,
+    pythonEnvironment,
+    environmentError,
+    runId,
+    detail,
+    monitorError,
+  ]);
   const cacheKey = `weave:training:${project.id}`;
 
   useEffect(() => {
@@ -316,11 +344,15 @@ export function TrainingWorkspace({ project }: { project: Project }) {
   useEffect(() => {
     if (!capabilities?.authenticated) return;
     const controller = new AbortController();
+    setModelReady(false);
     void inspectTrainingModel(project)
       .then((value) => {
         if (!controller.signal.aborted) setModel(value);
       })
-      .catch(() => setModel(null));
+      .catch(() => setModel(null))
+      .finally(() => {
+        if (!controller.signal.aborted) setModelReady(true);
+      });
     return () => controller.abort();
   }, [project, capabilities?.authenticated]);
   useEffect(() => {
@@ -609,7 +641,7 @@ export function TrainingWorkspace({ project }: { project: Project }) {
     setPlan((current) => ({ ...current, stages: [...current.stages, clean] }));
     setSelected(clean.id);
     setSetupOpen(true);
-    setHistoryOpen(true);
+    setHistoryOpen(false);
     setEditor("script");
     void task(() => saveStageFile(clean));
   }
@@ -760,27 +792,50 @@ export function TrainingWorkspace({ project }: { project: Project }) {
   const checkpoints =
     detail?.events.filter((e) => e.kind === "checkpoint") ?? [];
   const sampleEvents = detail?.events.filter((e) => e.kind === "sample") ?? [];
-  const metrics = [
-    ...new Set(
-      detail?.events
-        .filter((e) => e.kind === "metrics")
-        .flatMap((e) =>
-          Object.entries(e.payload)
-            .filter(([, v]) => typeof v === "number")
-            .map(([key]) => key),
-        ) ?? [],
-    ),
-  ];
+  const metrics = metricsForDisplay(
+    detail?.events ?? [],
+    Boolean(detail?.run.code_first),
+  );
   const active = detail && running.has(detail.status.state);
   const latestHardware = detail?.hardware.at(-1);
   const artifactURL = (path: string) =>
     `/api/training/runs/${encodeURIComponent(runId)}/artifact?path=${encodeURIComponent(path)}`;
 
-  if (!capabilities)
+  const historyButton = (
+    <button
+      className="training-history-button"
+      aria-label="Stages and run history"
+      aria-haspopup="dialog"
+      onClick={() => setHistoryOpen(true)}
+    >
+      <History size={14} aria-hidden="true" /> <span>Stages & history</span>
+    </button>
+  );
+
+  if (!capabilities || (capabilities.authenticated && !initialViewReady))
     return (
-      <section className="training-workspace">
+      <section
+        className="training-workspace training-loading"
+        aria-label="Training workspace"
+        aria-busy="true"
+      >
         <p role="status">Loading training workspace…</p>
-        {error && <p role="alert">{error}</p>}
+        {error || monitorError ? (
+          <p role="alert">{error || monitorError}</p>
+        ) : (
+          <div className="training-loading-layout" aria-hidden="true">
+            <div className="training-loading-bar" />
+            <div className="training-loading-card">
+              <div className="training-loading-bar" />
+              <div className="training-loading-plots">
+                <div />
+                <div />
+                <div />
+                <div />
+              </div>
+            </div>
+          </div>
+        )}
       </section>
     );
   if (!capabilities.authenticated)
@@ -845,33 +900,6 @@ export function TrainingWorkspace({ project }: { project: Project }) {
           <strong>Training stopped</strong>
         </p>
       )}
-      <input
-        hidden
-        ref={fileRef}
-        type="file"
-        accept=".zip"
-        onChange={(e) => {
-          const file = e.target.files?.[0];
-          if (!file) return;
-          void task(async () => {
-            const form = new FormData();
-            form.append("file", file);
-            const imported = await trainingRequest("/import", runSchema, form);
-            if (imported.project_id !== project.id)
-              setNotice(
-                `Snapshot belongs to project ${imported.project_id}. Its recorded graph is available in the package.`,
-              );
-            setRunId(imported.id);
-            setRuns(
-              await trainingRequest(
-                `/runs?project_id=${encodeURIComponent(project.id)}`,
-                z.array(runSchema),
-              ),
-            );
-          });
-          e.target.value = "";
-        }}
-      />
       {error && (
         <p className="training-alert" role="alert">
           {error}
@@ -888,128 +916,188 @@ export function TrainingWorkspace({ project }: { project: Project }) {
           {notice}
         </p>
       )}
-      <div className="training-layout">
-        <aside className="training-stages" aria-label="Training stages">
-          <details
-            className="training-collapsible"
-            open={historyOpen}
-            onToggle={(event) => setHistoryOpen(event.currentTarget.open)}
+      {historyOpen &&
+        createPortal(
+          <Dialog
+            label="Stages and run history"
+            className="training-history-dialog"
+            onClose={() => setHistoryOpen(false)}
           >
-            <summary>Stages and run history</summary>
-            <button onClick={() => fileRef.current?.click()} disabled={busy}>
-              <Upload aria-hidden="true" size={14} /> Import snapshot
-            </button>
-            <div className="training-section-heading">
-              <h3>Stages</h3>
+            <header className="training-history-heading">
+              <h2>Stages & run history</h2>
               <button
-                aria-label="Add training stage"
-                onClick={() => addStage()}
-                disabled={!templates}
+                className="modal-close"
+                aria-label="Close dialog"
+                onClick={() => setHistoryOpen(false)}
               >
-                <Plus aria-hidden="true" size={16} />
+                <X size={18} aria-hidden="true" />
               </button>
-            </div>
-            {!plan.stages.length && (
-              <p className="training-muted">
-                Start with pretraining, then add a fine-tuning stage using its
-                checkpoint.
-              </p>
-            )}
-            {plan.stages.map((item, index) => (
-              <button
-                className={`training-stage ${stage?.id === item.id ? "is-active" : ""}`}
-                key={item.id}
-                onClick={() => {
-                  setSelected(item.id);
-                  setSetupOpen(true);
-                }}
-              >
-                <span>{index + 1}</span>
-                <div>
-                  <strong>{item.name}</strong>
-                  <small>
-                    {item.config.recipe === "sft"
-                      ? "Chat / tool-call SFT"
-                      : item.config.recipe === "custom"
-                        ? "Custom Python"
-                        : "Text pretraining"}
-                  </small>
+            </header>
+            <div className="training-workspace training-history-content">
+              <aside className="training-stages" aria-label="Training stages">
+                <input
+                  hidden
+                  ref={fileRef}
+                  type="file"
+                  accept=".zip"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (!file) return;
+                    void task(async () => {
+                      const form = new FormData();
+                      form.append("file", file);
+                      const imported = await trainingRequest(
+                        "/import",
+                        runSchema,
+                        form,
+                      );
+                      if (imported.project_id !== project.id)
+                        setNotice(
+                          `Snapshot belongs to project ${imported.project_id}. Its recorded graph is available in the package.`,
+                        );
+                      setRunId(imported.id);
+                      setRuns(
+                        await trainingRequest(
+                          `/runs?project_id=${encodeURIComponent(project.id)}`,
+                          z.array(runSchema),
+                        ),
+                      );
+                    });
+                    e.target.value = "";
+                  }}
+                />
+
+                <button
+                  onClick={() => fileRef.current?.click()}
+                  disabled={busy}
+                >
+                  <Upload aria-hidden="true" size={14} /> Import snapshot
+                </button>
+                <div className="training-section-heading">
+                  <h3>Stages</h3>
+                  <button
+                    aria-label="Add training stage"
+                    onClick={() => addStage()}
+                    disabled={!templates}
+                  >
+                    <Plus aria-hidden="true" size={16} />
+                  </button>
                 </div>
-              </button>
-            ))}
-            <div className="training-stage-tools">
-              <button
-                aria-label="Duplicate stage"
-                disabled={!stage}
-                onClick={() => addStage(true)}
-              >
-                <Copy aria-hidden="true" size={14} />
-              </button>
-              <button
-                aria-label="Move stage up"
-                disabled={!stage || plan.stages[0]?.id === stage.id}
-                onClick={() => reorder(-1)}
-              >
-                <ArrowUp aria-hidden="true" size={14} />
-              </button>
-              <button
-                aria-label="Move stage down"
-                disabled={!stage || plan.stages.at(-1)?.id === stage.id}
-                onClick={() => reorder(1)}
-              >
-                <ArrowDown aria-hidden="true" size={14} />
-              </button>
-              <button
-                aria-label="Delete stage"
-                disabled={!stage}
-                onClick={() => {
-                  setDeletedStage(stage ?? null);
-                  setPlan((current) => ({
-                    ...current,
-                    stages: current.stages.filter((s) => s.id !== stage?.id),
-                  }));
-                  setSelected("");
-                }}
-              >
-                <Trash2 aria-hidden="true" size={14} />
-              </button>
+                {!plan.stages.length && (
+                  <p className="training-muted">
+                    Start with pretraining, then add a fine-tuning stage using
+                    its checkpoint.
+                  </p>
+                )}
+                {plan.stages.map((item, index) => (
+                  <button
+                    className={`training-stage ${stage?.id === item.id ? "is-active" : ""}`}
+                    key={item.id}
+                    onClick={() => {
+                      setSelected(item.id);
+                      setHistoryOpen(false);
+                      setSetupOpen(true);
+                    }}
+                  >
+                    <span>{index + 1}</span>
+                    <div>
+                      <strong>{item.name}</strong>
+                      <small>
+                        {item.config.recipe === "sft"
+                          ? "Chat / tool-call SFT"
+                          : item.config.recipe === "custom"
+                            ? "Custom Python"
+                            : "Text pretraining"}
+                      </small>
+                    </div>
+                  </button>
+                ))}
+                <div className="training-stage-tools">
+                  <button
+                    aria-label="Duplicate stage"
+                    disabled={!stage}
+                    onClick={() => addStage(true)}
+                  >
+                    <Copy aria-hidden="true" size={14} />
+                  </button>
+                  <button
+                    aria-label="Move stage up"
+                    disabled={!stage || plan.stages[0]?.id === stage.id}
+                    onClick={() => reorder(-1)}
+                  >
+                    <ArrowUp aria-hidden="true" size={14} />
+                  </button>
+                  <button
+                    aria-label="Move stage down"
+                    disabled={!stage || plan.stages.at(-1)?.id === stage.id}
+                    onClick={() => reorder(1)}
+                  >
+                    <ArrowDown aria-hidden="true" size={14} />
+                  </button>
+                  <button
+                    aria-label="Delete stage"
+                    disabled={!stage}
+                    onClick={() => {
+                      setDeletedStage(stage ?? null);
+                      setPlan((current) => ({
+                        ...current,
+                        stages: current.stages.filter(
+                          (s) => s.id !== stage?.id,
+                        ),
+                      }));
+                      setSelected("");
+                    }}
+                  >
+                    <Trash2 aria-hidden="true" size={14} />
+                  </button>
+                </div>
+                {deletedStage && (
+                  <button
+                    onClick={() => {
+                      setPlan((current) => ({
+                        ...current,
+                        stages: [...current.stages, deletedStage],
+                      }));
+                      setSelected(deletedStage.id);
+                      setDeletedStage(null);
+                    }}
+                  >
+                    Undo stage deletion
+                  </button>
+                )}
+                <h3>Run history</h3>
+                {!runs.length && (
+                  <p className="training-muted">
+                    Your training runs will appear here.
+                  </p>
+                )}
+                {runs.map((run) => (
+                  <button
+                    key={run.id}
+                    className={`training-run ${runId === run.id ? "is-active" : ""}`}
+                    onClick={() => {
+                      setRunId(run.id);
+                      if (plan.stages.some((item) => item.id === run.stage_id))
+                        setSelected(run.stage_id);
+                      setHistoryOpen(false);
+                    }}
+                  >
+                    <strong>{run.name}</strong>
+                    <small>
+                      {run.status?.state ?? "prepared"} ·{" "}
+                      {new Date(run.created).toLocaleString()}
+                    </small>
+                    {run.parent && (
+                      <small>Continues a previous checkpoint</small>
+                    )}
+                  </button>
+                ))}
+              </aside>
             </div>
-            {deletedStage && (
-              <button
-                onClick={() => {
-                  setPlan((current) => ({
-                    ...current,
-                    stages: [...current.stages, deletedStage],
-                  }));
-                  setSelected(deletedStage.id);
-                  setDeletedStage(null);
-                }}
-              >
-                Undo stage deletion
-              </button>
-            )}
-            <h3>Run history</h3>
-            {!runs.length && (
-              <p className="training-muted">
-                Your training runs will appear here.
-              </p>
-            )}
-            {runs.map((run) => (
-              <button
-                key={run.id}
-                className={`training-run ${runId === run.id ? "is-active" : ""}`}
-                onClick={() => setRunId(run.id)}
-              >
-                <strong>{run.name}</strong>
-                <small>
-                  {run.status?.state ?? "prepared"} ·{" "}
-                  {new Date(run.created).toLocaleString()}
-                </small>
-                {run.parent && <small>Continues a previous checkpoint</small>}
-              </button>
-            ))}
-          </details>
-        </aside>
+          </Dialog>,
+          document.body,
+        )}
+      <div className="training-layout">
         <div className="training-main">
           {stage && config ? (
             <section className="training-card training-setup-card">
@@ -1030,6 +1118,7 @@ export function TrainingWorkspace({ project }: { project: Project }) {
               >
                 <summary>Stage setup · {stage.name}</summary>
                 <div className="training-section-heading">
+                  {!detail && historyButton}
                   <input
                     className="training-stage-name"
                     aria-label="Stage name"
@@ -2232,6 +2321,7 @@ export function TrainingWorkspace({ project }: { project: Project }) {
             <section className="training-card training-empty">
               <Activity aria-hidden="true" size={32} />
               <h3>Your first training stage</h3>
+              {historyButton}
               <p>
                 Start with a readable text-training script. Add further stages
                 when you’re ready to fine-tune.
@@ -2281,10 +2371,14 @@ export function TrainingWorkspace({ project }: { project: Project }) {
                       <time dateTime={new Date(lastRefreshed).toISOString()}>
                         {new Date(lastRefreshed).toLocaleTimeString()}
                       </time>
+                      {!detail.events.some(
+                        (event) => event.kind === "progress",
+                      ) && <TrainingETA detail={detail} />}
                     </p>
                   )}
                 </div>
                 <div className="training-actions">
+                  {historyButton}
                   {active && (
                     <>
                       <button
@@ -2406,15 +2500,18 @@ export function TrainingWorkspace({ project }: { project: Project }) {
                         }
                         max={typeof total === "number" ? total : undefined}
                       />
-                      <span>
-                        {typeof completed === "number"
-                          ? completed.toLocaleString()
-                          : String(completed)}{" "}
-                        /{" "}
-                        {typeof total === "number"
-                          ? total.toLocaleString()
-                          : "unknown"}{" "}
-                        {String(unit)}
+                      <span className="training-progress-caption">
+                        <span>
+                          {typeof completed === "number"
+                            ? completed.toLocaleString()
+                            : String(completed)}{" "}
+                          /{" "}
+                          {typeof total === "number"
+                            ? total.toLocaleString()
+                            : "unknown"}{" "}
+                          {String(unit)}
+                        </span>
+                        <TrainingETA detail={detail} />
                       </span>
                     </div>
                   );
@@ -2667,7 +2764,7 @@ export function TrainingWorkspace({ project }: { project: Project }) {
                       preserved in the run and snapshots.
                     </p>
                   )}
-                  {!metrics.length && (
+                  {!detail.events.some((event) => event.kind === "metrics") && (
                     <p className="training-muted">
                       {active
                         ? "No training metrics yet. Check Logs for data preparation and startup progress."

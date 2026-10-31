@@ -1,6 +1,7 @@
 """Use genuine frozen exports/checkpoints without executing user training files."""
 
 import json
+import io
 import os
 from pathlib import Path
 import subprocess
@@ -16,6 +17,59 @@ from backend.training.chat import ChatService, ChatLoad, ChatMessage, checkpoint
 from backend.training.service import TrainingService, TrainingConfig, Stage, Launch
 from backend.training.weave_training import Run
 from test_training import tiny_project
+
+
+def test_stalled_checkpoint_load_becomes_visible_error_and_releases_worker(tmp_path):
+    class Worker:
+        stdin = None
+        returncode = None
+
+        def poll(self):
+            return self.returncode
+
+        def terminate(self):
+            self.returncode = -15
+
+        def wait(self, timeout=None):
+            return self.returncode
+
+    chat = ChatService()
+    worker = Worker()
+    chat.process = worker
+    chat.run_id = "run-stalled"
+    chat.state.update(state="loading", loading_stage="Moving model to cuda:0")
+    try:
+        chat._loading_timeout(worker, tmp_path)
+        state = chat.status("run-stalled")
+        assert state["state"] == "error"
+        assert "timed out" in state["error"]
+        assert "Moving model to cuda:0" in state["error"]
+        assert worker.poll() == -15
+        assert chat.process is None
+    finally:
+        chat.close()
+
+
+def test_chat_worker_exit_includes_error_log_instead_of_silent_loading(tmp_path):
+    class Worker:
+        stdout = io.StringIO('{"kind":"loading","stage":"Loading weights"}\n')
+
+        def wait(self):
+            return 1
+
+    (tmp_path / "worker.log").write_text(
+        "Traceback...\nRuntimeError: CUDA out of memory\n"
+    )
+    chat = ChatService()
+    worker = Worker()
+    chat.process = worker
+    chat.run_id = "run-failed"
+    chat.state.update(state="loading")
+    chat._read(worker, tmp_path)
+    state = chat.status("run-failed")
+    assert state["state"] == "error"
+    assert "CUDA out of memory" in state["error"]
+    assert state["loading_started"] is None
 
 
 def make_chat_run(tmp_path, chat_template=True):

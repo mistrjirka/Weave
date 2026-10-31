@@ -59,7 +59,34 @@ export function TrainingChart({
         <figcaption>
           <strong>{presentation.label}</strong>
         </figcaption>
-        <p>{presentation.empty ?? "No values recorded for this metric."}</p>
+        {presentation.empty ? (
+          <p>{presentation.empty}</p>
+        ) : (
+          <div className="training-chart-placeholder">
+            <svg viewBox="0 0 550 180" aria-hidden="true">
+              {[26, 88, 150].map((y) => (
+                <line
+                  key={y}
+                  x1="64"
+                  x2="528"
+                  y1={y}
+                  y2={y}
+                  className="training-chart-grid"
+                />
+              ))}
+              <line
+                x1="64"
+                x2="64"
+                y1="26"
+                y2="150"
+                className="training-chart-grid"
+              />
+            </svg>
+            <p>
+              <span>Waiting for the first datapoints</span>
+            </p>
+          </div>
+        )}
       </figure>
     );
   const x0 = Math.min(...all.map((p) => p.x)),

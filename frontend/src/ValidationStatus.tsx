@@ -35,12 +35,13 @@ export function ValidationStatus({ events }: { events: RunDetail["events"] }) {
             ? "CPU"
             : `GPU ${String(latest.payload.device)}`}
         </p>
-      ) : (
+      ) : typeof interval === "number" && !metric ? (
         <p>
-          Evaluation interval: every {String(interval)} successful optimizer
-          updates. No validation result received yet.
+          {interval > 0
+            ? `Evaluation interval: every ${interval} successful optimizer updates. No validation result received yet.`
+            : "Scheduled validation is disabled in this run."}
         </p>
-      )}
+      ) : null}
       {latest?.payload.state === "running" && progress && (
         <p>
           Validation batches: {String(progress.payload.completed)} / up to{" "}

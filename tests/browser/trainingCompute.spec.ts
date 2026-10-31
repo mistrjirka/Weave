@@ -142,7 +142,7 @@ test("GUI DDP override survives Start and runs two CUDA ranks with CPU async eva
       .replace("max_epochs=3", "max_epochs=None")
       .replace("max_optimizer_steps=None", "max_optimizer_steps=2")
       .replace("checkpoint_every=250", "checkpoint_every=1")
-      .replace("eval_every=100", "eval_every=1")
+      .replace("eval_every=50", "eval_every=1")
       .replace("eval_batches=5", "eval_batches=1")
       .replace("tokenizer=load_tokenizer,", "tokenizer=None,");
     await editor.fill(source);

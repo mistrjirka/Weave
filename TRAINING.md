@@ -2,6 +2,8 @@
 
 Open a project and choose **Training**. Stages and run records are separate from the editable graph: starting a run freezes the graph, variables, generated PyTorch, tokenizer, script, and configuration. Project graphs are not changed and training never starts automatically.
 
+Use **Stages & history** to select or manage stages and past runs. Standard metric charts stay empty until their first reported point arrives. Active bounded runs show an estimated finish beside progress after enough measurements; this uses the last five minutes of progress and excludes final validation/checkpoint writing. Variable sequence lengths and background work can change that estimate.
+
 ## Enable local execution
 
 The default `bash scripts/install.sh` installs CPU PyTorch in a separate environment and saves training settings. For an existing GPU environment, run:
@@ -125,6 +127,8 @@ Choose **CPU** or a particular GPU, then **Load checkpoint**. Inference uses the
 Both modes stop at the saved tokenizer's end-of-sequence token or **Maximum new tokens** (default 128; maximum 2,048). **Stop generation** requests a stop between tokens; **Unload model** terminates inference and releases memory. The context token budget must cover the prompt plus requested new tokens and stay within the model's trained limits. Overlong prompts raise an error rather than silently dropping conversation turns. Temperature zero is greedy decoding; positive temperatures support top-p sampling and a reproducible seed within a fixed runtime/device.
 
 The model stays loaded between messages in a separate worker process. There is one loaded chat model per server; loading another replaces it, and an idle model unloads after ten minutes. CPU is the default. A GPU needs another model copy and can compete with training/evaluation on the same device. Decoding currently recomputes the full prefix without a KV cache, so long generations may be slow. Tool-call text is displayed, never executed. Chat-status polling reads only worker state; it does not rescan checkpoints each second.
+
+Loading displays its current phase and elapsed time. Status polling continues independently of checkpoint-list refreshes and retries failed requests. Worker failures appear beside the load controls with the worker log path; a load that remains incomplete after five minutes is stopped and reported as an error. **Unload model** can cancel a load sooner. These controls affect inference only, leaving the training process running.
 
 ## Independent training computers
 

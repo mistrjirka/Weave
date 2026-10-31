@@ -139,7 +139,13 @@ test("legacy training stages, real run, charts, snapshots, and reload", async ({
       .getByRole("button", { name: "Save stages", exact: true })
       .click();
     await page
+      .getByRole("button", { name: "Stages and run history", exact: true })
+      .click();
+    await page
       .getByRole("button", { name: "Duplicate stage", exact: true })
+      .click();
+    await page
+      .getByRole("button", { name: "Stages and run history", exact: true })
       .click();
     await expect(page.locator(".training-stage")).toHaveCount(2);
     await page
@@ -155,9 +161,16 @@ test("legacy training stages, real run, charts, snapshots, and reload", async ({
     await page
       .getByRole("button", { name: "Add training stage", exact: true })
       .click();
+    await page
+      .getByRole("button", { name: "Stages and run history", exact: true })
+      .click();
     await expect(page.locator(".training-stage")).toHaveCount(3);
     await page
       .getByRole("button", { name: "Delete stage", exact: true })
+      .click();
+    await page
+      .getByRole("dialog", { name: "Stages and run history", exact: true })
+      .getByRole("button", { name: "Close dialog", exact: true })
       .click();
     await page
       .getByRole("button", { name: "Python script", exact: true })
@@ -168,7 +181,11 @@ test("legacy training stages, real run, charts, snapshots, and reload", async ({
         exact: true,
       })
       .click();
+    await page
+      .getByRole("button", { name: "Stages and run history", exact: true })
+      .click();
     await expect(page.locator(".training-stage")).toHaveCount(3);
+    await page.keyboard.press("Escape");
     await page
       .getByRole("button", { name: "Start training stage", exact: true })
       .click();
@@ -178,11 +195,15 @@ test("legacy training stages, real run, charts, snapshots, and reload", async ({
     await expect(
       page.locator(".training-dashboard .training-section-heading").first(),
     ).toContainText("completed", { timeout: 60000 });
-    await expect(page.locator(".training-chart")).toHaveCount(4);
+    await expect(page.locator(".training-chart")).toHaveCount(5);
     await page
       .getByRole("button", { name: "Create stage from this run", exact: true })
       .click();
+    await page
+      .getByRole("button", { name: "Stages and run history", exact: true })
+      .click();
     await expect(page.locator(".training-stage")).toHaveCount(4);
+    await page.keyboard.press("Escape");
     await page.getByRole("button", { name: "Hardware", exact: true }).click();
     await expect(page.locator(".training-dashboard")).toContainText(
       "GPU readings are device-wide",
@@ -218,9 +239,9 @@ test("legacy training stages, real run, charts, snapshots, and reload", async ({
     await page.reload();
     await expect(
       page.getByRole("region", { name: "Run dashboard", exact: true }),
-    ).toBeVisible();
+    ).toBeVisible({ timeout: 30000 });
     await page.getByRole("button", { name: "Metrics", exact: true }).click();
-    await expect(page.locator(".training-chart")).toHaveCount(4);
+    await expect(page.locator(".training-chart")).toHaveCount(5);
     await page.getByText("Chart options", { exact: true }).click();
     await page
       .getByRole("combobox", { name: "Horizontal axis", exact: true })
@@ -571,7 +592,7 @@ with Run(optimizer=optimizer, total_steps=2) as run:
     expect(lrEvents).toHaveLength(2);
     expect(progress.at(-1)?.payload).toMatchObject({ completed: 2, total: 2 });
     expect(detail.events.some((event) => event.kind === "warning")).toBeFalsy();
-    await expect(page.locator(".training-chart")).toHaveCount(2);
+    await expect(page.locator(".training-chart")).toHaveCount(4);
   } finally {
     await context.request.delete(`/api/projects/${id}`);
   }

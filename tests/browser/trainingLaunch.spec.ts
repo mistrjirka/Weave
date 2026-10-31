@@ -65,6 +65,7 @@ test("launch saves first, reports failures beside Start, and selects the new run
   let projectPath: string | null | undefined;
   let releaseSave: () => void = () => {};
   let releaseLaunch: () => void = () => {};
+  let releaseInitial: () => void = () => {};
   try {
     expect(
       (
@@ -92,12 +93,43 @@ test("launch saves first, reports failures beside Start, and selects the new run
         ).json(),
       ).directory,
     );
+    const initialGate = new Promise<void>((resolve) => {
+      releaseInitial = resolve;
+    });
+    await page.route(`**/api/training/runs/${oldRun.id}`, async (route) => {
+      await initialGate;
+      await route.continue();
+    });
     await page.goto(
       `/?model=${id}&view=training&stage=${stage.id}&run=${oldRun.id}`,
     );
     await expect(
-      page.getByRole("region", { name: "Run dashboard", exact: true }),
+      page.getByText("Loading training workspace…", { exact: true }),
     ).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "Training devices", exact: true }),
+    ).toHaveCount(0);
+    releaseInitial();
+    await expect(
+      page.getByRole("region", { name: "Run dashboard", exact: true }),
+    ).toBeVisible({ timeout: 30000 });
+    await expect(page.locator(".training-stages")).toHaveCount(0);
+    const history = page.getByRole("button", {
+      name: "Stages and run history",
+      exact: true,
+    });
+    await history.click();
+    await expect(
+      page.getByRole("dialog", { name: "Stages and run history", exact: true }),
+    ).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(history).toBeFocused();
+    expect(
+      (await page.locator(".topbar").boundingBox())?.height,
+    ).toBeLessThanOrEqual(56);
+    expect(
+      (await page.locator(".viewbar").boundingBox())?.height,
+    ).toBeLessThanOrEqual(44);
     await page
       .getByRole("button", { name: "Training devices", exact: true })
       .click();
@@ -211,8 +243,37 @@ test("launch saves first, reports failures beside Start, and selects the new run
       ),
     ).toBeVisible();
 
+    await expect(page.locator(".training-chart")).toHaveCount(4);
+    await expect(
+      page.getByText("Waiting for the first datapoints", { exact: true }),
+    ).toHaveCount(4);
+    await expect(page.locator(".training-chart svg circle")).toHaveCount(0);
     await page.route(`**/api/training/runs/${newRun}`, async (route) => {
       const fixture = structuredClone(detail);
+      fixture.status.state = "running";
+      for (const [step, age] of [
+        [1, 60],
+        [11, 0],
+      ]) {
+        fixture.events.push({
+          version: 1,
+          id: `progress-${step}`,
+          time: Date.now() / 1000 - age,
+          kind: "progress",
+          step,
+          tokens: 8,
+          payload: { completed: step, total: 101, unit: "optimizer updates" },
+        });
+      }
+      fixture.events.push({
+        version: 1,
+        id: "first-metric",
+        time: Date.now() / 1000,
+        kind: "metrics",
+        step: 1,
+        tokens: 8,
+        payload: { "train/loss": 2.5 },
+      });
       fixture.hardware = [
         {
           time: Date.now() / 1000,
@@ -231,6 +292,24 @@ test("launch saves first, reports failures beside Start, and selects the new run
       await route.fulfill({ json: fixture });
     });
     await page.reload();
+    await expect(
+      page.getByRole("region", { name: "Run dashboard", exact: true }),
+    ).toBeVisible({ timeout: 30000 });
+    await expect(
+      page
+        .locator(".training-chart")
+        .filter({ hasText: "Training loss" })
+        .locator("svg circle"),
+    ).toHaveCount(1);
+    await expect(
+      page.getByText("Waiting for the first datapoints", { exact: true }),
+    ).toHaveCount(3);
+    await expect(page.getByLabel("Training finish estimate")).toContainText(
+      "remaining",
+    );
+    await expect(
+      page.getByLabel("Training finish estimate").locator("time"),
+    ).toHaveAttribute("datetime", /T/);
     await page.getByRole("button", { name: "Hardware", exact: true }).click();
     const idle = page
       .locator(".training-chart")
@@ -246,6 +325,7 @@ test("launch saves first, reports failures beside Start, and selects the new run
     await expect(empty).toContainText("No utilization readings received");
     await expect(empty.locator("svg")).toHaveCount(0);
   } finally {
+    releaseInitial();
     releaseSave();
     releaseLaunch();
     await page.unrouteAll({ behavior: "wait" });

@@ -5043,3 +5043,25 @@ textarea:focus-visible {
     font-size: 13px;
   }
 }
+
+/* Compact workspace chrome keeps the canvas and training results in view. */
+.topbar {
+  height: 56px;
+}
+.viewbar {
+  height: 44px;
+}
+.brand {
+  height: 56px;
+}
+@media (max-width: 760px) {
+  .view-actions button[aria-label="Weave settings"] > span {
+    display: none;
+  }
+  .view-actions button[aria-label="Weave settings"] {
+    min-width: 44px;
+    min-height: 44px;
+    padding: 8px;
+    justify-content: center;
+  }
+}

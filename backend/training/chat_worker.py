@@ -94,11 +94,13 @@ def generate(model, tokenizer, request, device, cancel):
 
 
 def main():
+    emit("loading", stage="Importing PyTorch")
     import torch
 
     torch.set_num_threads(2)
     spec = json.loads(Path(sys.argv[-1]).read_text())
     checkpoint = Path(spec["checkpoint"])
+    emit("loading", stage="Verifying checkpoint integrity")
     digest = hashlib.sha256()
     with checkpoint.open("rb") as source:
         for chunk in iter(lambda: source.read(1024 * 1024), b""):
@@ -110,7 +112,9 @@ def main():
     prefix = (
         "weave_support." if (Path.cwd() / "weave_support/model.py").is_file() else ""
     )
+    emit("loading", stage="Building the frozen model")
     model = importlib.import_module(prefix + "model").Model()
+    emit("loading", stage="Loading checkpoint weights")
     state = torch.load(checkpoint, map_location="cpu", weights_only=True, mmap=True)
     model.load_state_dict(state.get("model", state))
     del state
@@ -122,7 +126,9 @@ def main():
                 f"{device} is unavailable in the run's Python environment."
             )
         torch.cuda.set_device(index)
+    emit("loading", stage=f"Moving model to {device}")
     model = model.to(device).eval()
+    emit("loading", stage="Loading the saved tokenizer")
     tokenizer = importlib.import_module(prefix + "load_tokenizer").load_tokenizer()
     if spec.get("chat_template"):
         tokenizer.chat_template = spec["chat_template"]
