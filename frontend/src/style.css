@@ -5085,3 +5085,44 @@ textarea:focus-visible {
     background: var(--theme-raised, #fff);
   }
 }
+
+.connection-error {
+  position: fixed;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 55;
+  width: min(620px, calc(100vw - 32px));
+  max-height: 40vh;
+  overflow: auto;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--theme-danger, #c14b43);
+  border-radius: 8px;
+  background: var(--theme-raised, #fff);
+  color: var(--theme-text, #253125);
+  box-shadow: 0 8px 32px #0003;
+  font-size: 14px;
+}
+.connection-error > svg {
+  flex-shrink: 0;
+  color: var(--theme-danger, #c14b43);
+}
+.connection-error > div {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.connection-error p {
+  margin: 8px 0;
+}
+.connection-error small {
+  font-size: 12px;
+}
+.connection-error > button {
+  flex-shrink: 0;
+  min-width: 32px;
+  min-height: 32px;
+}

@@ -1,4 +1,8 @@
 import { ProjectTokenizerPicker } from "./ProjectTokenizerPicker";
+import {
+  connectionFeedback,
+  type ConnectionAttempt,
+} from "./connectionFeedback";
 import React, {
   useCallback,
   useEffect,
@@ -1068,6 +1072,9 @@ function Workbench({
   const [project, setProject] = useState<Project>(initial),
     [templates] = useState(initialTemplates),
     [saved, setSaved] = useState(initialSaved);
+  const [connectionAttempt, setConnectionAttempt] =
+    useState<ConnectionAttempt | null>(null);
+  const [validatedInput, setValidatedInput] = useState("");
   const [initialLocation] = useState(() =>
     readWorkspaceLocation(window.location.search),
   );
@@ -1315,6 +1322,7 @@ function Workbench({
           const parsed = codeSchema.parse(d);
           if (parsed.report) {
             setReport(parsed.report);
+            setValidatedInput(compilationBody);
             setSource(parsed.source);
           }
         })
@@ -1328,6 +1336,10 @@ function Workbench({
       controller.abort();
     };
   }, [compilationBody]);
+  const connectionError =
+    connectionAttempt && report && validatedInput === compilationBody
+      ? connectionFeedback(project, report, connectionAttempt)
+      : null;
   useEffect(() => {
     try {
       localStorage.setItem("weave.blocks", JSON.stringify(customBlocks));
@@ -3069,14 +3081,20 @@ function Workbench({
                             ),
                           )
                         }
-                        onConnect={(connection) =>
+                        onConnect={(connection) => {
+                          const edgeId = uid();
+                          setConnectionAttempt({
+                            projectId: project.id,
+                            path: [...path],
+                            edgeId,
+                          });
                           changeGraph((g) => {
                             g.edges = addEdge(
-                              { ...connection, id: uid(), type: "smoothstep" },
+                              { ...connection, id: edgeId, type: "smoothstep" },
                               g.edges,
                             );
-                          })
-                        }
+                          });
+                        }}
                         onConnectEnd={(event, state) => {
                           if (
                             state.isValid ||
@@ -4562,7 +4580,28 @@ function Workbench({
           )}
         </Dialog>
       )}
-      {toast && (
+      {connectionError && tab === "graph" && (
+        <div className="connection-error" role="alert">
+          <CircleAlert size={20} aria-hidden="true" />
+          <div>
+            <strong>{connectionError.title}</strong>
+            {connectionError.messages.map((message) => (
+              <p key={message}>{message}</p>
+            ))}
+            <small>
+              Fix the block settings, remove the edge, or undo the connection
+              (Ctrl+Z).
+            </small>
+          </div>
+          <button
+            aria-label="Dismiss connection error"
+            onClick={() => setConnectionAttempt(null)}
+          >
+            <X size={18} />
+          </button>
+        </div>
+      )}
+      {toast && !connectionError && (
         <div className="toast" role="status">
           <CheckCircle2 size={16} />
           {toast}
