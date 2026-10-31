@@ -345,6 +345,10 @@ actual training code when your model/data/optimizer are ready.
     def get_runs(project_id: str):
         return service.list_runs(project_id)
 
+    @api.get("/active-runs", dependencies=[Depends(authenticated)])
+    def get_active_runs():
+        return service.active_runs()
+
     @api.post("/runs", dependencies=[Depends(authenticated)])
     def launch(body: Launch, request: Request):
         if (

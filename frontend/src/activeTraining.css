@@ -1,0 +1,46 @@
+.topbar-actions .active-training-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-width: 44px;
+  min-height: 36px;
+  padding: 6px 8px;
+  color: var(--theme-green-text, #315836);
+  background: var(--theme-green-surface, #edf3e8);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+.topbar-actions .active-training-button .active-training-count {
+  display: inline;
+  font-size: 12px;
+  font-weight: 700;
+}
+.active-training-list {
+  list-style: none;
+  padding: 0;
+  margin: 12px 0 0;
+  display: grid;
+  gap: 10px;
+}
+.active-training-list a {
+  display: grid;
+  gap: 6px;
+  padding: 14px;
+  color: var(--theme-text, #263b30);
+  border: 1px solid var(--line);
+  background: var(--theme-raised, #fff);
+  border-radius: 8px;
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+.active-training-list a:hover {
+  background: var(--theme-neutral-surface, #f4f7ed);
+}
+.active-training-list a:focus-visible {
+  outline: 2px solid var(--theme-green-line, #4b7e4d);
+  outline-offset: 2px;
+}
+.active-training-list small {
+  color: var(--theme-muted, #59685d);
+}

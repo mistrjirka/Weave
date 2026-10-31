@@ -416,6 +416,44 @@ class TrainingService:
                 result.append(info)
         return sorted(result, key=lambda item: item["created"], reverse=True)
 
+    def active_runs(self):
+        """Small cross-project summaries; no metrics, hardware or Python probes."""
+        result = []
+        active = {"starting", "preparing", "running", "evaluating"}
+        for path in (self.root / "runs").glob("*/run.json"):
+            try:
+                status_path = path.parent / "status.json"
+                # The supervisor's state is enough for this navbar summary.
+                # Avoid indexing every validation log just to count local jobs.
+                status = (
+                    json.loads(status_path.read_text())
+                    if status_path.is_file()
+                    else self.status(path.parent)
+                )
+                if status.get("state") not in active:
+                    continue
+                info = json.loads(path.read_text())
+                project_path = path.parent / PACKAGE / "project.json"
+                project = (
+                    json.loads(project_path.read_text())
+                    if project_path.is_file()
+                    else {}
+                )
+                result.append(
+                    {
+                        "id": info["id"],
+                        "project_id": info["project_id"],
+                        "project_name": project.get("name", "Project"),
+                        "stage_id": info["stage_id"],
+                        "name": info["name"],
+                        "created": info["created"],
+                        "state": status["state"],
+                    }
+                )
+            except FileNotFoundError:
+                continue  # A run can be removed while the list is being read.
+        return sorted(result, key=lambda item: item["created"], reverse=True)
+
     def status(self, directory):
         preparation = events(directory, kind="preparation", limit=1)
         progress = (

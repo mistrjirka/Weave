@@ -789,6 +789,31 @@ export function TrainingWorkspace({ project }: { project: Project }) {
     Boolean(detail?.run.code_first),
   );
   const active = detail && running.has(detail.status.state);
+  const otherActiveRun =
+    detail && !active
+      ? runs.find(
+          (run) =>
+            run.id !== detail.run.id &&
+            run.stage_id === detail.run.stage_id &&
+            running.has(run.status?.state ?? ""),
+        )
+      : undefined;
+  function selectRun(run: TrainingRun) {
+    setDetail(null);
+    setRunId(run.id);
+    setSelected(run.stage_id);
+    setSetupOpen(false);
+    setHistoryOpen(false);
+    setNotice("");
+  }
+  function runLink(run: TrainingRun) {
+    const params = new URLSearchParams(location.search);
+    params.set("model", project.id);
+    params.set("view", "training");
+    params.set("run", run.id);
+    params.set("stage", run.stage_id);
+    return `?${params.toString()}`;
+  }
   const latestHardware = detail?.hardware.at(-1);
   const artifactURL = (path: string) =>
     `/api/training/runs/${encodeURIComponent(runId)}/artifact?path=${encodeURIComponent(path)}`;
@@ -882,22 +907,52 @@ export function TrainingWorkspace({ project }: { project: Project }) {
 
   return (
     <section className="training-workspace" aria-label="Training workspace">
-      {detail?.status.state === "stopped" && launchPhase === "idle" && (
-        <p
-          className="training-stopped-banner"
+      {otherActiveRun && launchPhase === "idle" && (
+        <div
+          className="training-notice training-current-run-notice"
           role="status"
-          aria-label="Training stopped"
         >
-          <Square size={16} aria-hidden="true" />
-          <strong>Training stopped</strong>
-          {detail.run.code_first && detail.restart_context?.exact_resume && (
-            <span>
-              Resume training restores the saved checkpoint without starting
-              over.
-            </span>
-          )}
-        </p>
+          <span>
+            You’re viewing an earlier {detail?.status.state} run. Another run of
+            this stage is running.
+          </span>
+          <a
+            href={runLink(otherActiveRun)}
+            onClick={(event) => {
+              if (
+                event.button !== 0 ||
+                event.metaKey ||
+                event.ctrlKey ||
+                event.shiftKey ||
+                event.altKey
+              )
+                return;
+              event.preventDefault();
+              selectRun(otherActiveRun);
+            }}
+          >
+            <Activity size={14} aria-hidden="true" /> View running training
+          </a>
+        </div>
       )}
+      {detail?.status.state === "stopped" &&
+        !otherActiveRun &&
+        launchPhase === "idle" && (
+          <p
+            className="training-stopped-banner"
+            role="status"
+            aria-label="Training stopped"
+          >
+            <Square size={16} aria-hidden="true" />
+            <strong>Training stopped</strong>
+            {detail.run.code_first && detail.restart_context?.exact_resume && (
+              <span>
+                Resume training restores the saved checkpoint without starting
+                over.
+              </span>
+            )}
+          </p>
+        )}
       {error && (
         <p className="training-alert" role="alert">
           {error}
@@ -2401,6 +2456,33 @@ export function TrainingWorkspace({ project }: { project: Project }) {
                 </div>
                 <div className="training-actions">
                   {historyButton}
+                  {runs.length > 1 && (
+                    <label className="training-run-picker">
+                      <span>Run</span>
+                      <select
+                        aria-label="Training run"
+                        value={runId}
+                        onChange={(event) => {
+                          const run = runs.find(
+                            (item) => item.id === event.target.value,
+                          );
+                          if (run) selectRun(run);
+                        }}
+                      >
+                        {runs.map((run) => (
+                          <option key={run.id} value={run.id}>
+                            {run.status?.state ?? "prepared"} ·{" "}
+                            {new Date(run.created).toLocaleString(undefined, {
+                              month: "short",
+                              day: "numeric",
+                              hour: "2-digit",
+                              minute: "2-digit",
+                            })}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  )}
                   {detail.run.code_first && (
                     <RunValidationControls
                       key={detail.run.id}

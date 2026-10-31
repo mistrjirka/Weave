@@ -8,6 +8,7 @@ import React, {
 import { GPUTuning } from "./GPUTuning";
 import { TrainingWorkspace } from "./TrainingWorkspace";
 import { UIUpdateNotice } from "./UIUpdateNotice";
+import { ActiveTrainingRuns } from "./ActiveTrainingRuns";
 import { createRoot } from "react-dom/client";
 import {
   ReactFlow,
@@ -2701,6 +2702,7 @@ function Workbench({
             </div>
           </div>
           <div className="topbar-actions">
+            <ActiveTrainingRuns />
             <button
               className="subtle-button new-project-button"
               aria-label="New project"

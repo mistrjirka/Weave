@@ -1494,3 +1494,39 @@ html:is([data-theme="dark"], [data-theme="black"]) {
   overflow-wrap: anywhere;
   font-size: 13px;
 }
+
+.training-current-run-notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+}
+.training-current-run-notice button {
+  min-height: 44px;
+  flex-shrink: 0;
+}
+.training-current-run-notice a {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--theme-text);
+  background: var(--theme-raised);
+  font-weight: 600;
+  text-decoration: none;
+}
+.training-run-picker {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+}
+.training-run-picker select {
+  min-width: 0;
+  max-width: 235px;
+  min-height: 44px;
+}
