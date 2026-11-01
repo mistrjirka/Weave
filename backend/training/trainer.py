@@ -9,6 +9,8 @@ from __future__ import annotations
 import argparse
 import contextlib
 import copy
+import errno
+from collections.abc import Iterator
 from dataclasses import asdict, dataclass, field
 import hashlib
 import itertools
@@ -45,6 +47,12 @@ from token_cache import cache_progress_reporting
 from tuning_runtime import load_tuning, tune_loader, WeightedBatchSampler
 from preparation import distributed_preparation, preparation_barrier
 from performance import configure_execution, training_profile
+from evaluation_worker import (
+    EvaluationSession,
+    memory_snapshot_directory,
+    next_request,
+    read_request,
+)
 
 
 @dataclass
@@ -56,6 +64,8 @@ class TrainingConfig:
     rank_micro_batch_sizes: list[int] = field(default_factory=list, init=False)
     evaluation_device: int | Literal["cpu"] | None = None
     async_evaluation: bool = False
+    reuse_evaluation_worker: bool = False
+    evaluation_snapshot_storage: Literal["auto", "disk"] = "auto"
     precision: Literal["fp32", "fp16", "bf16"] = "fp32"
     compile_mode: Literal["off", "default", "reduce-overhead", "max-autotune"] = "off"
     fused_optimizer: bool = False
@@ -117,6 +127,10 @@ class TrainingConfig:
             raise ValueError("Unknown compile_mode")
         if type(self.fused_optimizer) is not bool:
             raise ValueError("fused_optimizer must be a boolean")
+        if type(self.reuse_evaluation_worker) is not bool:
+            raise ValueError("reuse_evaluation_worker must be a boolean")
+        if self.evaluation_snapshot_storage not in ("auto", "disk"):
+            raise ValueError("evaluation_snapshot_storage must be auto or disk")
         if type(self.profile_steps) is not int or not 0 <= self.profile_steps <= 100:
             raise ValueError("profile_steps must be an integer from 0 to 100")
         if self.evaluation_device not in (None, "cpu") and (
@@ -248,15 +262,26 @@ class Trainer:
         self.resuming = False
         self.evaluation_job = None
         self.evaluation_pending = None
+        self.evaluation_session = None
+        self.evaluation_reuse_unavailable = False
+        self.evaluation_memory = None
+        self.evaluation_memory_disabled = False
         self.profiler = None
 
     def train(self):
         parser = argparse.ArgumentParser()
         parser.add_argument("--evaluate")
+        parser.add_argument("--evaluation-worker")
         parser.add_argument("--checkpoint")
         parser.add_argument("--resume", action="store_true")
         parser.add_argument("--output-dir")
         args = parser.parse_args()
+        if args.evaluation_worker:
+            request = read_request(args.evaluation_worker)
+            if request is None:
+                raise ValueError("Validation worker has no initial request")
+            args.evaluate = request["checkpoint"]
+            self.evaluation_request = request
         cfg = self.config
         context_path = Path(__file__).parent / "launch.json"
         launch = json.loads(context_path.read_text()) if context_path.is_file() else {}
@@ -283,6 +308,8 @@ class Trainer:
         # rather than rereading the original launch overrides.
         if args.evaluate and os.environ.get("WEAVE_VALIDATION_SETTINGS"):
             self._set_validation(json.loads(os.environ["WEAVE_VALIDATION_SETTINGS"]))
+        if args.evaluation_worker:
+            self._set_validation(self.evaluation_request["settings"])
         # Validate the effective settings before spawning workers or calling user
         # data hooks. launch.json controls the frozen run, never the source script.
         cfg.__post_init__()
@@ -342,9 +369,16 @@ class Trainer:
             directory = Path(output).expanduser().resolve()
             self._run(args, directory)
         finally:
+            self._close_evaluation_session()
             if self.evaluation_job and self.evaluation_job.poll() is None:
                 self.evaluation_job.terminate()
-                self.evaluation_job.wait()
+                try:
+                    self.evaluation_job.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    self.evaluation_job.kill()
+                    self.evaluation_job.wait()
+            if self.evaluation_memory:
+                self.evaluation_memory.cleanup()
             if initialized:
                 dist.destroy_process_group()
 
@@ -388,6 +422,8 @@ class Trainer:
             else self.model_factory
         )
         self.model, self.device = place_model(self.model, placement)
+        if self.device.startswith("cuda"):
+            torch.cuda.set_device(self.device)
         if cfg.precision == "fp16" and self.device == "cpu":
             raise ValueError("FP16 requires CUDA; use fp32 or bf16 on CPU")
         if cfg.precision == "bf16" and self.device != "cpu":
@@ -490,27 +526,22 @@ class Trainer:
         self.scaler = torch.amp.GradScaler("cuda", enabled=cfg.precision == "fp16")
         context_path = Path(__file__).parent / "launch.json"
         launch = json.loads(context_path.read_text()) if context_path.is_file() else {}
-        checkpoint = args.evaluate or args.checkpoint or launch.get("checkpoint")
+        if args.evaluate:
+            self._evaluation_jobs(args, directory)
+            return
+        checkpoint = args.checkpoint or launch.get("checkpoint")
         resume = args.resume or launch.get("start_mode") == "resume"
         step, tokens = 0, 0
         directory.mkdir(parents=True, exist_ok=True)
-        report_directory = (
-            directory / ("evaluation-" + Path(args.evaluate).stem)
-            if args.evaluate
-            else directory
-        )
+        report_directory = directory
         with Run(
             report_directory,
             rank=self.rank,
             source_directory=self.source_directory,
-            channel="evaluation" if args.evaluate else "training",
+            channel="training",
         ) as run:
             self.run = run
-            if (
-                not args.evaluate
-                and cfg.background_evaluation
-                and cfg.evaluation_device in cfg.devices
-            ):
+            if cfg.background_evaluation and cfg.evaluation_device in cfg.devices:
                 run.warning(
                     "Background validation shares a training GPU; it needs another model copy and competes for memory and compute. Select CPU or a separate GPU to avoid GPU contention.",
                     code="evaluation-contention",
@@ -518,9 +549,9 @@ class Trainer:
             run.capabilities(
                 metrics=True,
                 samples=True,
-                checkpoint=not bool(args.evaluate),
-                commands=not bool(args.evaluate),
-                live_validation=not bool(args.evaluate),
+                checkpoint=True,
+                commands=True,
+                live_validation=True,
             )
             if self.rank == 0:
                 print(f"Run outputs: {directory}", flush=True)
@@ -540,14 +571,12 @@ class Trainer:
                 state = torch.load(path, map_location="cpu", weights_only=True)
                 try:
                     self.model.load_state_dict(state["model"], strict=True)
-                    if resume and not args.evaluate:
+                    if resume:
                         self._restore(state)
                         self.resuming = True
                         step, tokens = state["step"], state["tokens"]
-                    elif args.evaluate:
-                        step, tokens = state["step"], state["tokens"]
                 except (ValueError, RuntimeError, KeyError, TypeError) as exc:
-                    if resume and not args.evaluate and self.rank == 0:
+                    if resume and self.rank == 0:
                         problem = {
                             "message": str(exc),
                             "checkpoint": str(path),
@@ -568,9 +597,6 @@ class Trainer:
                 )
                 if self.tuning_note:
                     run.warning(self.tuning_note, code="gpu-tuning")
-            if args.evaluate:
-                self._evaluate(str(args.evaluate))
-                return
             configure_execution(self.model, self.optimizer, cfg)
             run.emit(
                 "execution",
@@ -634,6 +660,100 @@ class Trainer:
                             f"Dataset changed during training: {path}",
                             code="dataset-changed",
                         )
+
+    def _evaluation_jobs(self, args, directory):
+        """Initialize once, but load and report every immutable checkpoint afresh."""
+        mailbox = args.evaluation_worker
+        request = self.evaluation_request if mailbox else None
+        reusable = not any(
+            isinstance(value, Iterator)
+            for value in (self.val_loader, getattr(self.val_loader, "dataset", None))
+        ) and not getattr(self.val_loader, "persistent_workers", False)
+        parent, index = os.getppid(), 0
+        while True:
+            checkpoint = request["checkpoint"] if request else args.evaluate
+            if request:
+                self._set_validation(request["settings"])
+            report_directory = directory / ("evaluation-" + Path(checkpoint).stem)
+            try:
+                with Run(
+                    report_directory,
+                    rank=0,
+                    source_directory=self.source_directory,
+                    channel="evaluation",
+                ) as run:
+                    self.run = run
+                    run.capabilities(
+                        metrics=True, samples=True, checkpoint=False, commands=False
+                    )
+                    atomic_json(
+                        report_directory / "resolved-config.json", asdict(self.config)
+                    )
+                    run.emit("configuration", asdict(self.config))
+                    self.manifest = self._sources(report_directory, run)
+                    path = Path(checkpoint).expanduser()
+                    if not path.is_absolute():
+                        path = self.source_directory / path
+                    started = time.monotonic()
+                    state = torch.load(path, map_location="cpu", weights_only=True)
+                    self.model.load_state_dict(state["model"], strict=True)
+                    run.step, run.tokens = state["step"], state["tokens"]
+                    del state
+                    loaded = time.monotonic()
+                    # _evaluate opens a fresh AMP context: casts of old weights
+                    # must never be cached across checkpoint replacements.
+                    self._evaluate(str(checkpoint))
+                    timing = {
+                        "pid": os.getpid(),
+                        "reused": index > 0,
+                        "checkpoint_load_seconds": loaded - started,
+                        "evaluation_seconds": time.monotonic() - loaded,
+                    }
+                    run.emit("evaluation_runtime", timing)
+                    print(
+                        f"Validation update {run.step}: "
+                        f"{'warm' if index else 'fresh'} worker {os.getpid()} · "
+                        f"weights {timing['checkpoint_load_seconds']:.2f}s · "
+                        f"evaluation {timing['evaluation_seconds']:.2f}s",
+                        flush=True,
+                    )
+                if request:
+                    atomic_json(
+                        Path(mailbox) / "result.json",
+                        {
+                            "id": request["id"],
+                            "success": True,
+                            "reusable": reusable,
+                            "step": run.step,
+                            **timing,
+                        },
+                    )
+            except Exception as exc:
+                if request:
+                    atomic_json(
+                        Path(mailbox) / "result.json",
+                        {
+                            "id": request["id"],
+                            "success": False,
+                            "reusable": False,
+                            "message": str(exc),
+                        },
+                    )
+                raise
+            if not mailbox or not reusable:
+                return
+            request = next_request(mailbox, request["id"], parent)
+            if request is None:
+                return
+            index += 1
+
+    def _close_evaluation_session(self):
+        session = getattr(self, "evaluation_session", None)
+        if session:
+            session.close()
+            if self.evaluation_job is session:
+                self.evaluation_job = None
+            self.evaluation_session = None
 
     def _code_hash(self):
         # Include user helper packages even when imported lazily inside a hook.
@@ -816,6 +936,8 @@ class Trainer:
             "generation_tokens",
             "sample_prompts",
             "async_evaluation",
+            "reuse_evaluation_worker",
+            "evaluation_snapshot_storage",
             "evaluation_device",
             "evaluation_only",
             "gradient_clip",
@@ -1375,7 +1497,8 @@ class Trainer:
                 self.evaluation_job.wait()
             if self.evaluation_job.poll() is None:
                 return
-            if self.evaluation_job.returncode:
+            failed = bool(self.evaluation_job.returncode)
+            if failed:
                 self.run.warning(
                     "Separate evaluation failed; see evaluation.log",
                     code="evaluation-failed",
@@ -1383,16 +1506,27 @@ class Trainer:
             self.run.emit(
                 "evaluation",
                 {
-                    "state": (
-                        "failed" if self.evaluation_job.returncode else "completed"
-                    ),
+                    "state": ("failed" if failed else "completed"),
                     "checkpoint": self.evaluation_active,
                     "checkpoint_step": self.evaluation_active_step,
                     "device": self.evaluation_active_device,
                 },
             )
             self._discard_evaluation_snapshot(self.evaluation_active)
+            if isinstance(self.evaluation_job, EvaluationSession):
+                result = self.evaluation_job.result or {}
+                if not result.get("reusable", False):
+                    self.evaluation_reuse_unavailable = not failed
+                    if not failed:
+                        self.run.warning(
+                            "Validation loader cannot be safely reused; using a fresh process for each pass. Return a repeatable loader without persistent data workers to enable reuse.",
+                            code="evaluation-reuse-unavailable",
+                        )
+                if failed or not result.get("reusable", False):
+                    self._close_evaluation_session()
             self.evaluation_job = None
+        if not self.config.background_evaluation:
+            self._close_evaluation_session()
         if self.evaluation_pending:
             if not self.config.background_evaluation:
                 self._discard_evaluation_snapshot(self.evaluation_pending)
@@ -1416,19 +1550,54 @@ class Trainer:
                     "MASTER_PORT",
                 ) or key.startswith("TORCHELASTIC_"):
                     environment.pop(key)
-            with (directory / "evaluation.log").open("a") as output:
-                self.evaluation_job = subprocess.Popen(
-                    [
-                        sys.executable,
-                        str(self.source_directory / "train.py"),
-                        "--evaluate",
-                        self.evaluation_pending,
-                    ],
-                    cwd=self.source_directory,
-                    env=environment,
-                    stdout=output,
-                    stderr=subprocess.STDOUT,
-                )
+            reuse = (
+                self.config.reuse_evaluation_worker
+                and not self.evaluation_reuse_unavailable
+            )
+            device = self._validation_settings()["device"]
+            session = self.evaluation_session
+            if session and (
+                session.device != device or session.process.poll() is not None
+            ):
+                self._close_evaluation_session()
+                session = None
+            if reuse:
+                if session is None:
+                    session = EvaluationSession(
+                        directory / "evaluation-workers" / str(time.time_ns()), device
+                    )
+                session.submit(self.evaluation_pending, self._validation_settings())
+                if session.process is None:
+                    with (directory / "evaluation.log").open("a") as output:
+                        session.process = subprocess.Popen(
+                            [
+                                sys.executable,
+                                str(self.source_directory / "train.py"),
+                                "--evaluation-worker",
+                                str(session.directory),
+                            ],
+                            cwd=self.source_directory,
+                            env=environment,
+                            stdout=output,
+                            stderr=subprocess.STDOUT,
+                        )
+                self.evaluation_session = session
+                self.evaluation_job = session
+            else:
+                self._close_evaluation_session()
+                with (directory / "evaluation.log").open("a") as output:
+                    self.evaluation_job = subprocess.Popen(
+                        [
+                            sys.executable,
+                            str(self.source_directory / "train.py"),
+                            "--evaluate",
+                            self.evaluation_pending,
+                        ],
+                        cwd=self.source_directory,
+                        env=environment,
+                        stdout=output,
+                        stderr=subprocess.STDOUT,
+                    )
             self.evaluation_active = self.evaluation_pending
             self.evaluation_active_step = self.evaluation_pending_step
             self.evaluation_active_device = (
@@ -1456,6 +1625,7 @@ class Trainer:
         self.evaluation_pending = None
         job = self.evaluation_job
         if job is None:
+            self._close_evaluation_session()
             return
         if job.poll() is not None:
             self._evaluation_worker(directory)
@@ -1478,25 +1648,62 @@ class Trainer:
         )
         self._discard_evaluation_snapshot(self.evaluation_active)
         self.evaluation_job = None
+        self._close_evaluation_session()
 
     def _evaluation_snapshot(self, directory):
         """Immutable weights only; no optimizer/loader serialization for validation."""
-        path = (
-            directory
-            / "evaluation-weights"
-            / f"step-{self.run.step}-{time.time_ns()}.pt"
-        )
         raw = self.model.module if isinstance(self.model, DDP) else self.model
-        with atomic_checkpoint_path(path) as temporary:
-            torch.save(
-                {
-                    "model": raw.state_dict(),
-                    "step": self.run.step,
-                    "tokens": self.run.tokens,
-                },
-                temporary,
-            )
-        return str(path.relative_to(directory))
+        if (
+            self.config.evaluation_snapshot_storage == "auto"
+            and not self.evaluation_memory_disabled
+        ):
+            if self.evaluation_memory is None:
+                size = sum(
+                    value.numel() * value.element_size()
+                    for value in itertools.chain(raw.parameters(), raw.buffers())
+                )
+                self.evaluation_memory = memory_snapshot_directory(size)
+        root = (
+            Path(self.evaluation_memory.name)
+            if self.config.evaluation_snapshot_storage == "auto"
+            and self.evaluation_memory
+            and not self.evaluation_memory_disabled
+            else directory
+        )
+        name = f"step-{self.run.step}-{time.time_ns()}.pt"
+        state = {
+            "model": raw.state_dict(),
+            "step": self.run.step,
+            "tokens": self.run.tokens,
+        }
+        path = root / "evaluation-weights" / name
+
+        def save(target):
+            with atomic_checkpoint_path(target) as temporary:
+                torch.save(state, temporary)
+
+        started = time.monotonic()
+        try:
+            save(path)
+        except OSError as exc:
+            if root == directory or exc.errno not in (errno.ENOSPC, errno.EDQUOT):
+                raise
+            # Do not remove older RAM snapshots: an active worker may read one.
+            self.evaluation_memory_disabled = True
+            path = directory / "evaluation-weights" / name
+            save(path)
+        self.run.emit(
+            "evaluation_snapshot",
+            {
+                "storage": "disk" if path.is_relative_to(directory) else "memory",
+                "seconds": time.monotonic() - started,
+            },
+        )
+        return (
+            str(path.relative_to(directory))
+            if path.is_relative_to(directory)
+            else str(path)
+        )
 
     def _discard_evaluation_snapshot(self, path):
         # Published resumable checkpoints are retained; only private validation
@@ -1526,7 +1733,18 @@ class Trainer:
     def _evaluate(self, checkpoint):
         cfg, run = self.config, self.run
         raw = self.model.module if isinstance(self.model, DDP) else self.model
-        was_training, rng = raw.training, capture_rng()
+        was_training = raw.training
+        # Preserve only the devices this model uses. CPU validation must not
+        # initialize CUDA contexts, and a V100 worker must not touch GPU 0.
+        rng = {"python_rng": random.getstate(), "torch_rng": torch.get_rng_state()}
+        devices = {
+            value.device
+            for value in itertools.chain(raw.parameters(), raw.buffers())
+            if value.device.type == "cuda"
+        }
+        cuda_rng = {device: torch.cuda.get_rng_state(device) for device in devices}
+        numpy = sys.modules.get("numpy")
+        numpy_rng = numpy.random.get_state() if numpy is not None else None
         loader = self.val_loader
         target = (
             loader
@@ -1539,6 +1757,15 @@ class Trainer:
             and callable(getattr(target, "load_state_dict", None))
             else None
         )
+        generators = {}
+        for owner in (
+            loader,
+            getattr(loader, "sampler", None),
+            getattr(getattr(loader, "batch_sampler", None), "sampler", None),
+        ):
+            generator = getattr(owner, "generator", None)
+            if isinstance(generator, torch.Generator):
+                generators[id(generator)] = (generator, generator.get_state())
         raw.eval()
         try:
             with torch.inference_mode(), self._amp():
@@ -1594,8 +1821,14 @@ class Trainer:
         finally:
             if data_state is not None:
                 target.load_state_dict(data_state)
+            for generator, state in generators.values():
+                generator.set_state(state)
             raw.train(was_training)
             restore_rng(rng)
+            for device, state in cuda_rng.items():
+                torch.cuda.set_rng_state(state, device)
+            if numpy_rng is not None:
+                numpy.random.set_state(numpy_rng)
 
     def _samples(self, model, checkpoint):
         cfg = self.config

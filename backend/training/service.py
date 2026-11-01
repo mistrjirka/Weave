@@ -630,9 +630,10 @@ class TrainingService:
                     shutil.copytree(frozen_source / PACKAGE, directory / PACKAGE)
                     # The upgraded trainer imports this new helper even when
                     # keeping the model/runtime from an older frozen run.
-                    (directory / PACKAGE / "performance.py").write_text(
-                        rewrite_imports((HERE / "performance.py").read_text(), ".")
-                    )
+                    for helper in ("performance.py", "evaluation_worker.py"):
+                        (directory / PACKAGE / helper).write_text(
+                            rewrite_imports((HERE / helper).read_text(), ".")
+                        )
                     (directory / PACKAGE / "weave_training.py").write_text(
                         (HERE / "weave_training.py").read_text()
                     )

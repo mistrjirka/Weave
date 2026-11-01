@@ -27,6 +27,7 @@ MANAGED_MODULES = {
     "tuning_runtime",
     "preparation",
     "performance",
+    "evaluation_worker",
 }
 
 
@@ -169,6 +170,7 @@ def write_helpers(package):
         "tuning_runtime.py",
         "preparation.py",
         "performance.py",
+        "evaluation_worker.py",
     ):
         source = rewrite_imports((HERE / name).read_text(), ".")
         target = package / name

@@ -31,6 +31,7 @@ config = TrainingConfig(
     checkpoint_every=250,
     eval_every=50,
     async_evaluation=False,  # True: evaluate checkpoints in a separate process.
+    reuse_evaluation_worker=True,  # Keep model/tokenizer warm; False for stateful custom hooks.
     evaluation_device="cpu",  # "cpu" or a GPU index, e.g. 1.
     sample_prompts=[],
 )

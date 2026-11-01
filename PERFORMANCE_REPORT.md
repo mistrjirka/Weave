@@ -345,3 +345,66 @@ production evaluator, which still launches one process per pass.
 The prototype and import profile are in the ignored local directory
 `data/performance-serius/validation-startup/`. Model weights, the training script
 and the frozen run were not changed by these measurements.
+
+## Production reusable evaluation and DDP contention
+
+The reusable worker is now implemented in Weave's portable Trainer. New starter
+scripts enable it with `reuse_evaluation_worker=True`; direct TrainingConfig
+construction keeps False for backward compatibility. It retains model,
+tokenizer, repeatable loader, CUDA context and allocator per run/device. Every
+job strictly reloads immutable weights, opens its own reporting scope and AMP
+context, and resets supported loader/sampler and RNG state. Device changes
+replace the worker; stop/failure closes it. One-shot iterators and persistent
+DataLoader workers fall back to fresh processes. Custom hook globals or custom
+RNGs may require explicitly disabling reuse.
+
+CPU evaluation no longer initializes CUDA RNG contexts, and GPU evaluation only
+preserves RNG on model devices. A real V100 worker test verified checkpoints
+4,121 → 4,000 → 4,121, with losses 3.439360 → 3.445572 → 3.439360. One worker PID
+served all three requests. Only the V100 appeared in that process's GPU memory
+record (2,696 MiB including its CUDA context). Complete warm jobs took 6.35 and
+5.90 seconds on the idle V100, including generated samples, weight loading and
+reporting; the initial cold job took 37.04 seconds.
+
+A separate isolated benchmark measured concurrent validation while training
+Serius with DDP on both GPUs. It used FP16 AMP, compiled model, fused AdamW,
+8,192-token logit chunks, two accumulation microbatches and 16,384 nominal tokens
+per microbatch per rank. Training CPU threads were fixed at four per rank.
+Real cached bucket windows were reused for controlled timing; no user training
+weights were modified. Each shape ran baseline / validation / baseline /
+validation blocks of 50 optimizer updates, with one full 20-batch validation job
+in each validation block. The same warm worker served every job.
+
+| Training sequence | Baseline tokens/s | Tokens/s with one validation per 100 updates | Throughput reduction |
+| --- | ---: | ---: | ---: |
+| 1,023 | 104,607 | 96,020 | 8.2% |
+| 8,191 | 41,242 | 39,320 | 4.7% |
+
+The cadence column combines each paired 50-update baseline and validation block
+into a 100-update window with one validation pass; its no-validation reference
+uses the repeated baseline measurements. The long-context baseline varied
+between 77.7 and 81.2 seconds per 50 updates, so these are approximate costs, not
+universal speed guarantees for arbitrary model/data shapes. Shared-GPU worker
+jobs took about 10.9–11.8 seconds after warmup. Compilation/worker startup and
+training-side snapshot creation were excluded from the throughput table.
+
+Temporary validation snapshots now automatically use sufficiently large Linux
+`/dev/shm`, falling back to disk elsewhere or on insufficient space. Two trials
+writing the actual 196.7 MB model snapshot from GPU 0 took 2.40/1.86 seconds on
+disk, versus 0.227/0.224 seconds in RAM. Explicit `evaluation_snapshot_storage="disk"`
+remains available. Normal periodic, pause and user checkpoints remain durable
+on disk. Tests cover RAM becoming full without deleting an active worker's
+previous snapshot, low-space fallback, and switching back to explicit disk.
+
+The speedup primarily removes repeated validation startup; that startup already
+overlapped training, so it does not multiply training throughput. Sharing the
+V100 still consumes GPU compute, accounting for the remaining 5–8% approximate
+cost in these controlled windows. RAM snapshots remove most of the separate
+training-side snapshot pause.
+
+Serius's existing script was backed up, and only the reuse configuration was
+added. Training resumed from update 4,121 as run
+`run-1b4d9a9a8eb54e129b8865ef57aa3c87`, retaining its optimizer, scheduler, scaler,
+data cursor, WSD recipe and both DDP GPUs. Validation remains asynchronous on
+V100 GPU 1, every 100 updates, with 20 batches. Raw measurements and isolated
+probes are under `data/performance-serius/validation-reuse/` (ignored).

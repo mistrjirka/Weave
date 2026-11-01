@@ -44,6 +44,8 @@ EXCLUDED_CODE_FOLDERS = {
 # The release before live controls has the same optimizer, scheduler and loader
 # checkpoint contract. Other unknown trainer revisions retain strict resume checks.
 VALIDATION_UPGRADE_FROM = {
+    # CPU-default trainer; persistent evaluation changes no training state.
+    "3362649f89aa8e64da731c2f4e3e443a5a195f1a41a22320527e81bec8aa690a",
     # CPU-thread default only; checkpoint state and explicit limits are unchanged.
     "433c891acb4840ca17116c684c765672ee2a9c0841fac82e98c2b1cb99f53da9",
     # Pre-performance trainer: same optimizer, scheduler and loader state format.

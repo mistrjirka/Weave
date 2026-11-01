@@ -67,6 +67,8 @@ config = TrainingConfig(
 | `eval_batches`, `sample_prompts`, `generation_tokens` | Validation budget and optional qualitative samples. |
 | `generation_context_length` | Optional context crop for generated samples only. It does not set training sequence lengths. |
 | `async_evaluation`, `evaluation_device` | Background validation on CPU or a selected GPU. The GUI can explicitly override these for a launch. |
+| `reuse_evaluation_worker` | Keep an asynchronous evaluator warm between checkpoints. New templates enable this; set False for custom hooks that require a fresh process. |
+| `evaluation_snapshot_storage` | `"auto"` uses RAM-backed temporary validation weights when sufficient Linux tmpfs space is available, otherwise disk. `"disk"` forces disk. Resume checkpoints always remain on disk. |
 | `evaluation_only` | Read-only: true inside a background evaluator. A data hook can return `(None, val_loader)`. |
 | `data_fingerprint`, `trace_batches` | Source stat/SHA256 provenance and optional consumed-batch tracing. |
 | `find_unused_parameters` | Optional DDP override, useful for some routed/conditional graphs. |
@@ -333,3 +335,41 @@ preparation_barrier()
 ```
 
 Every rank must call this helper in the same order. The Trainer also waits on this CPU group after all loader hooks finish, before starting training collectives. `TrainingConfig(preparation_timeout_seconds=86400)` controls the preparation timeout (24 hours by default). Normal training collective timeouts remain unchanged. Calling `torch.distributed.barrier()` directly in a data hook still uses the default training group and can time out during a long preparation job.
+
+
+### Reusing asynchronous validation workers
+
+The reuse mechanism belongs to Weave's `Trainer`, rather than dataset- or
+model-specific template code. A new stage template sets
+`reuse_evaluation_worker=True`; a direct `TrainingConfig()` retains the
+backward-compatible default of False. Existing stages opt in by adding the
+same keyword in their Python configuration.
+
+Each run owns a separate evaluator process for its selected device. Model,
+tokenizer, loader, CUDA context and allocator remain available between passes.
+Every job still loads a new immutable checkpoint with strict tensor checking,
+opens a fresh AMP context, and records its own checkpoint step, metrics,
+provenance and generated samples. Validation logs identify the worker PID,
+whether it was reused, checkpoint loading time and evaluation time.
+
+The trainer restores Python, PyTorch, already-imported NumPy RNG state, and
+explicit generators on the validation loader/sampler. It also restores loader
+or dataset state when state_dict/load_state_dict are available. CPU validation
+does not initialize CUDA RNG state; GPU validation preserves RNG state only on
+devices used by the evaluated model. A device change replaces the worker after
+its current job. Stopping training cancels evaluation and releases the worker.
+
+One-shot iterators and DataLoaders with persistent data workers automatically
+use a fresh process instead, because their internal sampling state cannot be
+reset safely in general. Arbitrary custom hook globals, external streams,
+custom generator objects or non-persistent model buffers are not universally
+resettable: set `reuse_evaluation_worker=False` when their behavior requires
+fresh initialization. Reuse does not prescribe data formats, sequence lengths,
+loss functions, model architecture or augmentation APIs.
+
+Temporary validation weights use `/dev/shm` only when three copies plus a
+safety margin fit (active, pending and replacement). They fall back to the run
+folder if tmpfs is unavailable or becomes full. Normal completed/cancelled
+jobs remove private weights, and worker shutdown removes the temporary folder.
+This RAM storage is temporary; periodic checkpoints, pause checkpoints and
+user snapshots retain their existing durable disk storage.
