@@ -177,5 +177,29 @@ improved from 3.60 at update 2,900 to 3.46 at update 3,600. These observations
 do not show a scheduler failure or recent divergence.
 
 Raw local measurements, logs and the full LR/loss figure are in the ignored
-`data/performance-serius/` directory. The original run is stopped at update
+`data/performance-serius/` directory. The original run was stopped at update
 3,653; experiments do not modify its checkpoint, data cache or frozen script.
+
+## Fresh WSD training run
+
+After the RoPE investigation, the user requested training again from random
+initialization with warmup–stable–decay (WSD). Serius's editable `train.py` now
+uses 1,000 warm-up updates to LR 0.0003, holds that rate through update 36,610,
+and linearly decays over the final 9,153 updates to 0.00003 at update 45,763.
+Fused AdamW, compilation, chunked loss, DDP on both GPUs, and the same token
+cache are retained. Validation every 100 updates preserves the previous run's
+live cadence. The earlier script was backed up before editing; previous runs
+and checkpoints remain available.
+
+WSD is supported by [MiniCPM](https://arxiv.org/abs/2404.06395). The peak is a
+conservative starting choice informed by the 0.0003 AdamW pretraining recipe
+for four-pass LoopLM in
+[Closing the Loop](https://arxiv.org/html/2610.00673v1), rather than a measured
+optimum for this smaller model. That paper uses a cosine schedule; this run
+combines its LR reference with the separately researched WSD schedule.
+SmolLM2-135M's published LR of 0.003 and MiniCPM's larger rates are not directly
+transferred across different batches, architectures and parameterizations.
+
+New Weave starter scripts also default to WSD, with proportional 2% warmup
+and 20% final linear decay. These are editable Python constants. Existing user
+scripts are not automatically converted.

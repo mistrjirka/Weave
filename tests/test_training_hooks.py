@@ -443,7 +443,7 @@ def test_unchanged_event_poll_does_not_write_index(tmp_path):
         assert observer.execute("PRAGMA data_version").fetchone() == version
 
 
-def test_epoch_limits_partial_accumulation_cosine_and_resume(tmp_path):
+def test_epoch_limits_partial_accumulation_wsd_and_resume(tmp_path):
     script = filled_starter(
         tmp_path / "rows.jsonl",
         micro_batch_size=16,
@@ -510,7 +510,7 @@ def test_epoch_limits_partial_accumulation_cosine_and_resume(tmp_path):
     assert actual["rank_state"][0]["batches_processed"] == 12
 
 
-def test_unsized_epoch_loader_requires_duration_for_default_cosine(tmp_path):
+def test_unsized_epoch_loader_requires_duration_for_default_wsd(tmp_path):
     script = filled_starter(
         tmp_path / "rows.jsonl", max_epochs=2, max_optimizer_steps=None
     )
@@ -524,9 +524,7 @@ def test_unsized_epoch_loader_requires_duration_for_default_cosine(tmp_path):
         timeout=120,
     )
     assert result.returncode != 0
-    assert (
-        "Cosine decay needs len(train_loader) or max_optimizer_steps" in result.stderr
-    )
+    assert "WSD needs len(train_loader) or max_optimizer_steps" in result.stderr
     assert not list(directory.glob("checkpoints/*.pt"))
 
 
@@ -536,7 +534,75 @@ def test_fresh_starter_has_no_project_data_or_sequence_policy():
     assert "sequence_length" not in source and "no_decay" not in source
     assert "Add your data loaders here." in source
     assert "max_epochs=3" in source and "max_optimizer_steps=None" in source
-    assert "min_learning_rate=" in source and "CosineAnnealingLR" in source
+    assert "min_learning_rate=" in source and "WSD_DECAY_FRACTION = 0.20" in source
+    assert "WARMUP_FRACTION = 0.02" in source and "LambdaLR" in source
+
+
+@pytest.mark.parametrize("total", [1, 2, 100, 45763])
+def test_starter_wsd_applied_rates_phases_and_resume(total):
+    import ast
+    import copy
+    import math
+    from types import SimpleNamespace
+
+    # Execute the actual template's scheduler without its generated model imports.
+    source = ast.parse(starter_script())
+    definitions = [
+        node
+        for node in source.body
+        if (isinstance(node, ast.FunctionDef) and node.name == "configure_scheduler")
+        or (
+            isinstance(node, ast.Assign)
+            and any(
+                isinstance(target, ast.Name)
+                and target.id in {"WARMUP_FRACTION", "WSD_DECAY_FRACTION"}
+                for target in node.targets
+            )
+        )
+    ]
+    namespace = {"torch": torch, "math": math, "TrainingConfig": SimpleNamespace}
+    exec(
+        compile(ast.Module(body=definitions, type_ignores=[]), "starter", "exec"),
+        namespace,
+    )
+    config = SimpleNamespace(
+        learning_rate=0.001, min_learning_rate=0.0001, total_optimizer_steps=total
+    )
+
+    def setup():
+        optimizer = torch.optim.AdamW([torch.nn.Parameter(torch.zeros(1))], lr=0.001)
+        return optimizer, namespace["configure_scheduler"](optimizer, config)
+
+    optimizer, scheduler = setup()
+    factor = scheduler.lr_lambdas[0]
+    planned = [0.001 * factor(index) for index in range(total)]
+    assert all(math.isfinite(rate) and 0 < rate <= 0.001 for rate in planned)
+    assert planned[-1] == pytest.approx(0.0001)
+    assert factor(total + 10) == pytest.approx(0.1)
+    if total == 100:
+        assert planned[0] == pytest.approx(0.0005)
+        assert planned[1:80] == [0.001] * 79
+        assert planned[80] == pytest.approx(0.000955)
+        assert all(left >= right for left, right in zip(planned[79:], planned[80:]))
+
+    split = min(total - 1, 90)
+    for index in range(split):
+        assert optimizer.param_groups[0]["lr"] == pytest.approx(planned[index])
+        optimizer.step()
+        scheduler.step()
+    state = copy.deepcopy((optimizer.state_dict(), scheduler.state_dict()))
+    restored_optimizer, restored_scheduler = setup()
+    restored_optimizer.load_state_dict(state[0])
+    restored_scheduler.load_state_dict(state[1])
+    for index in range(split, min(total, split + 12)):
+        assert optimizer.param_groups[0]["lr"] == pytest.approx(planned[index])
+        assert (
+            restored_optimizer.param_groups[0]["lr"] == optimizer.param_groups[0]["lr"]
+        )
+        optimizer.step()
+        scheduler.step()
+        restored_optimizer.step()
+        restored_scheduler.step()
 
 
 def test_unsized_finite_loader_can_train_by_epochs_without_step_budget(tmp_path):

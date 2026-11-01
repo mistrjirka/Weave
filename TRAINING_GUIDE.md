@@ -74,7 +74,9 @@ config = TrainingConfig(
 | `fused_optimizer` | Opt-in CUDA AdamW execution; preserves optimizer groups and restored state. Rejects CPU/custom optimizers rather than silently replacing them. |
 | `profile_steps` | `0` disables profiling; `1`–`100` captures a bounded CPU/CUDA trace after two warm-up updates. Each rank writes `profiles/rank-N.json`. |
 
-An unsized stream can end an epoch at StopIteration. The starter's cosine scheduler still needs `len(train_loader)` or an explicit optimizer-update budget. A finite stream must be repeatable for multiple epochs. A random sampler run for a token budget does not guarantee each document is visited once.
+An unsized stream can end an epoch at StopIteration. The starter's WSD scheduler still needs `len(train_loader)` or an explicit optimizer-update budget. A finite stream must be repeatable for multiple epochs. A random sampler run for a token budget does not guarantee each document is visited once.
+
+New scripts use warmup–stable–decay (WSD): linear warmup over the first 2% of optimizer updates, a constant `learning_rate` plateau, then linear decay to `min_learning_rate` over the final 20%. Edit `WARMUP_FRACTION`, `WSD_DECAY_FRACTION`, or `configure_scheduler` directly in `train.py`. Very short budgets may not have enough updates for every phase. WSD comes from the [MiniCPM training work](https://arxiv.org/abs/2404.06395); this default is a starting recipe, not an optimal schedule for every architecture. Existing scripts are not rewritten when the template changes.
 
 In **Launch settings → Training device settings**, choose **Use train.py settings** (the default) or **Use GUI overrides**. An override selects single-device, DDP, or split training, devices, precision, and optional block placement. It applies before worker startup and data hooks, and is saved in the run's `weave_support/launch.json`; your Python source is unchanged. Batch sizes and schedules remain owned by your script/data loader. Split training currently requires FP32 and either complete manual placement or a matching saved tuning profile. Validation execution is independent: select **Asynchronous** and **CPU** to keep validation off the training GPUs. Your data hook still needs to return a validation loader. These settings affect new launches, not running jobs. Exact resume still requires a compatible training configuration; use a new stage from weights when changing the training topology.
 
@@ -108,7 +110,7 @@ def training_step(model, batch, device):
 
 Labels here are already shifted by the loader: input `[a,b,c]` predicts `[b,c,d]`. Shift once. `-100` excludes padding or other untrained positions from cross-entropy. `weight=count` lets Trainer combine mean losses correctly when batches have different numbers of supervised tokens, including across ranks. A scalar loss or `(loss, metrics)` is also supported, with equal microbatch weights. Adapt this hook for another objective or model signature.
 
-Trainer calls backward, scales gradients, accumulates, clips, updates and reports. Do not repeat backward/optimizer.step in this hook. Optional `evaluation_step_fn` defaults to the loss hook under inference mode. `samples_fn(model, tokenizer, config, device)` can yield dictionaries containing `prompt`, `output`, and optional `metadata` for custom generation. Optimizer and scheduler hooks remain plain PyTorch functions; keeping AdamW and a short cosine/warmup function in your recipe is often clearer than a large configuration framework.
+Trainer calls backward, scales gradients, accumulates, clips, updates and reports. Do not repeat backward/optimizer.step in this hook. Optional `evaluation_step_fn` defaults to the loss hook under inference mode. `samples_fn(model, tokenizer, config, device)` can yield dictionaries containing `prompt`, `output`, and optional `metadata` for custom generation. Optimizer and scheduler hooks remain plain PyTorch functions; keeping AdamW and a short WSD or cosine function in your recipe is often clearer than a large configuration framework.
 
 ### Reading loss and learning-rate curves
 
@@ -116,7 +118,7 @@ An optimizer update completes the configured gradient accumulation. The learning
 
 `log_every=10` records the loss of every tenth optimizer update, weighted over that update's microbatches and ranks. It does not average all ten updates between log points. Variable sequence lengths and sampled documents can therefore produce a noisy training-loss curve even when validation loss is improving. Compare held-out validation on the same data, and inspect batch/context metadata before interpreting a jump as instability.
 
-A cosine schedule declines slowly just after warmup. Judge its progress against the resolved `total_optimizer_steps`, rather than wall-clock time: at 8% of a long run, the learning rate can still be close to its peak. This is expected behavior, not evidence that the scheduler failed.
+WSD deliberately holds LR constant after warmup, so a flat middle section is expected. Older cosine recipes decline slowly just after warmup. Judge either schedule against the resolved `total_optimizer_steps`, rather than wall-clock time: at 8% of a long run, the learning rate can still be close to its peak. This is expected behavior, not evidence that the scheduler failed.
 
 ### Execution performance and memory-saving token loss
 
