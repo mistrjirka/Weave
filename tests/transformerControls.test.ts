@@ -400,6 +400,35 @@ test("editing an outer setting preserves intentional inner boolean, enum and num
   assert.equal(attention.params.backend, "auto");
 });
 
+for (const [key, fallback] of Object.entries({
+  causal: true,
+  rope: true,
+  qk_norm: false,
+  gated: false,
+  qkv_bias: false,
+  output_bias: false,
+  conv_respects_window: false,
+})) {
+  test(`omitted inner ${key} shows its effective default and wrapper edits bind it`, () => {
+    const data = structuredClone(template).graph.nodes.find(
+      (node) => node.data.kind === "loop",
+    )!.data;
+    const attention = data.body!.nodes.find(
+      (node) => node.data.kind === "attention",
+    )!.data;
+    data.params[key] = !fallback;
+    delete attention.params[key];
+    assert.equal(transformerSettings(data)?.[key], fallback);
+    setTransformerSetting(data, key, !fallback);
+    assert.equal(transformerSettings(data)?.[key], !fallback);
+    assert.equal(attention.params[key], `$${key}`);
+    setTransformerSetting(data, key, fallback);
+    assert.equal(transformerSettings(data)?.[key], fallback);
+    assert.equal(data.params[key], fallback);
+    assert.equal(attention.params[key], `$${key}`);
+  });
+}
+
 test("loop and inner transformer edit one attention owner in both directions", () => {
   const data = structuredClone(template).graph.nodes.find(
     (node) => node.data.kind === "loop",
@@ -494,7 +523,10 @@ test("attention output gate and residual type are independent choices", () => {
   assert.equal(transformerResidual(data), "add");
   setTransformerResidual(data, "gate");
   assert.equal(transformerResidual(data), "gate");
-  assert.equal(data.body!.nodes.find((node) => node.id === "attn")!.data.params.gated, false);
+  assert.equal(
+    data.body!.nodes.find((node) => node.id === "attn")!.data.params.gated,
+    false,
+  );
   residual.data.share = "residual_gate";
   setTransformerResidual(data, "gate");
   assert.equal(residual.data.share, "residual_gate");

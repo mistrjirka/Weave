@@ -32,7 +32,8 @@ class AttentionPattern:
             t=self.tensor
             qi=q.clamp(0,t.shape[-2]-1);ki=k.clamp(0,t.shape[-1]-1)
             result=t[qi,ki] if t.ndim==2 else t[b%t.shape[0],h%t.shape[1],qi,ki]
-            return result&(q<t.shape[-2])&(k<t.shape[-1])
+            result=result&(q<t.shape[-2])&(k<t.shape[-1])
+            return result&(k<=q) if p.get('causal',False) else result
         if kind=='union':return self.children[0].predicate(b,h,q,k)|self.children[1].predicate(b,h,q,k)
         if kind=='intersection':return self.children[0].predicate(b,h,q,k)&self.children[1].predicate(b,h,q,k)
         if kind=='full':result=torch.ones_like(q+k,dtype=torch.bool)

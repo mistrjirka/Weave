@@ -29,6 +29,15 @@ const defaults: Parameters = {
   conv_taps: 0,
   theta: 10000,
 };
+const attentionBooleanDefaults = {
+  causal: true,
+  rope: true,
+  qk_norm: false,
+  gated: false,
+  qkv_bias: false,
+  output_bias: false,
+  conv_respects_window: false,
+} as const;
 export const transformerSettingKeys = new Set([
   ...Object.keys(defaults),
   "head_dim",
@@ -256,6 +265,10 @@ export function transformerSettings(data: NodeData): Parameters | null {
   const attention = transformerAttention(data);
   if (!attention) return null;
   const settings: Parameters = { ...defaults, ...data.params };
+  // An outer value has no effect unless the inner operation binds to it.
+  // For omitted fields, show the defaults used by the attention operation.
+  for (const [key, fallback] of Object.entries(attentionBooleanDefaults))
+    if (attention.data.params[key] === undefined) settings[key] = fallback;
   // Read what the operation actually uses. An inner literal is an intentional
   // override, not a stale copy of an outer control.
   for (const key of transformerSettingKeys) {
