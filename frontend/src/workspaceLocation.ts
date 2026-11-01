@@ -1,5 +1,13 @@
 /** Shareable view state. Graph documents stay in saved projects/local recovery. */
 export type WorkspaceTab = "graph" | "code" | "sources" | "training";
+export type WorkspacePanel = "library" | "properties" | null;
+
+export function compatiblePanel(
+  tab: WorkspaceTab,
+  panel: WorkspacePanel,
+): WorkspacePanel {
+  return tab === "training" && panel === "properties" ? null : panel;
+}
 export interface ReferenceLocation {
   blocks: string[];
   node: string | null;
@@ -10,7 +18,7 @@ export interface WorkspaceLocation {
   node: string | null;
   tab: WorkspaceTab;
   library: "blocks" | "models";
-  panel: "library" | "properties" | null;
+  panel: WorkspacePanel;
   split: boolean;
   reference: string | null;
   referenceLocation: ReferenceLocation;
@@ -40,16 +48,20 @@ export function readWorkspaceLocation(search: string): WorkspaceLocation {
     reference = params.get("reference");
   const workspace = params.get("workspace");
   const ratio = Number(params.get("ratio") || 50);
+  const tab =
+    view === "code" || view === "sources" || view === "training"
+      ? view
+      : "graph";
   return {
     model: params.get("model") || null,
     blocks: params.getAll("block"),
     node: params.get("node") || null,
-    tab:
-      view === "code" || view === "sources" || view === "training"
-        ? view
-        : "graph",
+    tab,
     library: params.get("library") === "models" ? "models" : "blocks",
-    panel: panel === "library" || panel === "properties" ? panel : null,
+    panel: compatiblePanel(
+      tab,
+      panel === "library" || panel === "properties" ? panel : null,
+    ),
     split: params.get("split") === "1",
     reference:
       reference && /^(example|saved):.+$/.test(reference) ? reference : null,
@@ -82,7 +94,7 @@ export function workspaceURL(href: string, state: WorkspaceLocation): string {
   set("node", state.node);
   if (state.tab !== "graph") set("view", state.tab);
   if (state.library !== "blocks") set("library", state.library);
-  set("panel", state.panel);
+  set("panel", compatiblePanel(state.tab, state.panel));
   set("workspace", state.workspace);
   if (state.workspace === "new") set("starter", state.starter);
   if (state.split) {

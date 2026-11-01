@@ -174,8 +174,12 @@ import type {
   ProjectTab,
   SavedProject,
 } from "./projectWorkflow";
-import { readWorkspaceLocation, workspaceURL } from "./workspaceLocation";
-import type { ReferenceLocation } from "./workspaceLocation";
+import {
+  readWorkspaceLocation,
+  workspaceURL,
+  compatiblePanel,
+} from "./workspaceLocation";
+import type { ReferenceLocation, WorkspacePanel } from "./workspaceLocation";
 import { catalog } from "./catalog";
 import {
   allNodes,
@@ -1251,9 +1255,13 @@ function Workbench({
     [future, setFuture] = useState<Project[]>([]),
     [customBlocks, setCustomBlocks] = useState<NodeData[]>([]),
     [checksOpen, setChecksOpen] = useState(false);
-  const [mobilePanel, setMobilePanel] = useState<string | null>(
+  const [mobilePanel, setMobilePanel] = useState<WorkspacePanel>(
     initialLocation.panel,
   );
+  const visibleMobilePanel = compatiblePanel(tab, mobilePanel);
+  useEffect(() => {
+    setMobilePanel((current) => compatiblePanel(tab, current));
+  }, [tab]);
   const sidebarMenuButton = useRef<HTMLButtonElement>(null);
   const [splitView, setSplitView] = useState(initialLocation.split);
   const [splitRatio, setSplitRatio] = useState(initialLocation.ratio);
@@ -2534,7 +2542,7 @@ function Workbench({
       <a className="skip-link" href="#workspace">
         Skip to editor
       </a>
-      {mobilePanel && (
+      {visibleMobilePanel && (
         <button
           className="drawer-backdrop"
           aria-label="Close side panel"

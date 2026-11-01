@@ -91,3 +91,21 @@ test("training view and run links stay with their project", () => {
   assert.equal(other.searchParams.get("run"), null);
   assert.equal(other.searchParams.get("stage"), null);
 });
+
+test("training links discard an unavailable properties drawer but retain the sidebar", () => {
+  assert.equal(
+    readWorkspaceLocation("?view=training&panel=properties").panel,
+    null,
+  );
+  assert.equal(
+    readWorkspaceLocation("?view=training&panel=library").panel,
+    "library",
+  );
+  const state = readWorkspaceLocation("?panel=properties&node=ids");
+  state.tab = "training";
+  const url = new URL(
+    workspaceURL("http://localhost/?panel=properties", state),
+  );
+  assert.equal(url.searchParams.get("panel"), null);
+  assert.equal(url.searchParams.get("node"), "ids");
+});
