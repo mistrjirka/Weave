@@ -110,6 +110,14 @@ Labels here are already shifted by the loader: input `[a,b,c]` predicts `[b,c,d]
 
 Trainer calls backward, scales gradients, accumulates, clips, updates and reports. Do not repeat backward/optimizer.step in this hook. Optional `evaluation_step_fn` defaults to the loss hook under inference mode. `samples_fn(model, tokenizer, config, device)` can yield dictionaries containing `prompt`, `output`, and optional `metadata` for custom generation. Optimizer and scheduler hooks remain plain PyTorch functions; keeping AdamW and a short cosine/warmup function in your recipe is often clearer than a large configuration framework.
 
+### Reading loss and learning-rate curves
+
+An optimizer update completes the configured gradient accumulation. The learning-rate metric records the rate used for that update; the scheduler advances after a successful optimizer update. An FP16 overflow that skips the update also skips the scheduler step. A resumed checkpoint restores the scheduler counter and optimizer learning rates.
+
+`log_every=10` records the loss of every tenth optimizer update, weighted over that update's microbatches and ranks. It does not average all ten updates between log points. Variable sequence lengths and sampled documents can therefore produce a noisy training-loss curve even when validation loss is improving. Compare held-out validation on the same data, and inspect batch/context metadata before interpreting a jump as instability.
+
+A cosine schedule declines slowly just after warmup. Judge its progress against the resolved `total_optimizer_steps`, rather than wall-clock time: at 8% of a long run, the learning rate can still be close to its peak. This is expected behavior, not evidence that the scheduler failed.
+
 ### Execution performance and memory-saving token loss
 
 The GUI's **Execution and profiling (advanced)** section can override compilation, fused AdamW and profiling for a new launch without rewriting your script. Compilation is lazy: the first forward/backward for each shape can take much longer. Variable-length loaders with a small set of buckets are easier to compile than an unbounded range of shapes. CUDA graphs are attempted by `reduce-overhead` when eligible; they are not guaranteed. Split placement currently requires eager execution. Benchmark steady-state throughput, excluding compilation and profiler capture, before keeping an option enabled.
