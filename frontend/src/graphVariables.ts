@@ -4,6 +4,7 @@ import type { JsonValue, Parameters, Project } from "./types";
 export function graphVariableScope(project: Project, path: string[]) {
   let graph = project.graph;
   let inherited: Record<string, number> = {};
+  let bindings: Parameters = { ...project.config, ...graph.variables };
   let values = { ...project.config, ...graph.variables };
   for (const id of path) {
     const node = graph.nodes.find((node) => node.id === id);
@@ -17,6 +18,11 @@ export function graphVariableScope(project: Project, path: string[]) {
         return typeof effective === "number" ? [[key, effective]] : [];
       }),
     );
+    bindings = {
+      ...bindings,
+      ...previewParameters(node.data.params, bindings),
+      ...node.data.body.variables,
+    };
     inherited = { ...values, ...resolved };
     graph = node.data.body;
     values = { ...inherited, ...graph.variables };
@@ -27,17 +33,18 @@ export function graphVariableScope(project: Project, path: string[]) {
       ? { ...graph.variables }
       : { ...project.config, ...graph.variables },
     effective: values,
+    bindings,
   };
 }
 
 export function bindingValue(
   value: string,
   variables: Parameters,
-): number | undefined {
+): JsonValue | undefined {
   if (value === "$sqrt_width" && typeof variables.width === "number")
     return Math.sqrt(variables.width);
   const resolved = variables[value.slice(1)];
-  return typeof resolved === "number" ? resolved : undefined;
+  return resolved;
 }
 
 /** Resolve numeric bindings for diagrams without changing the editable document. */

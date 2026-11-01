@@ -1,4 +1,13 @@
 import {
+  inputSettingOwnership,
+  containerParameterShadowReason,
+} from "./settingOwnership";
+import {
+  tokenizerOwnsVocabulary,
+  vocabularyField,
+  automaticVocabulary,
+} from "./tokenizerVocabulary";
+import {
   outputPorts,
   portLabel,
   edgeContract,
@@ -104,6 +113,7 @@ import {
   transformerSettingKeys,
   exposeTransformerSettings,
   wrapLoopTransformer,
+  wrappedTransformer,
   setTransformerSetting,
   setAttentionVariant,
 } from "./transformerControls";
@@ -818,9 +828,13 @@ function Field<T extends JsonValue>({
   disabledReason,
   help,
   options,
+  variables,
+  displayName,
 }: {
   name: string;
   options?: string[];
+  variables?: Parameters;
+  displayName?: string;
   value: T;
   onChange: (value: T) => void;
   disabledReason?: string;
@@ -838,7 +852,7 @@ function Field<T extends JsonValue>({
       typeof value === "object" ? JSON.stringify(value) : String(value ?? ""),
     );
   }, [value]);
-  const label = name.replaceAll("_", " ");
+  const label = displayName ?? name.replaceAll("_", " ");
   const helpId = `${errorId}-explanation`;
   const heading = (
     <span className="setting-heading">
@@ -863,6 +877,39 @@ function Field<T extends JsonValue>({
         {help}
       </p>
     ) : null;
+  const inheritedValue =
+    typeof value === "string" && value.startsWith("$")
+      ? bindingValue(value, variables ?? {})
+      : undefined;
+  if (inheritedValue !== undefined && typeof inheritedValue !== "number")
+    return (
+      <div className="property-field">
+        {heading}
+        <div className="stat-row">
+          <code>{String(value)}</code>
+          <b>
+            {typeof inheritedValue === "object"
+              ? JSON.stringify(inheritedValue)
+              : String(inheritedValue)}
+          </b>
+        </div>
+        <small className="field-help">
+          Linked to the enclosing parameter. Change it there, or set an
+          independent value here.
+        </small>
+        <button
+          className="small-button"
+          disabled={!!disabledReason}
+          onClick={() => onChange(inheritedValue as T)}
+        >
+          Set independently
+        </button>
+        {disabledReason && (
+          <small className="field-help">{disabledReason}</small>
+        )}
+        {explanation}
+      </div>
+    );
   if (typeof value === "boolean")
     return (
       <div className="setting-boolean">
@@ -1528,7 +1575,7 @@ function Workbench({
         report,
         prefix,
         groups: sharedGroups,
-        variables: graphVariableScope(project, path).effective,
+        variables: graphVariableScope(project, path).bindings,
         selection,
         onOpen: open,
       }),
@@ -1546,6 +1593,13 @@ function Workbench({
       : undefined;
   const inputTokenizer = tokenizerInput?.data.tokenizer;
   const variableScope = graphVariableScope(project, path);
+  const hiddenVariables = tokenizerOwnsVocabulary(
+    project,
+    path,
+    report?.tokenizers,
+  )
+    ? ["vocab"]
+    : [];
   const updateGraphVariables = (values: Record<string, number>) =>
     change((p) => {
       if (path.length) graphAt(p, path).variables = values;
@@ -1557,7 +1611,13 @@ function Workbench({
   const selectedTokenizer = selected
     ? (report?.tokenizers?.[prefix + selected.id] ?? selected.data.tokenizer)
     : undefined;
-  const fieldVariables = { ...variableScope.effective };
+  const selectedVocabField = selected
+    ? vocabularyField(selected.data)
+    : undefined;
+  const selectedAutoVocab = selected
+    ? automaticVocabulary(selected.data, selectedTokenizer)
+    : false;
+  const fieldVariables = { ...variableScope.bindings };
   if (selectedTokenizer) {
     fieldVariables.vocab = selectedTokenizer.capacity;
     if (selectedTokenizer.mask_id != null)
@@ -3353,6 +3413,7 @@ function Workbench({
                           <GraphVariableCard
                             values={variableScope.own}
                             inherited={variableScope.inherited}
+                            hiddenNames={hiddenVariables}
                             nested={path.length > 0}
                             onChange={updateGraphVariables}
                             onOpen={() => setModal("variables")}
@@ -3851,11 +3912,75 @@ function Workbench({
                           </p>
                         </section>
                       )}
+                    {selectedTokenizer && selectedVocabField && (
+                      <section
+                        className="property-field"
+                        aria-label="Tokenizer vocabulary capacity"
+                      >
+                        {selectedAutoVocab && (
+                          <>
+                            <div className="stat-row">
+                              <span>Vocabulary capacity</span>
+                              <b>
+                                {selectedTokenizer.capacity.toLocaleString()}
+                              </b>
+                            </div>
+                            <small className="field-help">
+                              Automatic from the connected input tokenizer.
+                            </small>
+                          </>
+                        )}
+                        <button
+                          className="small-button"
+                          onClick={() =>
+                            updateNode((node) => {
+                              node.data.params[selectedVocabField] =
+                                selectedAutoVocab
+                                  ? selectedTokenizer.capacity
+                                  : "$vocab";
+                            })
+                          }
+                        >
+                          {selectedAutoVocab
+                            ? "Set capacity manually"
+                            : "Use input tokenizer capacity"}
+                        </button>
+                      </section>
+                    )}
+                    {transformer && wrappedTransformer(selected.data) && (
+                      <p className="field-help">
+                        These controls edit the{" "}
+                        {wrappedTransformer(selected.data)?.data.label} inside
+                        this loop. Opening that block shows the same settings.
+                      </p>
+                    )}
+                    {!transformer &&
+                      selected.data.body &&
+                      (Object.keys(selected.data.params).some((key) =>
+                        transformerSettingKeys.has(key),
+                      ) ||
+                        selected.data.body.nodes.filter(
+                          (node) => node.data.role === "transformer",
+                        ).length > 1) && (
+                        <p className="field-help">
+                          Configure each inner layer separately. Additional
+                          container parameters affect only fields explicitly
+                          linked with $name.
+                        </p>
+                      )}
                     {transformer && (
                       <label className="property-field">
                         <span>Attention type</span>
                         <select
                           aria-label="Attention type"
+                          disabled={["heads", "kv_heads", "window"].some(
+                            (key) =>
+                              !!containerParameterShadowReason(
+                                wrappedTransformer(selected.data)?.data ??
+                                  selected.data,
+                                key,
+                              ),
+                          )}
                           value={attentionVariant(
                             selected.data,
                             fieldVariables,
@@ -3883,6 +4008,9 @@ function Workbench({
                         <small className="field-help">
                           Changes the editable attention graph inside this
                           container. Other layers are preserved.
+                          {attentionVariant(selected.data, fieldVariables) ===
+                            "sparse" &&
+                            " The local-pattern window belongs to the Local attention window node inside; the additional attention window only adds a further restriction."}
                         </small>
                       </label>
                     )}
@@ -3928,6 +4056,7 @@ function Workbench({
                       .filter(
                         ([k]) =>
                           k !== "source" &&
+                          !(selectedAutoVocab && k === selectedVocabField) &&
                           !(k === "router" && selected.data.kind === "moe") &&
                           !(
                             k === "experts" &&
@@ -3940,95 +4069,132 @@ function Workbench({
                           (!selected.data.iteration ||
                             !["iterations", "shared"].includes(k)),
                       )
-                      .map(([k, v]) => (
-                        <React.Fragment key={k}>
-                          <Field
-                            name={k}
-                            options={
-                              selected.data.kind === "lane_join" && k === "mode"
-                                ? ["stack", "mean", "sum"]
-                                : undefined
-                            }
-                            value={v ?? null}
-                            help={settingHelp(selected.data.kind, k)}
-                            disabledReason={
-                              generalFieldDisabledReason(
-                                selected.data.kind,
-                                k,
-                                selected.data.params,
-                              ) ??
-                              (transformer ||
-                              ["attention", "cross_attention", "rope"].includes(
-                                selected.data.kind,
-                              )
-                                ? attentionFieldDisabledReason(
-                                    k,
-                                    previewParameters(
-                                      transformer ?? selected.data.params,
+                      .map(([k, v]) => {
+                        const inputOwnership = inputSettingOwnership(
+                          selected.data.kind,
+                          path.length,
+                          k,
+                          report?.shapes[prefix + selected.id],
+                        );
+                        return (
+                          <React.Fragment key={k}>
+                            <Field
+                              name={k}
+                              variables={fieldVariables}
+                              displayName={
+                                k === "window" &&
+                                transformer &&
+                                attentionVariant(
+                                  selected.data,
+                                  fieldVariables,
+                                ) === "sparse"
+                                  ? "Additional attention window"
+                                  : undefined
+                              }
+                              options={
+                                selected.data.kind === "lane_join" &&
+                                k === "mode"
+                                  ? ["stack", "mean", "sum"]
+                                  : undefined
+                              }
+                              value={
+                                inputOwnership
+                                  ? inputOwnership.value
+                                  : (v ?? null)
+                              }
+                              help={settingHelp(selected.data.kind, k)}
+                              disabledReason={
+                                inputOwnership?.disabledReason ??
+                                containerParameterShadowReason(
+                                  wrappedTransformer(selected.data)?.data ??
+                                    selected.data,
+                                  k,
+                                ) ??
+                                generalFieldDisabledReason(
+                                  selected.data.kind,
+                                  k,
+                                  selected.data.params,
+                                ) ??
+                                (transformer ||
+                                [
+                                  "attention",
+                                  "cross_attention",
+                                  "rope",
+                                ].includes(selected.data.kind)
+                                  ? attentionFieldDisabledReason(
+                                      k,
+                                      previewParameters(
+                                        transformer ?? selected.data.params,
+                                        fieldVariables,
+                                      ),
+                                      transformer
+                                        ? attentionVariant(
+                                            selected.data,
+                                            fieldVariables,
+                                          )
+                                        : undefined,
+                                    )
+                                  : undefined)
+                              }
+                              onChange={(next) =>
+                                updateNode((n) => {
+                                  if (
+                                    n.data.kind === "moe" &&
+                                    k === "experts"
+                                  ) {
+                                    resizeExperts(n.data, next);
+                                    return;
+                                  }
+                                  if (
+                                    transformer &&
+                                    transformerSettingKeys.has(k)
+                                  ) {
+                                    setTransformerSetting(
+                                      n.data,
+                                      k,
+                                      next,
                                       fieldVariables,
-                                    ),
-                                    transformer
-                                      ? attentionVariant(
-                                          selected.data,
-                                          fieldVariables,
-                                        )
-                                      : undefined,
-                                  )
-                                : undefined)
-                            }
-                            onChange={(next) =>
-                              updateNode((n) => {
-                                if (n.data.kind === "moe" && k === "experts") {
-                                  resizeExperts(n.data, next);
-                                  return;
-                                }
-                                if (
-                                  transformer &&
-                                  transformerSettingKeys.has(k)
-                                ) {
-                                  setTransformerSetting(
-                                    n.data,
-                                    k,
-                                    next,
-                                    fieldVariables,
-                                  );
-                                  return;
-                                }
-                                n.data.params = parametersSchema.parse({
-                                  ...n.data.params,
-                                  [k]: next,
-                                });
-                                if (k === "pattern")
-                                  n.data.params = changePattern(
-                                    n.data.params,
-                                    next,
-                                  );
-                              })
-                            }
-                          />
-                          {k === "width" && (
-                            <p className="field-help">
-                              Model width: the number of features in each token
-                              representation. Connected layers must agree on
-                              this size.
-                            </p>
-                          )}
-                          {k === "hidden" && selected.data.kind === "ffn" && (
-                            <p className="field-help">
-                              Feed-forward hidden width: the intermediate number
-                              of features inside the FFN. The FFN projects back
-                              to the model width afterwards.
-                            </p>
-                          )}
-                          {typeof v === "string" && v.startsWith("$") && (
-                            <p className="binding-resolution field-help">
-                              {v} ={" "}
-                              {bindingValue(v, fieldVariables) ??
-                                "undefined · add it in Graph variables"}
-                            </p>
-                          )}
-                        </React.Fragment>
-                      ))}
+                                    );
+                                    return;
+                                  }
+                                  n.data.params = parametersSchema.parse({
+                                    ...n.data.params,
+                                    [k]: next,
+                                  });
+                                  if (k === "pattern")
+                                    n.data.params = changePattern(
+                                      n.data.params,
+                                      next,
+                                    );
+                                })
+                              }
+                            />
+                            {k === "width" && (
+                              <p className="field-help">
+                                Model width: the number of features in each
+                                token representation. Connected layers must
+                                agree on this size.
+                              </p>
+                            )}
+                            {k === "hidden" && selected.data.kind === "ffn" && (
+                              <p className="field-help">
+                                Feed-forward hidden width: the intermediate
+                                number of features inside the FFN. The FFN
+                                projects back to the model width afterwards.
+                              </p>
+                            )}
+                            {typeof v === "string" && v.startsWith("$") && (
+                              <p className="binding-resolution field-help">
+                                {v} ={" "}
+                                {String(
+                                  bindingValue(v, fieldVariables) ??
+                                    "undefined · add it in Graph variables",
+                                )}
+                              </p>
+                            )}
+                          </React.Fragment>
+                        );
+                      })}
                     {selected.data.kind === "moe" && (
                       <p className="field-help">
                         Open experts to edit their individual graphs. The router
@@ -4477,6 +4643,7 @@ function Workbench({
             <GraphVariables
               values={variableScope.own}
               inherited={variableScope.inherited}
+              hiddenNames={hiddenVariables}
               nested={path.length > 0}
               onChange={updateGraphVariables}
             />
@@ -4485,9 +4652,8 @@ function Workbench({
               <p>
                 Tokenizer for <strong>{tokenizerInput?.data.label}</strong>. Its
                 vocabulary and special tokens follow this input through
-                connected blocks. Embeddings and output heads linked to{" "}
-                <code>$vocab</code> update automatically; numeric overrides stay
-                independent.
+                connected blocks. Embedding and output-head capacities follow
+                the tokenizer automatically; manual overrides stay independent.
               </p>
               <ProjectTokenizerPicker
                 projectId={project.id}

@@ -2,7 +2,10 @@ import { test, expect } from "@playwright/test";
 import type { Page, Locator } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
 import { projectSchema, reportSchema } from "../../frontend/src/api";
+import type { GraphNode } from "../../frontend/src/types";
 import { openExample } from "./helpers";
+const transformerLayer = (loop: GraphNode) =>
+  loop.data.body!.nodes.find((node) => node.data.role === "transformer")!.data;
 const document = async (page: Page) =>
   projectSchema.parse(
     await page.evaluate(() =>
@@ -271,7 +274,7 @@ test("premade looped transformers expose settings and exchange their editable at
   await page.getByRole("button", { name: "Blocks", exact: true }).click();
   await page
     .locator(".library-item")
-    .filter({ hasText: "Premade recurrent transformer" })
+    .filter({ hasText: "Shared transformer layer inside an editable loop" })
     .click();
   const inspector = page.getByRole("complementary", {
     name: "Property inspector",
@@ -291,24 +294,28 @@ test("premade looped transformers expose settings and exchange their editable at
     .selectOption("sparse");
   const project = await document(page);
   const loop = project.graph.nodes.find((node) => node.data.kind === "loop")!;
-  expect(loop.data.params).toMatchObject({
+  expect(loop.data.params).toMatchObject({ iterations: 4, shared: true });
+  expect(transformerLayer(loop).params).toMatchObject({
     heads: 4,
     ffn_width: 48,
-    iterations: 4,
-    shared: true,
     causal: false,
   });
   expect(
-    loop.data.body!.nodes.filter(
+    transformerLayer(loop).body!.nodes.filter(
       (node) => node.data.role === "attention-layout",
     ),
   ).toHaveLength(3);
   expect(
-    loop.data.body!.nodes.find((node) => node.data.kind === "attention")!.data
-      .params,
-  ).toMatchObject({ heads: "$heads", causal: false });
+    transformerLayer(loop).body!.nodes.find(
+      (node) => node.data.kind === "attention",
+    )!.data.params,
+  ).toMatchObject({ heads: "$heads", causal: "$causal" });
   await page
     .getByRole("button", { name: "Open loop body", exact: true })
+    .click();
+  await page
+    .locator('.react-flow__node[data-id="transformer_layer"]')
+    .getByRole("button", { name: "Open block", exact: true })
     .click();
   await expect(
     page
@@ -325,16 +332,21 @@ test("premade looped transformers expose settings and exchange their editable at
     "windowed",
   );
   await page.getByRole("button", { name: "Up one level", exact: true }).click();
+  await page.locator('.react-flow__node[data-id="transformer_layer"]').click();
   await inspector
     .getByRole("combobox", { name: "Attention type" })
     .selectOption("mqa");
   await expect
     .poll(
       async () =>
-        (await document(page)).graph.nodes.find((node) => node.id === loop.id)!
-          .data.params.kv_heads,
+        transformerLayer(
+          (await document(page)).graph.nodes.find(
+            (node) => node.id === loop.id,
+          )!,
+        ).params.kv_heads,
     )
     .toBe(1);
+  await page.getByRole("button", { name: "Up one level", exact: true }).click();
   await page.reload();
   await page
     .locator(`.flow-wrap .react-flow__node[data-id="${loop.id}"]`)
@@ -344,9 +356,9 @@ test("premade looped transformers expose settings and exchange their editable at
   ).toHaveValue("mqa");
   await expect(heads).toHaveValue("4");
   expect(
-    (await document(page)).graph.nodes
-      .find((node) => node.id === loop.id)!
-      .data.body!.nodes.some((node) => node.data.role === "attention-layout"),
+    transformerLayer(
+      (await document(page)).graph.nodes.find((node) => node.id === loop.id)!,
+    ).body!.nodes.some((node) => node.data.role === "attention-layout"),
   ).toBe(false);
 });
 
@@ -365,21 +377,24 @@ test("new projects share a configurable RoPE theta with new transformer blocks",
   await page.getByRole("button", { name: "Blocks", exact: true }).click();
   await page
     .locator(".library-item")
-    .filter({ hasText: "Premade recurrent transformer" })
+    .filter({ hasText: "Shared transformer layer inside an editable loop" })
     .click();
   await expect
     .poll(
       async () =>
-        (await document(page)).graph.nodes.find((n) => n.data.kind === "loop")
-          ?.data.params.theta,
+        transformerLayer(
+          (await document(page)).graph.nodes.find(
+            (n) => n.data.kind === "loop",
+          )!,
+        ).params.theta,
     )
     .toBe("$theta");
   const loop = (await document(page)).graph.nodes.find(
     (n) => n.data.kind === "loop",
   )!;
   expect(
-    loop.data.body!.nodes.find((n) => n.data.kind === "attention")!.data.params
-      .theta,
+    transformerLayer(loop).body!.nodes.find((n) => n.data.kind === "attention")!
+      .data.params.theta,
   ).toBe("$theta");
   const theta = variables.getByRole("textbox", { name: "Value of $theta" });
   await theta.fill("500000");
@@ -390,8 +405,11 @@ test("new projects share a configurable RoPE theta with new transformer blocks",
   await expect
     .poll(
       async () =>
-        (await document(page)).graph.nodes.find((n) => n.data.kind === "loop")
-          ?.data.params.theta,
+        transformerLayer(
+          (await document(page)).graph.nodes.find(
+            (n) => n.data.kind === "loop",
+          )!,
+        ).params.theta,
     )
     .toBe("$theta");
 });
@@ -488,7 +506,7 @@ test("attention settings explain and enforce preset-dependent values", async ({
   await page.getByRole("button", { name: "Blocks", exact: true }).click();
   await page
     .locator(".library-item")
-    .filter({ hasText: "Premade recurrent transformer" })
+    .filter({ hasText: "Shared transformer layer inside an editable loop" })
     .click();
   const inspector = page.getByRole("complementary", {
     name: "Property inspector",
@@ -531,7 +549,7 @@ test("attention help opens by click and keyboard, and inactive settings retain v
   await page.getByRole("button", { name: "Blocks", exact: true }).click();
   await page
     .locator(".library-item")
-    .filter({ hasText: "Premade recurrent transformer" })
+    .filter({ hasText: "Shared transformer layer inside an editable loop" })
     .click();
   const inspector = page.getByRole("complementary", {
     name: "Property inspector",
@@ -599,7 +617,7 @@ test("attention explanations remain usable on a narrow screen", async ({
   await page.getByRole("button", { name: "Blocks", exact: true }).click();
   await page
     .locator(".library-item")
-    .filter({ hasText: "Premade recurrent transformer" })
+    .filter({ hasText: "Shared transformer layer inside an editable loop" })
     .click();
   await page.setViewportSize({ width: 390, height: 844 });
   await page.getByRole("button", { name: "Properties", exact: true }).click();

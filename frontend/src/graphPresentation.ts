@@ -57,7 +57,12 @@ export function presentNodes(
     data: {
       ...n.data,
       _focused: n.id === selection,
-      _previewParams: previewParameters(n.data.params, options.variables ?? {}),
+      _previewParams: previewParameters(n.data.params, {
+        ...options.variables,
+        ...(report?.tokenizers?.[prefix + n.id]
+          ? { vocab: report.tokenizers[prefix + n.id].capacity }
+          : {}),
+      }),
       _ports: nodePorts({
         ...n,
         data: {

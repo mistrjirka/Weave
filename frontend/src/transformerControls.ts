@@ -43,18 +43,49 @@ export const transformerSettingKeys = new Set([
   "conv_respects_window",
   "ffn_width",
 ]);
-/** Follow a single transformer wrapper, never an arbitrary multi-layer stack. */
-function transformerGraph(data: NodeData): Graph | undefined {
-  const graph = data.body;
-  if (!graph || graph.nodes.some((node) => node.data.kind === "attention"))
-    return graph;
-  const layers = graph.nodes.filter(
+/** Only a single inner transformer can be controlled by a wrapper inspector. */
+export function wrappedTransformer(data: NodeData): GraphNode | undefined {
+  const layers = data.body?.nodes.filter(
     (node) => node.data.kind !== "input" && node.data.kind !== "output",
   );
-  const layer = layers.length === 1 ? layers[0] : undefined;
-  return layer?.data.kind === "block" && layer.data.role === "transformer"
-    ? transformerGraph(layer.data)
-    : graph;
+  return layers?.length === 1 &&
+    layers[0].data.kind === "block" &&
+    layers[0].data.role === "transformer"
+    ? layers[0]
+    : undefined;
+}
+/** The inner layer owns transformer settings; the loop owns repetition only. */
+function moveWrapperSettings(data: NodeData) {
+  const child = wrappedTransformer(data);
+  if (!child) return;
+  for (const key of transformerSettingKeys) {
+    const value = data.params[key];
+    if (value === undefined) continue;
+    if (
+      child.data.params[key] === undefined ||
+      child.data.params[key] === "$" + key
+    )
+      child.data.params[key] = data.body?.variables?.[key] ?? value;
+    delete data.params[key];
+  }
+}
+function transformerGraph(data: NodeData): Graph | undefined {
+  const child = wrappedTransformer(data);
+  return child ? transformerGraph(child.data) : data.body;
+}
+function bodyScope(data: NodeData, scope: Parameters): Parameters {
+  return {
+    ...scope,
+    ...Object.fromEntries(
+      Object.entries(data.params).map(([key, value]) => [
+        key,
+        typeof value === "string" && value.startsWith("$")
+          ? (scope[value.slice(1)] ?? value)
+          : value,
+      ]),
+    ),
+    ...data.body?.variables,
+  };
 }
 
 /** Add a navigable boundary without adding operations or changing parameters. */
@@ -113,46 +144,78 @@ export function wrapLoopTransformer(data: NodeData) {
       })),
     ],
   };
+  moveWrapperSettings(data);
 }
 
 export function transformerAttention(data: NodeData): GraphNode | undefined {
-  return transformerGraph(data)?.nodes.find(
-    (node) => node.data.kind === "attention",
-  );
+  const nodes = transformerGraph(data)?.nodes ?? [];
+  const attention = nodes.filter((node) => node.data.kind === "attention");
+  return attention.length === 1 &&
+    !nodes.some((node) => !!node.data.body) &&
+    nodes.filter((node) => node.data.kind === "ffn").length <= 1
+    ? attention[0]
+    : undefined;
 }
 export function transformerSettings(data: NodeData): Parameters | null {
+  const child = wrappedTransformer(data);
+  if (child) {
+    const inner = transformerSettings(child.data);
+    if (!inner) return null;
+    const scope = bodyScope(data, {});
+    return {
+      ...data.params,
+      ...Object.fromEntries(
+        Object.entries(inner).map(([key, value]) => [
+          key,
+          typeof value === "string" && value.startsWith("$")
+            ? (scope[value.slice(1)] ?? value)
+            : value,
+        ]),
+      ),
+    };
+  }
   const attention = transformerAttention(data);
   if (!attention) return null;
-  const settings: Parameters = {
-    ...defaults,
-    ...attention.data.params,
-    ...data.params,
-  };
-  const ffn = transformerGraph(data)?.nodes.find(
-    (node) => node.data.kind === "ffn",
-  );
-  if (ffn) settings.ffn_width ??= ffn.data.params.hidden ?? 256;
-  else delete settings.ffn_width;
+  const settings: Parameters = { ...defaults, ...data.params };
+  // Read what the operation actually uses. An inner literal is an intentional
+  // override, not a stale copy of an outer control.
+  for (const key of transformerSettingKeys) {
+    const value = attention.data.params[key];
+    if (value !== undefined)
+      settings[key] =
+        value === "$" + key
+          ? (data.body?.variables?.[key] ?? data.params[key] ?? value)
+          : value;
+  }
+  const ffn = data.body?.nodes.find((node) => node.data.kind === "ffn");
+  if (ffn) {
+    const hidden = ffn.data.params.hidden ?? 256;
+    settings.ffn_width =
+      hidden === "$ffn_width"
+        ? (data.body?.variables?.ffn_width ?? data.params.ffn_width ?? hidden)
+        : hidden;
+  } else delete settings.ffn_width;
   return settings;
 }
-const literalSetting = (key: string, value: JsonValue | undefined) =>
-  typeof value === "boolean" || key === "backend" || key === "rope_scaling";
 
 export function exposeTransformerSettings(data: NodeData) {
+  const child = wrappedTransformer(data);
+  if (child) {
+    moveWrapperSettings(data);
+    exposeTransformerSettings(child.data);
+    return;
+  }
   const attention = transformerAttention(data),
     settings = transformerSettings(data);
   if (!attention || !settings) return;
   for (const key of transformerSettingKeys) {
     const value = settings[key];
     if (value === undefined) continue;
-    if (data.params[key] === undefined) data.params[key] = value;
+    data.params[key] = value;
     if (key === "ffn_width") {
       for (const node of transformerGraph(data)?.nodes ?? [])
         if (node.data.kind === "ffn") node.data.params.hidden = "$ffn_width";
-    } else
-      attention.data.params[key] = literalSetting(key, value)
-        ? value
-        : "$" + key;
+    } else attention.data.params[key] = "$" + key;
   }
 }
 function number(
@@ -224,8 +287,17 @@ export function setTransformerSetting(
   value: JsonValue,
   scope: Parameters = {},
 ) {
+  const child = wrappedTransformer(data);
+  if (child) {
+    moveWrapperSettings(data);
+    setTransformerSetting(child.data, key, value, bodyScope(data, scope));
+    return;
+  }
+  if (data.body?.variables && Object.hasOwn(data.body.variables, key))
+    throw new Error(
+      `${key} is overridden by a local graph variable. Edit it inside this block.`,
+    );
   const tiedHeads = attentionVariant(data, scope) === "mha";
-  exposeTransformerSettings(data);
   data.params[key] = value;
   if (
     key === "heads" &&
@@ -233,12 +305,14 @@ export function setTransformerSetting(
     (typeof value === "number" || typeof value === "string")
   )
     data.params.kv_heads = value;
-  if (key !== "ffn_width") {
-    const attention = transformerAttention(data);
-    if (attention)
-      attention.data.params[key] = literalSetting(key, value)
-        ? value
-        : "$" + key;
+  const attention = transformerAttention(data);
+  if (key === "ffn_width") {
+    const ffn = data.body?.nodes.find((node) => node.data.kind === "ffn");
+    if (ffn) ffn.data.params.hidden = "$ffn_width";
+  } else if (attention) {
+    attention.data.params[key] = "$" + key;
+    if (key === "heads" && tiedHeads)
+      attention.data.params.kv_heads = "$kv_heads";
   }
 }
 export function setAttentionVariant(
@@ -247,12 +321,26 @@ export function setAttentionVariant(
   scope: Parameters,
   newId: () => string,
 ) {
+  const child = wrappedTransformer(data);
+  if (child) {
+    moveWrapperSettings(data);
+    setAttentionVariant(child.data, variant, bodyScope(data, scope), newId);
+    return;
+  }
+  if (
+    ["heads", "kv_heads", "window"].some((key) =>
+      Object.hasOwn(data.body?.variables ?? {}, key),
+    )
+  )
+    throw new Error(
+      "Attention settings are overridden by local graph variables. Edit them inside this block.",
+    );
   const attention = transformerAttention(data);
   if (!attention || !data.body)
     throw new Error(
       "Choose a transformer with compact self-attention. Expanded Q/K/V graphs remain editable inside their block.",
     );
-  exposeTransformerSettings(data);
+  const settings = transformerSettings(data)!;
   const graph = transformerGraph(data)!;
   const generated = new Set(
     graph.nodes
@@ -263,8 +351,8 @@ export function setAttentionVariant(
   graph.edges = graph.edges.filter(
     (edge) => !generated.has(edge.source) && !generated.has(edge.target),
   );
-  const heads = number(data.params.heads, scope, 8);
-  let kv = number(data.params.kv_heads, scope, 2);
+  const heads = number(settings.heads, scope, 8);
+  let kv = number(settings.kv_heads, scope, 2);
   const originalKv = kv;
   if (variant === "mha") kv = heads;
   else if (variant === "mqa") kv = 1;
@@ -291,13 +379,15 @@ export function setAttentionVariant(
   }
   data.params.kv_heads =
     variant === "mha"
-      ? (data.params.heads ?? kv)
+      ? (settings.heads ?? kv)
       : variant === "mqa"
         ? 1
         : kv === originalKv
-          ? (data.params.kv_heads ?? kv)
+          ? (settings.kv_heads ?? kv)
           : kv;
   data.params.window = variant === "local" ? 32 : 0;
+  attention.data.params.kv_heads = "$kv_heads";
+  attention.data.params.window = "$window";
   attention.data.label = attentionVariants.find(
     (option) => option.id === variant,
   )!.label;

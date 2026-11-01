@@ -7,12 +7,14 @@ export function GraphVariableCard({
   values,
   inherited,
   nested,
+  hiddenNames,
   onChange,
   onOpen,
 }: {
   values: Record<string, number>;
   inherited: Record<string, number>;
   nested: boolean;
+  hiddenNames?: string[];
   onChange: (values: Record<string, number>) => void;
   onOpen: () => void;
 }) {
@@ -123,6 +125,7 @@ export function GraphVariableCard({
             values={values}
             inherited={inherited}
             nested={nested}
+            hiddenNames={hiddenNames}
             onChange={onChange}
           />
         </div>

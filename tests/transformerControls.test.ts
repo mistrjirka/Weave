@@ -1,3 +1,4 @@
+import { projectSchema } from "../frontend/src/api.ts";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
@@ -46,7 +47,7 @@ test("outer transformer settings bind inner operations and preserve independent 
     (node) => node.data.kind === "attention",
   )!;
   assert.equal(attention.data.params.heads, "$heads");
-  assert.equal(attention.data.params.causal, false);
+  assert.equal(attention.data.params.causal, "$causal");
   assert.equal(data.params.heads, 4);
   assert.equal(
     data.body!.nodes.find((node) => node.data.kind === "ffn")!.data.params
@@ -137,8 +138,8 @@ test("attention controls preserve derived head values and sync literal settings"
   setTransformerSetting(data, "qkv_bias", true, scope);
   setTransformerSetting(data, "rope_scaling", "yarn", scope);
   setTransformerSetting(data, "rope_factor", 4, scope);
-  assert.equal(attention.data.params.qkv_bias, true);
-  assert.equal(attention.data.params.rope_scaling, "yarn");
+  assert.equal(attention.data.params.qkv_bias, "$qkv_bias");
+  assert.equal(attention.data.params.rope_scaling, "$rope_scaling");
   assert.equal(attention.data.params.rope_factor, "$rope_factor");
   assert.equal(data.params.rope_factor, 4);
 });
@@ -182,9 +183,15 @@ test("sliding and sparse masks preserve an existing multi-head grouping", () => 
   const scope = template.config;
   setAttentionVariant(data, "mha", scope, uid);
   setAttentionVariant(data, "local", scope, uid);
-  assert.equal(data.params.kv_heads, data.params.heads);
+  assert.equal(
+    transformerSettings(data)?.kv_heads,
+    transformerSettings(data)?.heads,
+  );
   setAttentionVariant(data, "sparse", scope, uid);
-  assert.equal(data.params.kv_heads, data.params.heads);
+  assert.equal(
+    transformerSettings(data)?.kv_heads,
+    transformerSettings(data)?.heads,
+  );
 });
 
 test("attention-only containers do not offer an unused FFN width", () => {
@@ -247,6 +254,7 @@ test("a loop can contain one editable transformer without changing forward or ba
     (node) => node.data.kind === "loop",
   )!.data;
   wrapLoopTransformer(loop);
+  assert.equal(projectSchema.safeParse(wrapped).success, true);
   assert.deepEqual(
     loop.body!.nodes.map((node) => node.data.kind),
     ["input", "block", "output"],
@@ -290,7 +298,8 @@ for p,q in zip(a.parameters(),b.parameters()):
     JSON.stringify([original, wrapped]),
   );
   setTransformerSetting(loop, "heads", 8, wrapped.config);
-  assert.equal(loop.params.heads, 8);
+  assert.equal(transformerSettings(loop)?.heads, 8);
+  assert.equal(layer.params.heads, 8);
   setAttentionVariant(loop, "sparse", wrapped.config, uid);
   assert.equal(attentionVariant(loop, wrapped.config), "sparse");
   assert.equal(
@@ -362,5 +371,91 @@ out.square().mean().backward()
 assert all(p.grad is not None for p in [*a.parameters(),*b.parameters()])
 `,
     JSON.stringify(project),
+  );
+});
+
+test("editing an outer setting preserves intentional inner boolean, enum and numeric overrides", () => {
+  const data = structuredClone(template).graph.nodes.find(
+    (node) => node.data.kind === "loop",
+  )!.data;
+  exposeTransformerSettings(data);
+  const attention = data.body!.nodes.find(
+    (node) => node.data.kind === "attention",
+  )!.data;
+  attention.params.causal = false;
+  attention.params.backend = "auto";
+  attention.params.heads = 4;
+  assert.equal(transformerSettings(data)?.causal, false);
+  assert.equal(transformerSettings(data)?.backend, "auto");
+  assert.equal(transformerSettings(data)?.heads, 4);
+  setTransformerSetting(data, "ffn_width", 48, template.config);
+  assert.equal(transformerSettings(data)?.causal, false);
+  assert.equal(transformerSettings(data)?.backend, "auto");
+  assert.equal(transformerSettings(data)?.heads, 4);
+  assert.equal(attention.params.causal, false);
+  assert.equal(attention.params.backend, "auto");
+});
+
+test("loop and inner transformer edit one attention owner in both directions", () => {
+  const data = structuredClone(template).graph.nodes.find(
+    (node) => node.data.kind === "loop",
+  )!.data;
+  data.role = "transformer";
+  exposeTransformerSettings(data);
+  wrapLoopTransformer(data);
+  const inner = data.body!.nodes.find(
+    (node) => node.data.kind === "block",
+  )!.data;
+  setAttentionVariant(data, "mqa", template.config, uid);
+  assert.equal(
+    attentionVariant(inner, { ...template.config, ...data.params }),
+    "mqa",
+  );
+  setAttentionVariant(
+    inner,
+    "mha",
+    { ...template.config, ...data.params },
+    uid,
+  );
+  assert.equal(attentionVariant(data, template.config), "mha");
+  setTransformerSetting(data, "heads", 4, template.config);
+  assert.equal(transformerSettings(data)?.heads, 4);
+  assert.equal(transformerSettings(inner)?.heads, 4);
+  assert.equal(inner.params.kv_heads, 4);
+});
+
+test("heterogeneous loop bodies and multiple attention branches have no whole-container attention control", () => {
+  const data = structuredClone(template).graph.nodes.find(
+    (node) => node.data.kind === "loop",
+  )!.data;
+  data.role = "transformer";
+  exposeTransformerSettings(data);
+  wrapLoopTransformer(data);
+  const a = data.body!.nodes.find((node) => node.data.kind === "block")!;
+  const b = structuredClone(a);
+  b.id = "b";
+  data.body!.nodes.push(b);
+  assert.equal(transformerSettings(data), null);
+  assert.equal(attentionVariant(data, template.config), "custom");
+  const flat = structuredClone(a.data);
+  flat.body!.nodes.push({
+    ...structuredClone(
+      flat.body!.nodes.find((node) => node.data.kind === "attention")!,
+    ),
+    id: "second_attention",
+  });
+  assert.equal(transformerSettings(flat), null);
+});
+
+test("a body variable is reported as effective and cannot be silently edited from its parent", () => {
+  const data = structuredClone(template).graph.nodes.find(
+    (node) => node.data.kind === "loop",
+  )!.data;
+  exposeTransformerSettings(data);
+  data.body!.variables = { heads: 4 };
+  assert.equal(transformerSettings(data)?.heads, 4);
+  assert.throws(
+    () => setTransformerSetting(data, "heads", 8, template.config),
+    /local graph variable/,
   );
 });

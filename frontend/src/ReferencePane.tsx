@@ -1,3 +1,4 @@
+import { tokenizerOwnsVocabulary } from "./tokenizerVocabulary";
 import { edgeContract } from "./lanePorts";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -402,7 +403,7 @@ function ReferenceCanvas({
         report,
         prefix,
         groups,
-        variables: graphVariableScope(project, path).effective,
+        variables: graphVariableScope(project, path).bindings,
         selection,
         onOpen: open,
       }),
@@ -840,12 +841,22 @@ function ReferenceCanvas({
                     <dl>
                       {Object.entries(
                         graphVariableScope(project, path).effective,
-                      ).map(([name, value]) => (
-                        <div key={name}>
-                          <dt>${name}</dt>
-                          <dd>{value}</dd>
-                        </div>
-                      ))}
+                      )
+                        .filter(
+                          ([name]) =>
+                            name !== "vocab" ||
+                            !tokenizerOwnsVocabulary(
+                              project,
+                              path,
+                              report?.tokenizers,
+                            ),
+                        )
+                        .map(([name, value]) => (
+                          <div key={name}>
+                            <dt>${name}</dt>
+                            <dd>{value}</dd>
+                          </div>
+                        ))}
                     </dl>
                     <small>
                       Values include inherited variables and enclosing block

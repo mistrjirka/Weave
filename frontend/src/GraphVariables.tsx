@@ -56,12 +56,14 @@ export function GraphVariables({
   inherited,
   nested,
   compact = false,
+  hiddenNames = [],
   onChange,
 }: {
   values: Record<string, number>;
   inherited: Record<string, number>;
   nested: boolean;
   compact?: boolean;
+  hiddenNames?: string[];
   onChange: (values: Record<string, number>) => void;
 }) {
   const [name, setName] = useState("");
@@ -74,6 +76,10 @@ export function GraphVariables({
       setError(
         "Use a name such as hidden_width; sqrt_width is computed from width.",
       );
+      return;
+    }
+    if (hiddenNames.includes(key)) {
+      setError(`$${key} is supplied automatically by the input tokenizer.`);
       return;
     }
     if (Object.hasOwn(values, key)) {
@@ -90,9 +96,13 @@ export function GraphVariables({
     setError("");
   }
   const inheritedEntries = Object.entries(inherited).filter(
-    ([name]) => !Object.hasOwn(values, name),
+    ([name]) => !Object.hasOwn(values, name) && !hiddenNames.includes(name),
   );
-  const tableValues = compact ? { ...inherited, ...values } : values;
+  const tableValues = Object.fromEntries(
+    Object.entries(compact ? { ...inherited, ...values } : values).filter(
+      ([name]) => !hiddenNames.includes(name),
+    ),
+  );
   const [adding, setAdding] = useState(!compact);
   return (
     <section
@@ -224,8 +234,7 @@ export function GraphVariables({
         <p className="field-help">
           Only fields linked with <code>$name</code> follow these values.
           Removing a variable leaves its bindings visible as graph errors. Token
-          inputs supply <code>$vocab</code> and, when available,{" "}
-          <code>$mask_id</code> from their tokenizer.
+          inputs supply vocabulary sizes and special-token IDs automatically.
         </p>
       )}
     </section>

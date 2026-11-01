@@ -20,6 +20,11 @@ const jsonValue: z.ZodType<JsonValue> = z.lazy(() =>
   ]),
 );
 const dimension = z.union([z.string(), z.number()]);
+const parameterBinding = z.custom<`$${string}`>(
+  (value) =>
+    typeof value === "string" && /^\$[A-Za-z_][A-Za-z_0-9]*$/.test(value),
+  "Expected a parameter binding such as $causal",
+);
 export const parametersSchema: z.ZodType<Parameters> = z
   .object({
     shape: z.array(dimension).optional(),
@@ -33,7 +38,7 @@ export const parametersSchema: z.ZodType<Parameters> = z
     dtype: z.string().optional(),
     source: z.string().optional(),
     shared: z.boolean().optional(),
-    causal: z.boolean().optional(),
+    causal: z.union([z.boolean(), parameterBinding]).optional(),
     window: dimension.optional(),
     global_stride: dimension.optional(),
     block_size: dimension.optional(),

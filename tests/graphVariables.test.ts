@@ -115,3 +115,28 @@ test("diagram bindings show resolved heads and do not treat a zero window as ena
   );
   assert.deepEqual(params, before);
 });
+
+test("typed container bindings match backend scope for booleans, strings and numeric values", () => {
+  const p = project();
+  p.graph.nodes.push({
+    id: "body",
+    type: "architecture",
+    position: { x: 0, y: 0 },
+    data: {
+      kind: "block",
+      label: "Body",
+      params: { causal: false, backend: "auto", heads: 4 },
+      body: { nodes: [], edges: [] },
+    },
+  });
+  const scope = graphVariableScope(p, ["body"]);
+  assert.equal(scope.bindings.causal, false);
+  assert.equal(scope.bindings.backend, "auto");
+  assert.deepEqual(
+    previewParameters(
+      { causal: "$causal", backend: "$backend", heads: "$heads" },
+      scope.bindings,
+    ),
+    { causal: false, backend: "auto", heads: 4 },
+  );
+});

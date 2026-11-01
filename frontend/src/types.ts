@@ -16,7 +16,7 @@ export interface Parameters {
   dtype?: string;
   source?: string;
   shared?: boolean;
-  causal?: boolean;
+  causal?: boolean | `$${string}`;
   window?: Dimension;
   global_stride?: Dimension;
   block_size?: Dimension;
