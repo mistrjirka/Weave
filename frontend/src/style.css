@@ -4699,8 +4699,14 @@ textarea:focus-visible {
 }
 .graph-variables.compact td,
 .graph-variables.compact th {
-  padding: 4px;
+  padding: 2px 4px;
   vertical-align: middle;
+}
+.graph-variables.compact details {
+  margin: 2px 0 0;
+}
+.graph-variables.compact summary {
+  line-height: 1.2;
 }
 .graph-variables.compact td:last-child,
 .graph-variables.compact th:last-child {
@@ -4729,7 +4735,7 @@ textarea:focus-visible {
     width: 224px;
   }
   .variable-card-body {
-    max-height: 180px;
+    max-height: 232px;
   }
 }
 

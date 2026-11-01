@@ -114,6 +114,10 @@ import {
   exposeTransformerSettings,
   wrapLoopTransformer,
   wrappedTransformer,
+  inheritTransformerDefaults,
+  transformerParentScope,
+  transformerResidual,
+  setTransformerResidual,
   setTransformerSetting,
   setAttentionVariant,
 } from "./transformerControls";
@@ -125,8 +129,10 @@ import { canvasFitPadding, canvasFitInsets } from "./canvasFitPadding";
 import { GraphVariableCard } from "./GraphVariableCard";
 import { GraphAnnotations } from "./GraphAnnotations";
 import { GraphVariables } from "./GraphVariables";
+import { EmbeddingTiePicker } from "./EmbeddingTiePicker";
 import {
   graphVariableScope,
+  graphVariableUses,
   bindingValue,
   previewParameters,
 } from "./graphVariables";
@@ -1593,6 +1599,7 @@ function Workbench({
       : undefined;
   const inputTokenizer = tokenizerInput?.data.tokenizer;
   const variableScope = graphVariableScope(project, path);
+  const variableUses = useMemo(() => graphVariableUses(graph), [graph]);
   const hiddenVariables = tokenizerOwnsVocabulary(
     project,
     path,
@@ -1624,6 +1631,14 @@ function Workbench({
       fieldVariables.mask_id = selectedTokenizer.mask_id;
   }
   const transformer = selected ? transformerSettings(selected.data) : null;
+  const selectedFieldVariables = {
+    ...fieldVariables,
+    ...Object.fromEntries(
+      Object.entries(transformer ?? {}).filter(
+        ([, value]) => typeof value !== "string" || !value.startsWith("$"),
+      ),
+    ),
+  };
   const selectedCount = graph.nodes.filter((node) => node.selected).length;
   const connection = graph.edges.find((e) => e.id === selectedEdge);
   const referenceDetails =
@@ -1909,7 +1924,13 @@ function Workbench({
       ...(body ? { body } : {}),
       ...(entry.role ? { role: entry.role } : {}),
     };
-    if (entry.role === "transformer") exposeTransformerSettings(data);
+    if (entry.role === "transformer") {
+      inheritTransformerDefaults(
+        data,
+        graphVariableScope(project, path).bindings,
+      );
+      exposeTransformerSettings(data);
+    }
     if (
       entry.role === "transformer" ||
       ["attention", "cross_attention", "rope"].includes(kind)
@@ -3413,6 +3434,7 @@ function Workbench({
                           <GraphVariableCard
                             values={variableScope.own}
                             inherited={variableScope.inherited}
+                            uses={variableUses}
                             hiddenNames={hiddenVariables}
                             nested={path.length > 0}
                             onChange={updateGraphVariables}
@@ -4014,6 +4036,26 @@ function Workbench({
                         </small>
                       </label>
                     )}
+                    {transformer && transformerResidual(selected.data) && (
+                      <label className="property-field">
+                        <span>Attention residual</span>
+                        <select
+                          aria-label="Attention residual"
+                          value={transformerResidual(selected.data) ?? "add"}
+                          onChange={(event) =>
+                            updateNode((node) =>
+                              setTransformerResidual(
+                                node.data,
+                                event.target.value as "add" | "gate",
+                              ),
+                            )
+                          }
+                        >
+                          <option value="add">Add</option>
+                          <option value="gate">Gated</option>
+                        </select>
+                      </label>
+                    )}
                     <div className="section-label">Configuration</div>
                     {selected.data.kind === "moe" && (
                       <label className="property-field">
@@ -4076,11 +4118,22 @@ function Workbench({
                           k,
                           report?.shapes[prefix + selected.id],
                         );
+                        const transformerOwner =
+                          wrappedTransformer(selected.data)?.data ??
+                          selected.data;
+                        const localFfnLinked =
+                          typeof transformerOwner.body?.variables?.ffn_width ===
+                            "number" &&
+                          transformerOwner.body.nodes.some(
+                            (node) =>
+                              node.data.kind === "ffn" &&
+                              node.data.params.hidden === "$ffn_width",
+                          );
                         return (
                           <React.Fragment key={k}>
                             <Field
                               name={k}
-                              variables={fieldVariables}
+                              variables={selectedFieldVariables}
                               displayName={
                                 k === "window" &&
                                 transformer &&
@@ -4089,7 +4142,14 @@ function Workbench({
                                   fieldVariables,
                                 ) === "sparse"
                                   ? "Additional attention window"
-                                  : undefined
+                                  : k === "gated" &&
+                                      (transformer ||
+                                        [
+                                          "attention",
+                                          "cross_attention",
+                                        ].includes(selected.data.kind))
+                                    ? "Attention output gate"
+                                    : undefined
                               }
                               options={
                                 selected.data.kind === "lane_join" &&
@@ -4105,11 +4165,13 @@ function Workbench({
                               help={settingHelp(selected.data.kind, k)}
                               disabledReason={
                                 inputOwnership?.disabledReason ??
-                                containerParameterShadowReason(
-                                  wrappedTransformer(selected.data)?.data ??
-                                    selected.data,
-                                  k,
-                                ) ??
+                                (transformer && k === "ffn_width"
+                                  ? undefined
+                                  : containerParameterShadowReason(
+                                      wrappedTransformer(selected.data)?.data ??
+                                        selected.data,
+                                      k,
+                                    )) ??
                                 generalFieldDisabledReason(
                                   selected.data.kind,
                                   k,
@@ -4169,6 +4231,79 @@ function Workbench({
                                 })
                               }
                             />
+                            {transformer &&
+                              k === "ffn_width" &&
+                              localFfnLinked && (
+                                <small className="field-help">
+                                  Local variable inside this Transformer; its
+                                  FFN uses <code>$ffn_width</code>.
+                                </small>
+                              )}
+                            {typeof v === "number" &&
+                              !["index", "experts"].includes(k) &&
+                              typeof transformerParentScope(
+                                selected.data,
+                                variableScope.bindings,
+                              )[
+                                k === "hidden" && selected.data.kind === "ffn"
+                                  ? "ffn_width"
+                                  : k
+                              ] === "number" &&
+                              !inputOwnership &&
+                              ((k === "ffn_width" && transformer) ||
+                                !containerParameterShadowReason(
+                                  wrappedTransformer(selected.data)?.data ??
+                                    selected.data,
+                                  k,
+                                )) && (
+                                <button
+                                  className="small-button"
+                                  onClick={() =>
+                                    updateNode((node) => {
+                                      const variable =
+                                        k === "hidden" &&
+                                        selected.data.kind === "ffn"
+                                          ? "ffn_width"
+                                          : k;
+                                      if (
+                                        transformer &&
+                                        transformerSettingKeys.has(k)
+                                      )
+                                        setTransformerSetting(
+                                          node.data,
+                                          k,
+                                          "$" + variable,
+                                          fieldVariables,
+                                        );
+                                      else node.data.params[k] = "$" + variable;
+                                    })
+                                  }
+                                >
+                                  {transformer &&
+                                  k === "ffn_width" &&
+                                  localFfnLinked
+                                    ? "Local value"
+                                    : "Independent value"}{" "}
+                                  · Link to parent $
+                                  {k === "hidden" &&
+                                  selected.data.kind === "ffn"
+                                    ? "ffn_width"
+                                    : k}{" "}
+                                  (
+                                  {String(
+                                    transformerParentScope(
+                                      selected.data,
+                                      variableScope.bindings,
+                                    )[
+                                      k === "hidden" &&
+                                      selected.data.kind === "ffn"
+                                        ? "ffn_width"
+                                        : k
+                                    ],
+                                  )}
+                                  )
+                                </button>
+                              )}
                             {k === "width" && (
                               <p className="field-help">
                                 Model width: the number of features in each
@@ -4187,7 +4322,7 @@ function Workbench({
                               <p className="binding-resolution field-help">
                                 {v} ={" "}
                                 {String(
-                                  bindingValue(v, fieldVariables) ??
+                                  bindingValue(v, selectedFieldVariables) ??
                                     "undefined · add it in Graph variables",
                                 )}
                               </p>
@@ -4232,9 +4367,9 @@ function Workbench({
                       </p>
                     )}
                     {selected.data.kind === "head" && (
-                      <Field
-                        name="tie"
-                        value={selected.data.params.tie || ""}
+                      <EmbeddingTiePicker
+                        graph={graph}
+                        value={String(selected.data.params.tie ?? "")}
                         onChange={(v) =>
                           updateNode((n) => {
                             if (v) n.data.params.tie = v;
@@ -4643,6 +4778,7 @@ function Workbench({
             <GraphVariables
               values={variableScope.own}
               inherited={variableScope.inherited}
+              uses={variableUses}
               hiddenNames={hiddenVariables}
               nested={path.length > 0}
               onChange={updateGraphVariables}

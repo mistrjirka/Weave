@@ -1,4 +1,46 @@
-import type { JsonValue, Parameters, Project } from "./types";
+import type { Graph, JsonValue, Parameters, Project } from "./types";
+
+/** Find links reached from this graph. A child parameter or variable owns its
+ * names inside that child, so those uses do not belong to the parent scope. */
+export function graphVariableUses(graph: Graph): Record<string, string[]> {
+  const uses: Record<string, string[]> = {};
+  function collect(
+    value: JsonValue | undefined,
+    location: string,
+    blocked: Set<string>,
+  ) {
+    if (typeof value === "string" && /^\$[A-Za-z_]\w*$/.test(value)) {
+      const name = value === "$sqrt_width" ? "width" : value.slice(1);
+      if (!blocked.has(name)) (uses[name] ??= []).push(location);
+    } else if (Array.isArray(value)) {
+      value.forEach((item, index) =>
+        collect(item, `${location}[${index}]`, blocked),
+      );
+    } else if (value && typeof value === "object") {
+      Object.entries(value).forEach(([key, item]) =>
+        collect(item, `${location}.${key}`, blocked),
+      );
+    }
+  }
+  function visit(current: Graph, blocked: Set<string>, prefix: string) {
+    for (const node of current.nodes) {
+      const location = prefix + node.data.label;
+      Object.entries(node.data.params).forEach(([key, value]) =>
+        collect(value, `${location} · ${key}`, blocked),
+      );
+      if (node.data.body) {
+        const childBlocked = new Set([
+          ...blocked,
+          ...Object.keys(node.data.params),
+          ...Object.keys(node.data.body.variables ?? {}),
+        ]);
+        visit(node.data.body, childBlocked, `${location} / `);
+      }
+    }
+  }
+  visit(graph, new Set(), "");
+  return uses;
+}
 
 /** Effective values at the current graph, including enclosing block parameters. */
 export function graphVariableScope(project: Project, path: string[]) {

@@ -550,13 +550,15 @@ def validate_project(project, *, input_contracts=None, moe_body=False, include_a
                         out['shape'][-1] = outdim; count = dim * outdim + (outdim if p.get('bias', False) else 0)
                         if kind=='head' and tok and outdim<tok.get('capacity',0):raise ValueError('Vocabulary output head cannot represent all tokenizer IDs.')
                         if p.get('tie'):
+                            if kind != 'head':
+                                raise ValueError('Only an output head can tie to an embedding table.')
                             target = next((v for v in graph['nodes'] if v['id'] == p['tie']), None)
                             if not target or target['data']['kind'] != 'embedding':
                                 raise ValueError('Tied output must reference an embedding in this graph.')
                             tp = params(target, cfg)
                             if tp.get('width', cfg.get('width')) != dim or tp.get('vocab', cfg.get('vocab')) != outdim:
                                 raise ValueError('Tied output dimensions must match the embedding table.')
-                            count = 0
+                            count = outdim if p.get('bias', False) else 0
                     elif kind in ('attention', 'cross_attention'):
                         if len(x['shape']) != 3:
                             raise ValueError('Attention expects [B,T,D].')

@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   graphVariableScope,
+  graphVariableUses,
   bindingValue,
   previewParameters,
 } from "../frontend/src/graphVariables.ts";
@@ -138,5 +139,84 @@ test("typed container bindings match backend scope for booleans, strings and num
       scope.bindings,
     ),
     { causal: false, backend: "auto", heads: 4 },
+  );
+});
+
+test("loading and reloading preserve explicit root FFN links instead of freezing numbers", () => {
+  const p = project();
+  p.config.ffn_width = 2176;
+  p.graph.nodes.push({
+    id: "layer",
+    type: "architecture",
+    position: { x: 0, y: 0 },
+    data: {
+      kind: "block",
+      label: "Layer",
+      params: { ffn_width: "$ffn_width" },
+      body: {
+        nodes: [
+          {
+            id: "ffn",
+            type: "architecture",
+            position: { x: 0, y: 0 },
+            data: {
+              kind: "ffn",
+              label: "FFN",
+              params: { hidden: "$ffn_width" },
+            },
+          },
+        ],
+        edges: [],
+      },
+    },
+  });
+  const loaded = localizeLayerDefaults(p);
+  assert.equal(loaded.graph.nodes.at(-1)!.data.params.ffn_width, "$ffn_width");
+  assert.equal(graphVariableScope(loaded, ["layer"]).effective.ffn_width, 2176);
+  loaded.config.ffn_width = 4096;
+  const reloaded = localizeLayerDefaults(loaded);
+  assert.equal(
+    reloaded.graph.nodes.at(-1)!.data.params.ffn_width,
+    "$ffn_width",
+  );
+  assert.equal(
+    graphVariableScope(reloaded, ["layer"]).effective.ffn_width,
+    4096,
+  );
+});
+
+test("variable uses belong to the nearest owner and report nested links", () => {
+  const p = project();
+  p.graph.nodes.push({
+    id: "layer",
+    type: "architecture",
+    position: { x: 0, y: 0 },
+    data: {
+      kind: "block",
+      label: "Layer",
+      params: { heads: "$heads" },
+      body: {
+        variables: { ffn_width: 384 },
+        nodes: [
+          {
+            id: "ffn",
+            type: "architecture",
+            position: { x: 0, y: 0 },
+            data: {
+              kind: "ffn",
+              label: "FFN",
+              params: { hidden: "$ffn_width" },
+            },
+          },
+        ],
+        edges: [],
+      },
+    },
+  });
+  assert.deepEqual(graphVariableUses(p.graph).heads, ["Layer · heads"]);
+  assert.equal(graphVariableUses(p.graph).ffn_width, undefined);
+  assert.deepEqual(
+    graphVariableUses(p.graph.nodes.at(-1)!.data.body!).ffn_width,
+    ["FFN · hidden"],
   );
 });

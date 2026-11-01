@@ -297,9 +297,13 @@ test("premade looped transformers expose settings and exchange their editable at
   expect(loop.data.params).toMatchObject({ iterations: 4, shared: true });
   expect(transformerLayer(loop).params).toMatchObject({
     heads: 4,
-    ffn_width: 48,
     causal: false,
   });
+  expect(transformerLayer(loop).body!.variables?.ffn_width).toBe(48);
+  expect(
+    transformerLayer(loop).body!.nodes.find((node) => node.data.kind === "ffn")!
+      .data.params.hidden,
+  ).toBe("$ffn_width");
   expect(
     transformerLayer(loop).body!.nodes.filter(
       (node) => node.data.role === "attention-layout",
@@ -516,7 +520,8 @@ test("attention settings explain and enforce preset-dependent values", async ({
   const kv = inspector.getByRole("textbox", { name: "kv heads", exact: true });
   await variant.selectOption("mha");
   await expect(kv).toBeDisabled();
-  await expect(kv).toHaveValue("8");
+  await expect(kv).toHaveValue("$heads");
+  await expect(inspector).toContainText("$heads = 8");
   await expect(inspector).toContainText(
     "MHA uses one key/value head per query head",
   );
@@ -558,7 +563,7 @@ test("attention help opens by click and keyboard, and inactive settings retain v
     ["causal", "earlier tokens"],
     ["rope", "token positions"],
     ["qk norm", "attention scores"],
-    ["gated", "learned gate"],
+    ["Attention output gate", "learned gate"],
     ["window", "nearby tokens"],
     ["backend", "CPU or GPU"],
   ]) {

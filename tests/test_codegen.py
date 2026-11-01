@@ -3,6 +3,7 @@
 import ast
 import copy
 import inspect
+import json
 import sys
 
 import pytest
@@ -13,7 +14,7 @@ from torch.nn import functional as F
 from backend import runtime, export_helpers, sparse_runtime
 from backend.compiler import compile_project
 from backend.core import validate_project
-from backend.templates import templates, node, edge
+from backend.templates import templates, node, edge, transformer
 
 
 def instantiate(project, monkeypatch):
@@ -47,6 +48,101 @@ def reduced(project):
 
     shrink(result["graph"])
     return result
+
+
+def test_tied_head_shares_one_parameter_and_receives_both_gradients(monkeypatch):
+    project = reduced(next(p for p in templates() if p["id"] == "transformer"))
+    model, files = instantiate(project, monkeypatch)
+    names = json.loads(files["graph_modules.json"])
+    embedding = getattr(model, names["emb"])
+    head = getattr(model, names["head"])
+    assert head.weight is embedding.weight
+    assert sum(p.numel() for p in model.parameters()) == validate_project(project)["parameters"]
+    ids = torch.randint(0, 32, (2, 4))
+    logits = model(ids)
+    loss = F.cross_entropy(logits.reshape(-1, 32), torch.randint(0, 32, (8,)))
+    loss.backward()
+    assert embedding.weight.grad is head.weight.grad
+    assert embedding.weight.grad is not None
+    assert torch.isfinite(embedding.weight.grad).all()
+    before = embedding.weight.detach().clone()
+    torch.optim.SGD(model.parameters(), lr=0.01).step()
+    assert not torch.equal(before, embedding.weight)
+    assert head.weight is embedding.weight
+
+
+def test_tied_head_counts_independent_bias(monkeypatch):
+    project = reduced(next(p for p in templates() if p["id"] == "transformer"))
+    head = next(n for n in project["graph"]["nodes"] if n["id"] == "head")
+    head["data"]["params"]["bias"] = True
+    report = validate_project(project)
+    assert report["valid"]
+    model, files = instantiate(project, monkeypatch)
+    names = json.loads(files["graph_modules.json"])
+    embedding = getattr(model, names["emb"])
+    output = getattr(model, names["head"])
+    assert output.weight is embedding.weight
+    assert output.bias is not None
+    assert output.bias.numel() == project["config"]["vocab"]
+    assert sum(p.numel() for p in model.parameters()) == report["parameters"]
+
+
+def test_shared_three_block_model_count_and_causality(monkeypatch):
+    config = {"vocab": 16000, "width": 768, "heads": 12, "ffn_width": 2176}
+
+    def layer(name):
+        body = transformer(heads=12, kv=12)
+        attention = next(n for n in body["nodes"] if n["id"] == "attn")
+        attention["data"]["params"]["qk_norm"] = False
+        attention["data"]["label"] = "Multi-head attention (MHA)"
+        return node(name, "block", name, 0, 0, {}, body)
+
+    loop_body = {
+        "nodes": [
+            node("x", "input", "Input", 0, 0, {"index": 0, "shape": ["B", "T", "$width"], "dtype": "float32"}),
+            layer("a"), layer("b"), layer("c"),
+            node("y", "output", "Output", 0, 0),
+        ],
+        "edges": [edge("x", "a"), edge("a", "b"), edge("b", "c"), edge("c", "y")],
+    }
+    project = {
+        "version": 1, "id": "shared_3", "name": "Shared three block model",
+        "config": config,
+        "graph": {
+            "nodes": [
+                node("ids", "input", "Token IDs", 0, 0, {"index": 0, "shape": ["B", "T"], "dtype": "int64"}),
+                node("emb", "embedding", "Token embedding", 0, 0, {"width": "$width", "vocab": "$vocab"}),
+                layer("prelude"),
+                node("shared", "loop", "Shared blocks", 0, 0, {"iterations": 4, "shared": True}, loop_body),
+                layer("coda"),
+                node("norm", "norm", "Final norm", 0, 0),
+                node("head", "head", "Tied head", 0, 0, {"out": "$vocab", "tie": "emb"}),
+                node("out", "output", "Logits", 0, 0),
+            ],
+            "edges": [edge("ids", "emb"), edge("emb", "prelude"), edge("prelude", "shared"),
+                      edge("shared", "coda"), edge("coda", "norm"), edge("norm", "head"), edge("head", "out")],
+        },
+    }
+    report = validate_project(project)
+    assert report["valid"], report["errors"]
+    assert report["parameters"] == 49_160_448
+    previous_threads = torch.get_num_threads()
+    torch.set_num_threads(1)
+    try:
+        model, files = instantiate(project, monkeypatch)
+        names = json.loads(files["graph_modules.json"])
+        assert getattr(model, names["head"]).weight is getattr(model, names["emb"]).weight
+        assert sum(p.numel() for p in model.parameters()) == 49_160_448
+
+        # A changed future token cannot alter logits at an earlier position.
+        model.eval()
+        first = torch.tensor([[1, 2, 3, 4]])
+        changed = torch.tensor([[1, 2, 3, 5]])
+        with torch.no_grad():
+            a, b = model(first), model(changed)
+        torch.testing.assert_close(a[:, :3], b[:, :3], rtol=1e-5, atol=1e-5)
+    finally:
+        torch.set_num_threads(previous_threads)
 
 
 @pytest.mark.parametrize(

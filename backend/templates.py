@@ -12,17 +12,17 @@ def edge(a,b,port='a'):
     return {'id':f'{a}-{b}-{port}','source':a,'target':b,'sourceHandle':'out','targetHandle':port,'type':'smoothstep'}
 
 
-def transformer(causal=True, sandwich=False, ffn=True, cross=False, heads='$heads', kv=4):
+def transformer(causal=True, sandwich=False, ffn=True, cross=False, heads='$heads', kv=4, residual='add'):
     ns=[node('x','input','Hidden state',0,120,{'index':0,'shape':['B','T','$width'],'dtype':'float32'}),
         node('n1','norm','Pre-attention norm',260,120),
         node('attn','attention','Grouped-query attention',520,120,{'heads':heads,'kv_heads':kv,'causal':causal,'qk_norm':True,'gated':sandwich,'rope':True,'window':0,'backend':'dense'}),
-        node('r1','gate' if not sandwich else 'add','Residual connection',1040,120)]
+        node('r1','add' if sandwich else residual,'Residual connection' if residual == 'gate' else 'Attention residual',1040,120)]
     es=[edge('x','n1'),edge('n1','attn'),edge('x','r1'),edge('attn','r1','b')]
     last='r1'
     if sandwich:
         ns.append(node('n2','norm','Post-attention norm',780,120)); es[-1]=edge('n2','r1','b');es.append(edge('attn','n2'))
     if cross:
-        ns.extend([node('memory','input','Encoder memory',260,460,{'index':1,'shape':['B','S','$width'],'dtype':'float32'}),node('cn','norm','Cross-attention norm',1300,120),node('cross','cross_attention','Cross attention',1560,120,{'heads':heads,'kv_heads':kv,'causal':False,'rope':False,'qk_norm':True}),node('cr','gate','Cross residual',1820,120)])
+        ns.extend([node('memory','input','Encoder memory',260,460,{'index':1,'shape':['B','S','$width'],'dtype':'float32'}),node('cn','norm','Cross-attention norm',1300,120),node('cross','cross_attention','Cross attention',1560,120,{'heads':heads,'kv_heads':kv,'causal':False,'rope':False,'qk_norm':True}),node('cr',residual,'Cross residual',1820,120)])
         es.extend([edge(last,'cn'),edge('cn','cross'),edge('memory','cross','b'),edge(last,'cr'),edge('cross','cr','b')]);last='cr'
     if ffn:
         start=1300 if not cross else 2080
@@ -274,7 +274,7 @@ def templates():
            project('looped','Looped transformer','Three applications share one transformer’s weights, with independently learned layers between them. Click any connection to insert more layers.',explicit_looped()),
            project('diffusion','Masked text diffusion','LLaDA-style bidirectional prediction with iterative confidence-based unmasking.',combined(),references=[{'title':'LLaDA sampling reference','url':'https://github.com/ML-GSAI/LLaDA/blob/9182493720ed723ef8031210d85959364e51cbe0/generate.py','revision':'9182493720ed723ef8031210d85959364e51cbe0','notes':'Composable LLaDA-style example, not an 8B checkpoint reproduction. Linear remaining-token schedule; no classifier-free guidance.'}])]
     # Needle 1 has a real encoder-decoder topology and no feed-forward network.
-    n1={'nodes':[node('source','input','Source token IDs',0,80,{'index':0,'shape':['B','S'],'dtype':'int64'}),node('target','input','Decoder token IDs',0,440,{'index':1,'shape':['B','T'],'dtype':'int64'}),node('se','embedding','Shared embedding · encoder',290,80,{'width':'$width','vocab':'$vocab'},share='token_embedding'),node('te','embedding','Shared embedding · decoder',290,440,{'width':'$width','vocab':'$vocab'},share='token_embedding'),node('encoder','loop','Encoder · 12 attention layers',620,80,{'iterations':12,'shared':False},transformer(causal=False,ffn=False)),node('decoder','loop','Decoder · 8 attention layers',1000,440,{'iterations':8,'shared':False},transformer(causal=True,ffn=False,cross=True)),node('norm','norm','Final RMSNorm',1360,440),node('head','head','Tied language head',1640,440,{'out':'$vocab','tie':'te'}),node('out','output','Decoder logits',1920,440)],'edges':[edge('source','se'),edge('target','te'),edge('se','encoder'),edge('te','decoder'),edge('encoder','decoder','b'),edge('decoder','norm'),edge('norm','head'),edge('head','out')]}
+    n1={'nodes':[node('source','input','Source token IDs',0,80,{'index':0,'shape':['B','S'],'dtype':'int64'}),node('target','input','Decoder token IDs',0,440,{'index':1,'shape':['B','T'],'dtype':'int64'}),node('se','embedding','Shared embedding · encoder',290,80,{'width':'$width','vocab':'$vocab'},share='token_embedding'),node('te','embedding','Shared embedding · decoder',290,440,{'width':'$width','vocab':'$vocab'},share='token_embedding'),node('encoder','loop','Encoder · 12 attention layers',620,80,{'iterations':12,'shared':False},transformer(causal=False,ffn=False,residual='gate')),node('decoder','loop','Decoder · 8 attention layers',1000,440,{'iterations':8,'shared':False},transformer(causal=True,ffn=False,cross=True,residual='gate')),node('norm','norm','Final RMSNorm',1360,440),node('head','head','Tied language head',1640,440,{'out':'$vocab','tie':'te'}),node('out','output','Decoder logits',1920,440)],'edges':[edge('source','se'),edge('target','te'),edge('se','encoder'),edge('te','decoder'),edge('encoder','decoder','b'),edge('decoder','norm'),edge('norm','head'),edge('head','out')]}
     # Original Needle scales both token embeddings and normalizes the encoder output.
     n1['nodes'].extend([node('se_scale','scale','Scale source embeddings · √D',460,80,{'factor':'$sqrt_width'}),
                         node('te_scale','scale','Scale decoder embeddings · √D',460,440,{'factor':'$sqrt_width'}),

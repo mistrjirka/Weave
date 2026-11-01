@@ -9,6 +9,7 @@ import re
 import sqlite3
 import uuid
 import zipfile
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.responses import Response, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -23,7 +24,13 @@ from .tokenizer_bindings import input_tokenizers
 
 ROOT=Path(__file__).parent.parent
 DATA=Path(os.environ.get('WEAVE_DATA', ROOT/'data'));DATA.mkdir(parents=True,exist_ok=True)
-app=FastAPI(title='Weave Neural Graph Studio',version='0.1.0')
+@asynccontextmanager
+async def app_lifespan(app):
+    async with mcp_server.session_manager.run():
+        yield
+
+
+app=FastAPI(title='Weave Neural Graph Studio',version='0.1.0',lifespan=app_lifespan)
 
 @app.exception_handler(Exception)
 async def internal_error(request, exc):
@@ -229,6 +236,10 @@ def tokenizer_preview(request:PreviewRequest):
 
 from .training.api import router as training_router
 app.include_router(training_router(DATA))
+
+from .mcp_bridge import WeaveBridge, create_mcp_server, mcp_transport_security
+mcp_server = create_mcp_server(WeaveBridge(app=app))
+app.mount('/mcp', mcp_server.streamable_http_app(streamable_http_path='/', stateless_http=True, transport_security=mcp_transport_security()), name='mcp')
 
 
 if (ROOT/'dist').is_dir():app.mount('/',StaticFiles(directory=ROOT/'dist',html=True),name='frontend')

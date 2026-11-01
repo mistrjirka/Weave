@@ -6,6 +6,7 @@ import { GraphVariables } from "./GraphVariables";
 export function GraphVariableCard({
   values,
   inherited,
+  uses,
   nested,
   hiddenNames,
   onChange,
@@ -13,6 +14,7 @@ export function GraphVariableCard({
 }: {
   values: Record<string, number>;
   inherited: Record<string, number>;
+  uses?: Record<string, string[]>;
   nested: boolean;
   hiddenNames?: string[];
   onChange: (values: Record<string, number>) => void;
@@ -124,6 +126,7 @@ export function GraphVariableCard({
             compact
             values={values}
             inherited={inherited}
+            uses={uses}
             nested={nested}
             hiddenNames={hiddenNames}
             onChange={onChange}

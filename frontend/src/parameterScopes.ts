@@ -11,33 +11,8 @@ function bindings(value: JsonValue | undefined): string[] {
   return [];
 }
 
-function resolve(
-  value: JsonValue | undefined,
-  variables: Parameters,
-  local: Set<string>,
-): JsonValue | undefined {
-  if (
-    typeof value === "string" &&
-    value.startsWith("$") &&
-    layerDefaults.has(value.slice(1)) &&
-    !local.has(value.slice(1))
-  )
-    return variables[value.slice(1)] ?? value;
-  if (Array.isArray(value))
-    return value.map((item) => resolve(item, variables, local) ?? null);
-  if (value && typeof value === "object")
-    return Object.fromEntries(
-      Object.entries(value).map(([key, item]) => [
-        key,
-        resolve(item, variables, local) ?? null,
-      ]),
-    );
-  return value;
-}
-
-/** Materialize legacy architecture defaults on their owning blocks. Internal
- * bindings remain local to the container; editing one independent block cannot
- * silently reconfigure the rest of the model. Project input dimensions survive.
+/** Preserve explicit variable links while migrating legacy input tokenizers.
+ * Missing container defaults inherit through bindings, never frozen copies.
  */
 export function localizeLayerDefaults(project: Project): Project {
   const next = structuredClone(project);
@@ -52,16 +27,10 @@ export function localizeLayerDefaults(project: Project): Project {
         node.data.tokenizer = structuredClone(next.tokenizer);
   }
   delete next.tokenizer;
-  function visit(graph: Graph, inherited: Parameters, local: Set<string>) {
+  function visit(graph: Graph, inherited: Parameters) {
     inherited = { ...inherited, ...graph.variables };
-    local = new Set([...local, ...Object.keys(graph.variables ?? {})]);
     for (const node of graph.nodes) {
-      const params = Object.fromEntries(
-        Object.entries(node.data.params).map(([key, value]) => [
-          key,
-          resolve(value, inherited, local),
-        ]),
-      );
+      const params = { ...node.data.params };
       const body = node.data.body;
       if (body) {
         const used = new Set(
@@ -75,7 +44,7 @@ export function localizeLayerDefaults(project: Project): Project {
             params[key] === undefined &&
             inherited[key] !== undefined
           )
-            params[key] = inherited[key];
+            params[key] = "$" + key;
       }
       node.data.params = params;
       if (body) {
@@ -87,14 +56,10 @@ export function localizeLayerDefaults(project: Project): Project {
               : value,
           ]),
         );
-        visit(
-          body,
-          { ...inherited, ...values },
-          new Set([...local, ...Object.keys(params)]),
-        );
+        visit(body, { ...inherited, ...values });
       }
     }
   }
-  visit(next.graph, next.config, new Set());
+  visit(next.graph, next.config);
   return next;
 }

@@ -51,9 +51,35 @@ function VariableValue({
   );
 }
 
+function VariableUses({
+  entries = [],
+  compact = false,
+}: {
+  entries?: string[];
+  compact?: boolean;
+}) {
+  if (!entries.length)
+    return compact ? null : (
+      <small className="field-help">No linked fields in this graph.</small>
+    );
+  return (
+    <details className="variable-uses">
+      <summary>
+        {entries.length} linked {entries.length === 1 ? "field" : "fields"}
+      </summary>
+      <ul>
+        {entries.map((entry, index) => (
+          <li key={`${entry}:${index}`}>{entry}</li>
+        ))}
+      </ul>
+    </details>
+  );
+}
+
 export function GraphVariables({
   values,
   inherited,
+  uses = {},
   nested,
   compact = false,
   hiddenNames = [],
@@ -61,6 +87,7 @@ export function GraphVariables({
 }: {
   values: Record<string, number>;
   inherited: Record<string, number>;
+  uses?: Record<string, string[]>;
   nested: boolean;
   compact?: boolean;
   hiddenNames?: string[];
@@ -137,6 +164,12 @@ export function GraphVariables({
                 }
               >
                 <code>${name}</code>
+                {Object.hasOwn(values, name) &&
+                Object.hasOwn(inherited, name) ? (
+                  <small className="field-help">Local override</small>
+                ) : !Object.hasOwn(values, name) ? (
+                  <small className="field-help">Inherited</small>
+                ) : null}
               </th>
               <td>
                 <VariableValue
@@ -145,12 +178,23 @@ export function GraphVariables({
                   value={value}
                   onChange={(value) => onChange({ ...values, [name]: value })}
                 />
+                {Object.hasOwn(values, name) &&
+                  Object.hasOwn(inherited, name) && (
+                    <small className="field-help" role="status">
+                      Overrides inherited ${name} ({inherited[name]}).
+                    </small>
+                  )}
+                <VariableUses entries={uses[name]} compact={compact} />
               </td>
               <td>
                 <button
                   disabled={!Object.hasOwn(values, name)}
                   aria-label={`Delete $${name}`}
-                  title={`Delete $${name}`}
+                  title={
+                    Object.hasOwn(inherited, name)
+                      ? `Remove override for $${name}`
+                      : `Delete $${name}`
+                  }
                   onClick={() => {
                     const next = { ...values };
                     delete next[name];
@@ -216,6 +260,9 @@ export function GraphVariables({
                     <code>${name}</code>
                   </th>
                   <td>{value}</td>
+                  <td>
+                    <VariableUses entries={uses[name]} />
+                  </td>
                   <td>
                     <button
                       onClick={() => onChange({ ...values, [name]: value })}

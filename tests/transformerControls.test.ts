@@ -9,8 +9,11 @@ import {
   transformerSettings,
   exposeTransformerSettings,
   wrapLoopTransformer,
+  inheritTransformerDefaults,
   setAttentionVariant,
   setTransformerSetting,
+  transformerResidual,
+  setTransformerResidual,
 } from "../frontend/src/transformerControls.ts";
 import type { Project } from "../frontend/src/types.ts";
 
@@ -66,6 +69,7 @@ test("outer transformer settings bind inner operations and preserve independent 
     original,
   );
   assert.equal(attentionVariant(data, project.config), "mha");
+  assert.equal(attention.data.label, "Multi-head attention (MHA)");
   setTransformerSetting(data, "heads", 8);
   assert.equal(data.params.kv_heads, 8);
 });
@@ -458,4 +462,43 @@ test("a body variable is reported as effective and cannot be silently edited fro
     () => setTransformerSetting(data, "heads", 8, template.config),
     /local graph variable/,
   );
+});
+
+test("new transformer FFN width is local while heads follow the parent", () => {
+  const data = structuredClone(template).graph.nodes.find(
+    (node) => node.data.kind === "loop",
+  )!.data;
+  data.role = "transformer";
+  inheritTransformerDefaults(data, { heads: 12, ffn_width: 2176 });
+  exposeTransformerSettings(data);
+  wrapLoopTransformer(data);
+  const inner = data.body!.nodes.find(
+    (node) => node.data.role === "transformer",
+  )!.data;
+  assert.equal(inner.body!.variables?.ffn_width, 2176);
+  assert.equal(inner.params.ffn_width, undefined);
+  assert.equal(inner.params.heads, "$heads");
+  const ffn = inner.body!.nodes.find((node) => node.data.kind === "ffn")!;
+  ffn.data.params.hidden = 384;
+  setTransformerSetting(inner, "ffn_width", 512, { ffn_width: 2176 });
+  assert.equal(inner.body!.variables?.ffn_width, 512);
+  assert.equal(ffn.data.params.hidden, "$ffn_width");
+  assert.equal(transformerSettings(inner)?.ffn_width, 512);
+});
+
+test("attention output gate and residual type are independent choices", () => {
+  const data = structuredClone(template).graph.nodes.find(
+    (node) => node.data.kind === "loop",
+  )!.data;
+  const residual = data.body!.nodes.find((node) => node.id === "r1")!;
+  assert.equal(transformerResidual(data), "add");
+  setTransformerResidual(data, "gate");
+  assert.equal(transformerResidual(data), "gate");
+  assert.equal(data.body!.nodes.find((node) => node.id === "attn")!.data.params.gated, false);
+  residual.data.share = "residual_gate";
+  setTransformerResidual(data, "gate");
+  assert.equal(residual.data.share, "residual_gate");
+  setTransformerResidual(data, "add");
+  assert.equal(transformerResidual(data), "add");
+  assert.equal(residual.data.share, undefined);
 });

@@ -54,6 +54,25 @@ export function wrappedTransformer(data: NodeData): GraphNode | undefined {
     ? layers[0]
     : undefined;
 }
+/** New layers link heads to the parent and copy the parent's FFN width locally. */
+export function inheritTransformerDefaults(data: NodeData, scope: Parameters) {
+  if (typeof scope.heads === "number") data.params.heads = "$heads";
+  if (data.body?.nodes.some((node) => node.data.kind === "ffn")) {
+    const candidate = data.params.ffn_width;
+    const initial =
+      typeof scope.ffn_width === "number"
+        ? scope.ffn_width
+        : typeof candidate === "number"
+          ? candidate
+          : 256;
+    data.body.variables = { ...data.body.variables, ffn_width: initial };
+    delete data.params.ffn_width;
+  }
+}
+export function transformerParentScope(data: NodeData, scope: Parameters) {
+  return wrappedTransformer(data) ? bodyScope(data, scope) : scope;
+}
+
 /** The inner layer owns transformer settings; the loop owns repetition only. */
 function moveWrapperSettings(data: NodeData) {
   const child = wrappedTransformer(data);
@@ -156,6 +175,66 @@ export function transformerAttention(data: NodeData): GraphNode | undefined {
     ? attention[0]
     : undefined;
 }
+/** The residual is a separate operation from the attention output gate. */
+function attentionResidualNode(data: NodeData): GraphNode | undefined {
+  const graph = transformerGraph(data);
+  const attention = transformerAttention(data);
+  if (!attention || !graph) return undefined;
+  const inputs = new Set(
+    graph.nodes
+      .filter(
+        (node) =>
+          node.data.kind === "input" && (node.data.params.index ?? 0) === 0,
+      )
+      .map((node) => node.id),
+  );
+  const downstream = new Set<string>([attention.id]);
+  const pending = [attention.id];
+  while (pending.length) {
+    const source = pending.pop()!;
+    for (const edge of graph.edges.filter((item) => item.source === source)) {
+      const next = graph.nodes.find((node) => node.id === edge.target);
+      if (
+        next &&
+        ["norm", "layer_norm", "dropout", "scale"].includes(next.data.kind) &&
+        !downstream.has(next.id)
+      ) {
+        downstream.add(next.id);
+        pending.push(next.id);
+      }
+    }
+  }
+  const candidates = graph.nodes.filter((node) => {
+    if (!["add", "gate"].includes(node.data.kind)) return false;
+    const sources = (handle: string) =>
+      graph.edges
+        .filter(
+          (edge) =>
+            edge.target === node.id && (edge.targetHandle ?? "a") === handle,
+        )
+        .map((edge) => edge.source);
+    return (
+      sources("a").some((id) => inputs.has(id)) &&
+      sources("b").some((id) => downstream.has(id))
+    );
+  });
+  return candidates.length === 1 ? candidates[0] : undefined;
+}
+export function transformerResidual(data: NodeData): "add" | "gate" | null {
+  const node = attentionResidualNode(data);
+  return node?.data.kind === "add" || node?.data.kind === "gate"
+    ? node.data.kind
+    : null;
+}
+export function setTransformerResidual(data: NodeData, kind: "add" | "gate") {
+  const node = attentionResidualNode(data);
+  if (!node)
+    throw new Error("This transformer has no editable attention residual.");
+  if (node.data.kind !== kind) delete node.data.share;
+  node.data.kind = kind;
+  node.data.label =
+    kind === "gate" ? "Gated attention residual" : "Attention residual";
+}
 export function transformerSettings(data: NodeData): Parameters | null {
   const child = wrappedTransformer(data);
   if (child) {
@@ -211,7 +290,9 @@ export function exposeTransformerSettings(data: NodeData) {
   for (const key of transformerSettingKeys) {
     const value = settings[key];
     if (value === undefined) continue;
-    data.params[key] = value;
+    if (key !== "ffn_width" || data.body?.variables?.ffn_width === undefined)
+      data.params[key] = value;
+    else delete data.params.ffn_width;
     if (key === "ffn_width") {
       for (const node of transformerGraph(data)?.nodes ?? [])
         if (node.data.kind === "ffn") node.data.params.hidden = "$ffn_width";
@@ -293,6 +374,20 @@ export function setTransformerSetting(
     setTransformerSetting(child.data, key, value, bodyScope(data, scope));
     return;
   }
+  if (
+    key === "ffn_width" &&
+    data.body?.variables &&
+    Object.hasOwn(data.body.variables, key)
+  ) {
+    if (typeof value === "number") {
+      data.body.variables.ffn_width = value;
+      const ffn = data.body.nodes.find((node) => node.data.kind === "ffn");
+      if (ffn) ffn.data.params.hidden = "$ffn_width";
+      return;
+    }
+    if (typeof value === "string" && value.startsWith("$"))
+      delete data.body.variables.ffn_width;
+  }
   if (data.body?.variables && Object.hasOwn(data.body.variables, key))
     throw new Error(
       `${key} is overridden by a local graph variable. Edit it inside this block.`,
@@ -313,6 +408,13 @@ export function setTransformerSetting(
     attention.data.params[key] = "$" + key;
     if (key === "heads" && tiedHeads)
       attention.data.params.kv_heads = "$kv_heads";
+    if (["heads", "kv_heads", "window"].includes(key)) {
+      const variant = attentionVariant(data, scope);
+      const label = attentionVariants.find(
+        (option) => option.id === variant,
+      )?.label;
+      if (label) attention.data.label = label;
+    }
   }
 }
 export function setAttentionVariant(
