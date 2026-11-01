@@ -60,7 +60,7 @@ def atomic_text(path, text):
 class WorkspaceStore:
     def __init__(self, root):
         self.root = Path(root).absolute()
-        self.lock = RLock()
+        self.lock = MIGRATION_LOCK
 
     def directory(self, project_id, stage_id):
         with MIGRATION_LOCK:
@@ -275,6 +275,11 @@ class WorkspaceStore:
             except ValueError:
                 result.workspace_warning = "config.json contains invalid settings. Fix it in your SSH editor before launching."
             result.config_revision = hashlib.sha256(config_content).hexdigest()
+        model_error = directory / ".weave-model-error.txt"
+        if model_error.exists():
+            result.workspace_warning = " ".join(
+                filter(None, [result.workspace_warning, model_error.read_text()])
+            )
         return result
 
     def check(self, project_id, stage):
@@ -386,24 +391,107 @@ class WorkspaceStore:
 
     def prepare_model(self, project, stage, tokenizer_root):
         """Refresh graph-owned files, preserving the editable training script."""
+        self._sync_models(project, [stage.id], tokenizer_root)
+
+    def ensure_model(self, project, stage, tokenizer_root):
+        """Catch old workspaces and unsaved graph edits before a fresh launch."""
+        with self.lock:
+            directory = self.directory(project["id"], stage.id)
+            try:
+                current = json.loads((directory / PACKAGE / "project.json").read_text())
+            except (OSError, ValueError):
+                current = None
+            if current != project or (directory / ".weave-model-error.txt").exists():
+                self.prepare_model(project, stage, tokenizer_root)
+
+    def sync_project_models(self, project, tokenizer_root):
+        """A saved graph is the source of truth for every editable stage."""
+        with self.lock:
+            stages = self.metadata_plan(project["id"]).stages
+            self._sync_models(project, [stage.id for stage in stages], tokenizer_root)
+            return len(stages)
+
+    def _sync_models(self, project, stage_ids, tokenizer_root):
         from ..compiler import export_zip
         from ..tokenizer_bindings import input_tokenizers
 
-        project_directory = self.project_directory(project["id"], project.get("name"))
-        atomic_json(project_directory / "project.json", project)
-        directory = self.directory(project["id"], stage.id)
-        directory.mkdir(parents=True, exist_ok=True)
-        directories = {
-            info["id"]: Path(tokenizer_root) / valid_id(info["id"])
-            for info in input_tokenizers(project).values()
-        }
-        bundle = export_zip(project, tokenizer_dirs=directories)
-        generated = write_support(directory, bundle)
-        atomic_text(
-            project_directory / "README.md",
-            "# Weave project\n\nproject.json is the saved graph. Edit stages/<stage-id>/train.py and your own helpers. New recipes define typed TrainingConfig and data/loss/optimizer/scheduler hooks directly in Python; run python train.py. Legacy recipes may still use config.json and --config config.json. Generated model code, tokenizer assets, launch metadata and the reusable trainer live in each stage's weave_support/ folder and are refreshed by Weave. Migration originals are kept in weave_support/migrations/. Install training dependencies from weave_support/requirements.txt into your chosen environment. UI-launched run histories and checkpoints stay in Weave's application data directory. Standalone training writes its outputs under runs/.\n",
-        )
-        atomic_json(directory / ".weave-generated.json", {"files": generated})
+        with self.lock:
+            project_directory = self.project_directory(
+                project["id"], project.get("name")
+            )
+            atomic_json(project_directory / "project.json", project)
+            if not stage_ids:
+                return
+            directories = [
+                self.directory(project["id"], stage_id) for stage_id in stage_ids
+            ]
+            # Block new standalone imports while files are being refreshed, or
+            # after a failed compilation. Frozen run folders have no such marker.
+            for directory in directories:
+                atomic_text(
+                    directory / ".weave-model-error.txt",
+                    "Stage model synchronization is in progress. Retry after saving finishes.",
+                )
+                write_helpers(directory / PACKAGE)
+            try:
+                tokenizer_dirs = {
+                    info["id"]: Path(tokenizer_root) / valid_id(info["id"])
+                    for info in input_tokenizers(project).values()
+                }
+                for token_id, path in tokenizer_dirs.items():
+                    if not path.is_dir() or not any(path.iterdir()):
+                        raise ValueError(
+                            f"Tokenizer {token_id} is missing from this server. Upload or load it again."
+                        )
+                bundle = export_zip(project, tokenizer_dirs=tokenizer_dirs)
+                for directory in directories:
+                    manifest = directory / ".weave-generated.json"
+                    previous = (
+                        set(json.loads(manifest.read_text())["files"])
+                        if manifest.exists()
+                        else set()
+                    )
+                    generated = write_support(directory, bundle)
+                    # Remove only assets recorded as generated by Weave. Keep
+                    # train.py, launch settings, user helpers and migration backups.
+                    for name in previous - set(generated):
+                        if not name.startswith(PACKAGE + "/") or name.startswith(
+                            PACKAGE + "/migrations/"
+                        ):
+                            continue
+                        old = inside(directory, name)
+                        old.unlink(missing_ok=True)
+                        parent = old.parent
+                        while parent != directory / PACKAGE:
+                            try:
+                                parent.rmdir()
+                            except OSError:
+                                break
+                            parent = parent.parent
+                    atomic_json(manifest, {"files": generated})
+            except Exception as exc:
+                detail = str(exc)
+                if exc.args and isinstance(exc.args[0], dict):
+                    issues = exc.args[0].get("errors", [])
+                    if issues:
+                        detail = "; ".join(
+                            str(issue.get("message", issue)) for issue in issues[:3]
+                        )
+                message = (
+                    "Stage model/tokenizer could not be synchronized with the saved graph. Fix the graph or tokenizer files and save the project again. "
+                    + detail
+                )
+                for directory in directories:
+                    atomic_text(directory / ".weave-model-error.txt", message)
+                if isinstance(exc, (ValueError, OSError)):
+                    raise ValueError(detail) from exc
+                raise
+            for directory in directories:
+                (directory / ".weave-model-error.txt").unlink(missing_ok=True)
+            atomic_text(
+                project_directory / "README.md",
+                "# Weave project\n\nproject.json is the saved graph. Edit stages/<stage-id>/train.py and your own helpers. Saving the project automatically refreshes each stage's generated model and tokenizer in weave_support/, while preserving train.py and launch settings. Failed synchronization blocks standalone imports until the project is fixed and saved again. Existing run snapshots and checkpoints are never changed. Run python train.py in a stage directory; install training dependencies from weave_support/requirements.txt into your chosen environment. Standalone training writes outputs under runs/.\n",
+            )
 
     def freeze_extras(self, project_id, stage_id, destination):
         directory = self.directory(project_id, stage_id)

@@ -194,6 +194,7 @@ import {
   parametersSchema,
   responseData,
   projectSchema,
+  projectSaveSchema,
   projectsSchema,
   savedProjectsSchema,
   graphSchema,
@@ -2095,7 +2096,16 @@ function Workbench({
         ? ref.current.id
         : "project-" + uid();
       const next = { ...ref.current, id };
-      await api("/projects/" + id, next, "PUT");
+      const result = projectSaveSchema.parse(
+        await api("/projects/" + id, next, "PUT"),
+      );
+      const message = result.stage_sync?.error
+        ? "Project saved, but training stages could not be updated: " +
+          result.stage_sync.error
+        : "Project saved on server" +
+          (result.stage_sync?.updated
+            ? ` · ${result.stage_sync.updated} training stage(s) synchronized`
+            : "");
       if (ref.current === before) {
         setProject(next);
         ref.current = next;
@@ -2107,10 +2117,11 @@ function Workbench({
       }
       try {
         setSaved(savedProjectsSchema.parse(await api("/projects")));
-        notify("Project saved on server");
+        notify(message);
       } catch (refreshError) {
         notify(
-          "Project saved on server; project list refresh failed: " +
+          message +
+            "; project list refresh failed: " +
             describeError(refreshError),
         );
       }
@@ -4764,7 +4775,6 @@ function Workbench({
               onSave={async () => {
                 if (!(await saveProject())) return false;
                 setModal(null);
-                notify("Tokenizer and project saved on server");
                 return true;
               }}
             />

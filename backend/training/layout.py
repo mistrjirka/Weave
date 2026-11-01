@@ -192,7 +192,14 @@ def write_helpers(package):
             target.write_text(content)
         generated.append(PACKAGE + "/" + name)
     target = package / "__init__.py"
-    source = '"""Generated support. Edit train.py and your own helpers in the parent folder."""\nfrom .weave_training import Run, atomic_checkpoint_path\n'
+    source = (
+        '"""Generated support. Edit train.py and your own helpers in the parent folder."""\n'
+        "from pathlib import Path as _Path\n"
+        '_model_error = _Path(__file__).resolve().parent.parent / ".weave-model-error.txt"\n'
+        "if _model_error.exists():\n"
+        "    raise RuntimeError(_model_error.read_text())\n"
+        "from .weave_training import Run, atomic_checkpoint_path\n"
+    )
     if not target.exists() or target.read_text() != source:
         target.write_text(source)
     generated.append(PACKAGE + "/__init__.py")

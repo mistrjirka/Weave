@@ -91,10 +91,15 @@ def save_project(project_id:str,project:dict):
     except ValueError as exc:raise HTTPException(422,str(exc))
     project['id']=project_id
     from .training.workspaces import WorkspaceStore, WorkspaceConflict
-    try:atomic_json(WorkspaceStore(DATA/'training').project_directory(project_id, project.get('name'))/'project.json', project)
-    except WorkspaceConflict as exc:raise HTTPException(409,str(exc))
-    with db() as conn:conn.execute('INSERT INTO projects(id,name,document) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,document=excluded.document,updated=CURRENT_TIMESTAMP',(project_id,project.get('name','Untitled'),json.dumps(project)))
-    return {'id':project_id,'saved':True}
+    store=WorkspaceStore(DATA/'training')
+    with store.lock:
+        try:atomic_json(store.project_directory(project_id, project.get('name'))/'project.json', project)
+        except WorkspaceConflict as exc:raise HTTPException(409,str(exc))
+        with db() as conn:conn.execute('INSERT INTO projects(id,name,document) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,document=excluded.document,updated=CURRENT_TIMESTAMP',(project_id,project.get('name','Untitled'),json.dumps(project)))
+        stage_sync={'updated':0,'error':None}
+        try:stage_sync['updated']=store.sync_project_models(project, DATA/'tokenizers')
+        except (ValueError, OSError) as exc:stage_sync['error']=str(exc)
+    return {'id':project_id,'saved':True,'stage_sync':stage_sync}
 
 
 @app.delete('/api/projects/{project_id}')

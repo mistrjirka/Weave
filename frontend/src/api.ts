@@ -124,6 +124,13 @@ export const tokenizerSchema: z.ZodType<TokenizerInfo> = z
     ),
   })
   .passthrough();
+export const projectSaveSchema = z.object({
+  id: z.string(),
+  saved: z.boolean(),
+  stage_sync: z
+    .object({ updated: z.number(), error: z.string().nullable() })
+    .optional(),
+});
 export const projectSchema: z.ZodType<Project> = z.object({
   version: z.literal(1),
   id: z.string(),

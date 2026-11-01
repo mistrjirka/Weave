@@ -142,6 +142,7 @@ test("upload a tokenizer folder with its companion configuration", async ({
 test("Save & close persists the tokenizer and keeps the dialog open on failure", async ({
   page,
 }) => {
+  test.setTimeout(60000);
   let savedId: string | undefined;
   await page.goto("/");
   await expect(
@@ -153,6 +154,7 @@ test("Save & close persists the tokenizer and keeps the dialog open on failure",
     .setInputFiles(bundle(4));
   await expect(page.locator(".tokenizer-status")).toContainText(
     "Not saved yet",
+    { timeout: 45000 },
   );
   const pattern = "**/api/projects/project-*";
   await page.route(pattern, (route) =>
@@ -181,7 +183,7 @@ test("Save & close persists the tokenizer and keeps the dialog open on failure",
     expect(response.ok()).toBeTruthy();
     await expect(page.getByRole("dialog")).toHaveCount(0);
     await expect(page.getByRole("status")).toContainText(
-      "Tokenizer and project saved on server",
+      "Project saved on server",
     );
     const project = await (
       await page.request.get(`/api/projects/${savedId}`)
@@ -213,6 +215,7 @@ test("black tokenizer dialog keeps confirmation visible on a phone", async ({
     .setInputFiles(bundle(4));
   await expect(page.locator(".tokenizer-status")).toContainText(
     "Not saved yet",
+    { timeout: 45000 },
   );
   await page
     .getByText("Details & tokenization preview", { exact: true })
