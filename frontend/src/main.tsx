@@ -95,6 +95,7 @@ import {
   transformerSettings,
   transformerSettingKeys,
   exposeTransformerSettings,
+  wrapLoopTransformer,
   setTransformerSetting,
   setAttentionVariant,
 } from "./transformerControls";
@@ -1780,6 +1781,7 @@ function Workbench({
       const theta = graphVariableScope(project, path).effective.theta;
       data.params.theta = typeof theta === "number" ? "$theta" : 1_000_000;
     }
+    wrapLoopTransformer(data);
     return data;
   }
   function addNode(

@@ -7,6 +7,7 @@ import {
   attentionFieldDisabledReason,
   transformerSettings,
   exposeTransformerSettings,
+  wrapLoopTransformer,
   setAttentionVariant,
   setTransformerSetting,
 } from "../frontend/src/transformerControls.ts";
@@ -218,5 +219,91 @@ test("convolution-window option is inactive only when a required part is absent"
       window: 32,
     }),
     undefined,
+  );
+});
+
+test("a loop can contain one editable transformer without changing forward or backward", () => {
+  const original = structuredClone(template);
+  original.config = {
+    ...original.config,
+    width: 16,
+    heads: 4,
+    ffn_width: 32,
+    vocab: 32,
+  };
+  const originalLoop = original.graph.nodes.find(
+    (node) => node.data.kind === "loop",
+  )!.data;
+  originalLoop.role = "transformer";
+  originalLoop.params = {
+    iterations: 3,
+    shared: true,
+    heads: 4,
+    ffn_width: 32,
+  };
+  exposeTransformerSettings(originalLoop);
+  const wrapped = structuredClone(original);
+  const loop = wrapped.graph.nodes.find(
+    (node) => node.data.kind === "loop",
+  )!.data;
+  wrapLoopTransformer(loop);
+  assert.deepEqual(
+    loop.body!.nodes.map((node) => node.data.kind),
+    ["input", "block", "output"],
+  );
+  const layer = loop.body!.nodes.find(
+    (node) => node.data.kind === "block",
+  )!.data;
+  assert.equal(layer.role, "transformer");
+  assert.equal(transformerSettings(loop)?.ffn_width, 32);
+  python(
+    `
+import json, sys, torch
+from backend import runtime, export_helpers, sparse_runtime
+from backend.compiler import compile_project
+from backend.core import validate_project
+for name, module in [('runtime',runtime),('export_helpers',export_helpers),('sparse_runtime',sparse_runtime)]:
+    sys.modules[name] = module
+torch.set_num_threads(1)
+models=[]
+for project in json.load(sys.stdin):
+    report=validate_project(project)
+    assert report['valid'], report['errors']
+    namespace={}
+    exec(compile_project(project)['model.py'], namespace)
+    torch.manual_seed(42)
+    model=namespace['Model']()
+    assert sum(p.numel() for p in model.parameters()) == report['parameters']
+    models.append(model)
+a,b=models
+assert [p.shape for p in a.parameters()] == [p.shape for p in b.parameters()]
+for x,y in zip(a.parameters(),b.parameters()):
+    torch.testing.assert_close(x,y)
+ids=torch.tensor([[1,2,3,4]])
+x,y=a(ids),b(ids)
+torch.testing.assert_close(x,y,rtol=0,atol=0)
+x.square().mean().backward();y.square().mean().backward()
+for p,q in zip(a.parameters(),b.parameters()):
+    assert p.grad is not None and q.grad is not None
+    torch.testing.assert_close(p.grad,q.grad,rtol=0,atol=0)
+`,
+    JSON.stringify([original, wrapped]),
+  );
+  setTransformerSetting(loop, "heads", 8, wrapped.config);
+  assert.equal(loop.params.heads, 8);
+  setAttentionVariant(loop, "sparse", wrapped.config, uid);
+  assert.equal(attentionVariant(loop, wrapped.config), "sparse");
+  assert.equal(
+    layer.body!.nodes.filter((node) => node.data.role === "attention-layout")
+      .length,
+    3,
+  );
+  assert.equal(loop.body!.nodes.length, 3);
+  setAttentionVariant(loop, "mqa", wrapped.config, uid);
+  assert.equal(attentionVariant(loop, wrapped.config), "mqa");
+  assert.equal(
+    layer.body!.nodes.filter((node) => node.data.role === "attention-layout")
+      .length,
+    0,
   );
 });

@@ -21,7 +21,7 @@ export const catalog: CatalogEntry[] = [
     kind: "loop",
     label: "Looped transformer",
     description:
-      "Premade recurrent transformer · edit attention and heads on this container",
+      "Shared transformer layer inside an editable loop · open to insert more blocks",
     category: "Composition",
     params: { iterations: 4, shared: true, heads: 8, ffn_width: 256 },
     role: "transformer",

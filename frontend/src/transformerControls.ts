@@ -1,4 +1,10 @@
-import type { GraphNode, NodeData, Parameters, JsonValue } from "./types";
+import type {
+  Graph,
+  GraphNode,
+  NodeData,
+  Parameters,
+  JsonValue,
+} from "./types";
 
 export const attentionVariants = [
   { id: "mha", label: "Multi-head attention (MHA)" },
@@ -37,8 +43,82 @@ export const transformerSettingKeys = new Set([
   "conv_respects_window",
   "ffn_width",
 ]);
+/** Follow a single transformer wrapper, never an arbitrary multi-layer stack. */
+function transformerGraph(data: NodeData): Graph | undefined {
+  const graph = data.body;
+  if (!graph || graph.nodes.some((node) => node.data.kind === "attention"))
+    return graph;
+  const layers = graph.nodes.filter(
+    (node) => node.data.kind !== "input" && node.data.kind !== "output",
+  );
+  const layer = layers.length === 1 ? layers[0] : undefined;
+  return layer?.data.kind === "block" && layer.data.role === "transformer"
+    ? transformerGraph(layer.data)
+    : graph;
+}
+
+/** Add a navigable boundary without adding operations or changing parameters. */
+export function wrapLoopTransformer(data: NodeData) {
+  if (data.kind !== "loop" || data.role !== "transformer" || !data.body) return;
+  const body = data.body;
+  const inputs = structuredClone(
+    body.nodes.filter((n) => n.data.kind === "input"),
+  );
+  const outputs = structuredClone(
+    body.nodes.filter((n) => n.data.kind === "output"),
+  );
+  let id = "transformer_layer";
+  while ([...inputs, ...outputs].some((node) => node.id === id)) id += "_";
+  inputs.forEach((node, index) => {
+    node.position = { x: 0, y: 120 + index * 240 };
+  });
+  outputs.forEach((node, index) => {
+    node.position = { x: 680, y: 120 + index * 240 };
+  });
+  data.body = {
+    nodes: [
+      ...inputs,
+      {
+        id,
+        type: "architecture",
+        position: { x: 340, y: 120 },
+        data: {
+          kind: "block",
+          role: "transformer",
+          label: "Transformer layer",
+          params: {},
+          body,
+        },
+      },
+      ...outputs,
+    ],
+    edges: [
+      ...inputs.map((node) => ({
+        id: `${node.id}-${id}`,
+        source: node.id,
+        sourceHandle: "out",
+        target: id,
+        targetHandle: String.fromCharCode(
+          97 + Number(node.data.params.index ?? 0),
+        ),
+        type: "smoothstep",
+      })),
+      ...outputs.map((node) => ({
+        id: `${id}-${node.id}`,
+        source: id,
+        sourceHandle: "out",
+        target: node.id,
+        targetHandle: "a",
+        type: "smoothstep",
+      })),
+    ],
+  };
+}
+
 export function transformerAttention(data: NodeData): GraphNode | undefined {
-  return data.body?.nodes.find((node) => node.data.kind === "attention");
+  return transformerGraph(data)?.nodes.find(
+    (node) => node.data.kind === "attention",
+  );
 }
 export function transformerSettings(data: NodeData): Parameters | null {
   const attention = transformerAttention(data);
@@ -48,7 +128,9 @@ export function transformerSettings(data: NodeData): Parameters | null {
     ...attention.data.params,
     ...data.params,
   };
-  const ffn = data.body?.nodes.find((node) => node.data.kind === "ffn");
+  const ffn = transformerGraph(data)?.nodes.find(
+    (node) => node.data.kind === "ffn",
+  );
   if (ffn) settings.ffn_width ??= ffn.data.params.hidden ?? 256;
   else delete settings.ffn_width;
   return settings;
@@ -65,7 +147,7 @@ export function exposeTransformerSettings(data: NodeData) {
     if (value === undefined) continue;
     if (data.params[key] === undefined) data.params[key] = value;
     if (key === "ffn_width") {
-      for (const node of data.body?.nodes ?? [])
+      for (const node of transformerGraph(data)?.nodes ?? [])
         if (node.data.kind === "ffn") node.data.params.hidden = "$ffn_width";
     } else
       attention.data.params[key] = literalSetting(key, value)
@@ -90,7 +172,11 @@ export function attentionVariant(
 ): AttentionVariant | "custom" {
   const settings = transformerSettings(data);
   if (!settings) return "custom";
-  if (data.body?.nodes.some((node) => node.data.role === "attention-layout"))
+  if (
+    transformerGraph(data)?.nodes.some(
+      (node) => node.data.role === "attention-layout",
+    )
+  )
     return "sparse";
   if (number(settings.window, scope, 0) > 0) return "local";
   const heads = number(settings.heads, scope, 8),
@@ -167,7 +253,7 @@ export function setAttentionVariant(
       "Choose a transformer with compact self-attention. Expanded Q/K/V graphs remain editable inside their block.",
     );
   exposeTransformerSettings(data);
-  const graph = data.body;
+  const graph = transformerGraph(data)!;
   const generated = new Set(
     graph.nodes
       .filter((node) => node.data.role === "attention-layout")
