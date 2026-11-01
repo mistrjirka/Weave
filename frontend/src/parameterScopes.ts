@@ -61,5 +61,81 @@ export function localizeLayerDefaults(project: Project): Project {
     }
   }
   visit(next.graph, next.config);
+  migrateLegacyEmbeddingTies(next);
   return next;
+}
+
+/** Translate a legacy head-to-embedding ID into the existing weight-group model.
+ * Multiple heads can have distinct settings and biases, so keep their legacy
+ * ties until those semantics can be represented without joining the heads.
+ */
+export function migrateLegacyEmbeddingTies(project: Project): void {
+  const used = new Set<string>();
+  const headGroups = new Map<string, number>();
+  function collect(graph: Graph) {
+    for (const node of graph.nodes) {
+      if (node.data.share) {
+        used.add(node.data.share);
+        if (node.data.kind === "head")
+          headGroups.set(
+            node.data.share,
+            (headGroups.get(node.data.share) ?? 0) + 1,
+          );
+      }
+      if (node.data.body) collect(node.data.body);
+    }
+  }
+  collect(project.graph);
+  function visit(graph: Graph, path: string, insideIndependentLoop = false) {
+    const heads = graph.nodes.filter(
+      (node) =>
+        node.data.kind === "head" && typeof node.data.params.tie === "string",
+    );
+    const byEmbedding = new Map<string, typeof heads>();
+    for (const head of heads) {
+      const id = String(head.data.params.tie);
+      byEmbedding.set(id, [...(byEmbedding.get(id) ?? []), head]);
+    }
+    for (const [id, tied] of byEmbedding) {
+      const embedding = graph.nodes.find(
+        (node) => node.id === id && node.data.kind === "embedding",
+      );
+      if (!embedding || tied.length !== 1 || insideIndependentLoop) continue;
+      const head = tied[0];
+      if (
+        embedding.data.share &&
+        (headGroups.get(embedding.data.share) ?? 0) >
+          (head.data.share === embedding.data.share ? 1 : 0)
+      )
+        continue;
+      if (head.data.share && head.data.share !== embedding.data.share) continue;
+      if (!embedding.data.share) {
+        const base = `legacy_tie_${encodeURIComponent(path + "/" + id)}`;
+        let group = base;
+        for (let suffix = 2; used.has(group); suffix++)
+          group = `${base}_${suffix}`;
+        embedding.data.share = group;
+        used.add(group);
+      }
+      const alreadyGrouped = head.data.share === embedding.data.share;
+      head.data.share = embedding.data.share;
+      if (!alreadyGrouped)
+        headGroups.set(
+          embedding.data.share,
+          (headGroups.get(embedding.data.share) ?? 0) + 1,
+        );
+      delete head.data.params.tie;
+    }
+    for (const node of graph.nodes)
+      if (node.data.body)
+        visit(
+          node.data.body,
+          path + "/" + node.id,
+          insideIndependentLoop ||
+            (node.data.kind === "loop" &&
+              node.data.params.shared !== true &&
+              node.data.params.shared !== undefined),
+        );
+  }
+  visit(project.graph, "");
 }

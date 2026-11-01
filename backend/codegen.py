@@ -22,6 +22,7 @@ from .core import (
     port_names,
     output_port_names,
     moe_structure,
+    mixed_matrix_groups,
 )
 from .lanes import MULTI_OUTPUT_LANES, source_contract
 
@@ -394,6 +395,7 @@ class SourceGenerator:
         }
         self.custom_imports = []
         self.shared = has_shared_modules(project["graph"])
+        self.mixed_groups = mixed_matrix_groups(project["graph"])
 
     def class_name(self, label):
         base = "".join(
@@ -573,7 +575,7 @@ class SourceGenerator:
                     args = [args[0], f"mask={args[1]}"]
                 elif kind == "cross_attention":
                     args = [args[0], f"memory={args[1]}", f"mask={args[2]}"]
-            self.add_module(init, name, constructor, data.get("share"))
+            self.add_module(init, name, constructor, data.get("share"), kind)
             attributes[node["id"]] = name
             forward.append(f"{name} = self.{name}({', '.join(args)})")
         for node in sequence:
@@ -654,8 +656,25 @@ class SourceGenerator:
         self.classes.append(source)
         return name
 
-    def add_module(self, lines, name, constructor, share):
+    def add_module(self, lines, name, constructor, share, kind=None):
         if share:
+            if share in self.mixed_groups and kind in ("embedding", "head"):
+                module_key = (share, kind)
+                weight_key = (share, "matrix")
+                lines.extend(
+                    [
+                        f"# Shared embedding/output matrix: {str(share).replace(chr(10), ' ').replace(chr(13), ' ')}",
+                        f"if {module_key!r} not in shared_modules:",
+                        f"    module = {constructor}",
+                        f"    if {weight_key!r} in shared_modules:",
+                        f"        module.weight = shared_modules[{weight_key!r}]",
+                        "    else:",
+                        f"        shared_modules[{weight_key!r}] = module.weight",
+                        f"    shared_modules[{module_key!r}] = module",
+                        f"self.{name} = shared_modules[{module_key!r}]",
+                    ]
+                )
+                return
             lines.extend(
                 [
                     f"# Parameter group: {str(share).replace(chr(10), ' ').replace(chr(13), ' ')}",

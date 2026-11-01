@@ -87,6 +87,153 @@ def test_tied_head_counts_independent_bias(monkeypatch):
     assert sum(p.numel() for p in model.parameters()) == report["parameters"]
 
 
+def test_weight_group_shares_matrix_and_same_kind_head_bias(monkeypatch):
+    project = reduced(next(p for p in templates() if p["id"] == "transformer"))
+    graph = project["graph"]
+    head = next(n for n in graph["nodes"] if n["id"] == "head")
+    head["data"]["params"]["bias"] = True
+    second = copy.deepcopy(head)
+    second["id"] = "head2"
+    graph["nodes"].append(second)
+    graph["nodes"].append(node("out2", "output", "Second logits", 0, 0, {"index": 1}))
+    graph["edges"].extend([edge("norm", "head2"), edge("head2", "out2")])
+    report = validate_project(project)
+    assert report["valid"], report["errors"]
+    model, files = instantiate(project, monkeypatch)
+    names = json.loads(files["graph_modules.json"])
+    embedding = getattr(model, names["emb"])
+    first = getattr(model, names["head"])
+    other = getattr(model, names["head2"])
+    assert first is other
+    assert first is not embedding
+    assert first.weight is embedding.weight
+    assert first.bias is other.bias
+    assert sum(p.numel() for p in model.parameters()) == report["parameters"]
+    outputs = model(torch.randint(0, 32, (2, 4)))
+    sum(x.square().mean() for x in outputs).backward()
+    assert embedding.weight.grad is first.weight.grad
+    assert first.bias.grad is not None
+
+
+def test_legacy_multiple_tied_heads_keep_separate_biases(monkeypatch):
+    project = reduced(next(p for p in templates() if p["id"] == "transformer"))
+    graph = project["graph"]
+    embedding = next(n for n in graph["nodes"] if n["id"] == "emb")
+    embedding["data"].pop("share")
+    head = next(n for n in graph["nodes"] if n["id"] == "head")
+    head["data"].pop("share")
+    head["data"]["params"].update(tie="emb", bias=True)
+    second = copy.deepcopy(head)
+    second["id"] = "head2"
+    graph["nodes"].extend([second, node("out2", "output", "Second logits", 0, 0, {"index": 1})])
+    graph["edges"].extend([edge("norm", "head2"), edge("head2", "out2")])
+    report = validate_project(project)
+    assert report["valid"], report["errors"]
+    model, files = instantiate(project, monkeypatch)
+    names = json.loads(files["graph_modules.json"])
+    first = getattr(model, names["head"])
+    other = getattr(model, names["head2"])
+    assert first.weight is other.weight is getattr(model, names["emb"]).weight
+    assert first.bias is not other.bias
+    assert sum(p.numel() for p in model.parameters()) == report["parameters"]
+
+
+def test_nested_head_first_group_shares_matrix_through_independent_loop(monkeypatch):
+    group = "vocabulary"
+    head_body = {
+        "nodes": [
+            node("x", "input", "Features", 0, 0, {"index": 0, "shape": ["B", "T", 4], "dtype": "float32"}),
+            node("head", "head", "Projection", 1, 0, {"out": 4, "bias": True}, share=group),
+            node("y", "output", "Logits", 2, 0),
+        ],
+        "edges": [edge("x", "head"), edge("head", "y")],
+    }
+    embedding_body = {
+        "nodes": [
+            node("x", "input", "IDs", 0, 0, {"index": 0, "shape": ["B", "T"], "dtype": "int64"}),
+            node("emb", "embedding", "Table", 1, 0, {"vocab": 4, "width": 4}, share=group),
+            node("y", "output", "Features", 2, 0),
+        ],
+        "edges": [edge("x", "emb"), edge("emb", "y")],
+    }
+    project = {
+        "version": 1, "id": "nested_matrix", "name": "Nested matrix",
+        "config": {"width": 4, "vocab": 4},
+        "graph": {
+            "nodes": [
+                node("features", "input", "Features", 0, 0, {"index": 0, "shape": ["B", "T", 4], "dtype": "float32"}),
+                node("loop", "loop", "Head loop", 1, 0, {"iterations": 3, "shared": False}, head_body),
+                node("logits", "output", "Logits", 2, 0, {"index": 0}),
+                node("ids", "input", "IDs", 0, 1, {"index": 1, "shape": ["B", "T"], "dtype": "int64"}),
+                node("block", "block", "Embedding block", 1, 1, {}, embedding_body),
+                node("embedded", "output", "Embedded", 2, 1, {"index": 1}),
+            ],
+            "edges": [edge("features", "loop"), edge("loop", "logits"), edge("ids", "block"), edge("block", "embedded")],
+        },
+    }
+    report = validate_project(project)
+    assert report["valid"], report["errors"]
+    assert report["parameters"] == 20
+    model, files = instantiate(project, monkeypatch)
+    names = json.loads(files["graph_modules.json"])
+    loops = getattr(model, names["loop"])
+    heads = [next(m for m in layer.modules() if isinstance(m, nn.Linear)) for layer in loops]
+    embedding = next(m for m in getattr(model, names["block"]).modules() if isinstance(m, nn.Embedding))
+    assert heads[0] is heads[1] is heads[2]
+    assert heads[0].weight is embedding.weight
+    assert heads[0].bias is not None
+    assert sum(p.numel() for p in model.parameters()) == report["parameters"]
+    logits, embedded = model(torch.randn(2, 3, 4), torch.randint(0, 4, (2, 3)))
+    (logits.square().mean() + embedded.square().mean()).backward()
+    assert embedding.weight.grad is heads[0].weight.grad
+
+
+def test_mixed_weight_group_rejects_matrix_shape_mismatch():
+    project = reduced(next(p for p in templates() if p["id"] == "transformer"))
+    head = next(n for n in project["graph"]["nodes"] if n["id"] == "head")
+    head["data"]["params"]["out"] = 33
+    report = validate_project(project)
+    assert not report["valid"]
+    assert any("matrix dimensions" in error["message"] for error in report["errors"])
+
+
+def test_legacy_ties_in_independent_loop_keep_each_iteration_separate(monkeypatch):
+    body = {
+        "nodes": [
+            node("features", "input", "Features", 0, 0, {"index": 0, "shape": ["B", "T", 4], "dtype": "float32"}),
+            node("ids", "input", "IDs", 0, 1, {"index": 1, "shape": ["B", "T"], "dtype": "int64"}),
+            node("emb", "embedding", "Table", 1, 1, {"vocab": 4, "width": 4}),
+            node("head", "head", "Projection", 1, 0, {"out": 4, "bias": True, "tie": "emb"}),
+            node("y", "output", "Output", 2, 0),
+        ],
+        "edges": [edge("ids", "emb"), edge("features", "head"), edge("head", "y")],
+    }
+    project = {
+        "version": 1, "id": "legacy_loop", "name": "Legacy loop",
+        "config": {"width": 4, "vocab": 4},
+        "graph": {
+            "nodes": [
+                node("features", "input", "Features", 0, 0, {"index": 0, "shape": ["B", "T", 4], "dtype": "float32"}),
+                node("ids", "input", "IDs", 0, 1, {"index": 1, "shape": ["B", "T"], "dtype": "int64"}),
+                node("loop", "loop", "Loop", 1, 0, {"iterations": 3, "shared": False}, body),
+                node("out", "output", "Output", 2, 0),
+            ],
+            "edges": [edge("features", "loop"), edge("ids", "loop", "b"), edge("loop", "out")],
+        },
+    }
+    report = validate_project(project)
+    assert report["valid"], report["errors"]
+    assert report["parameters"] == 60
+    model, files = instantiate(project, monkeypatch)
+    names = json.loads(files["graph_modules.json"])
+    layers = list(getattr(model, names["loop"]))
+    embeddings = [next(m for m in layer.modules() if isinstance(m, nn.Embedding)) for layer in layers]
+    heads = [next(m for m in layer.modules() if isinstance(m, nn.Linear)) for layer in layers]
+    assert all(head.weight is embedding.weight for head, embedding in zip(heads, embeddings))
+    assert len({id(embedding.weight) for embedding in embeddings}) == 3
+    assert sum(p.numel() for p in model.parameters()) == report["parameters"]
+
+
 def test_shared_three_block_model_count_and_causality(monkeypatch):
     config = {"vocab": 16000, "width": 768, "heads": 12, "ffn_width": 2176}
 

@@ -57,6 +57,13 @@ export function weightGroupType(data: NodeData): string {
 export function sameWeightType(a: NodeData, b: NodeData): boolean {
   return weightGroupType(a) === weightGroupType(b);
 }
+export function compatibleWeightGroupType(a: NodeData, b: NodeData): boolean {
+  return (
+    sameWeightType(a, b) ||
+    (["embedding", "head"].includes(a.kind) &&
+      ["embedding", "head"].includes(b.kind))
+  );
+}
 export interface WeightGroupChoice {
   id: string;
   label: string;
@@ -74,7 +81,9 @@ export function weightGroupChoices(
     groups.set(node.data.share, members);
   }
   return [...groups].flatMap(([id, members], index) => {
-    const compatible = members.every((data) => sameWeightType(selected, data));
+    const compatible = members.every((data) =>
+      compatibleWeightGroupType(selected, data),
+    );
     return compatible || id === selected.share
       ? [
           {

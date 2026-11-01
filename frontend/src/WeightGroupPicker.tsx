@@ -6,11 +6,13 @@ export function WeightGroupPicker({
   choices,
   onChange,
   onCreate,
+  matrixSharing = false,
 }: {
   value: string;
   choices: WeightGroupChoice[];
   onChange: (value: string) => void;
   onCreate: () => void;
+  matrixSharing?: boolean;
 }) {
   return (
     <section className="weight-group-picker" aria-label="Shared weights">
@@ -38,9 +40,9 @@ export function WeightGroupPicker({
         New weight group
       </button>
       <p className="field-help">
-        Only groups for the same node type and block interface are offered.
-        Joining a group uses its existing settings; later edits update all its
-        applications.
+        {matrixSharing
+          ? "Embedding and output head can share a compatible trainable matrix. Their other settings remain separate. Matching node types in a group share their full module settings. Graph validation checks dimensions."
+          : "Only groups for the same node type and block interface are offered. Joining a group uses its existing settings; later edits update all its applications."}
       </p>
     </section>
   );

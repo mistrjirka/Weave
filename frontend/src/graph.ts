@@ -1,4 +1,4 @@
-import { sameWeightType } from "./weightGroups";
+import { sameWeightType, compatibleWeightGroupType } from "./weightGroups";
 import dagre from "@dagrejs/dagre";
 import { newId } from "./ui";
 import type {
@@ -60,10 +60,19 @@ function semantic(data: NodeData): unknown {
 
 export function synchronizeDefinitions(before: Project, next: Project) {
   const previous = new Map(allNodes(before).map((x) => [x.path, x.node]));
-  const updates = new Map<string, NodeData>();
-  const existing = new Map<string, NodeData>();
+  const updates = new Map<string, Map<string, NodeData>>();
+  const existing = new Map<string, Map<string, NodeData>>();
+  const set = (
+    groups: Map<string, Map<string, NodeData>>,
+    group: string,
+    data: NodeData,
+  ) => {
+    const members = groups.get(group) ?? new Map<string, NodeData>();
+    members.set(data.kind, data);
+    groups.set(group, members);
+  };
   for (const { node } of allNodes(before))
-    if (node.data.share) existing.set(node.data.share, node.data);
+    if (node.data.share) set(existing, node.data.share, node.data);
   for (const { node, path } of allNodes(next)) {
     const key = node.data.share;
     if (!key) continue;
@@ -72,14 +81,25 @@ export function synchronizeDefinitions(before: Project, next: Project) {
       old?.data.share === key &&
       JSON.stringify(semantic(old.data)) !== JSON.stringify(semantic(node.data))
     )
-      updates.set(key, node.data);
+      set(updates, key, node.data);
     else if (old?.data.share !== key) {
-      const definition = existing.get(key) ?? updates.get(key);
+      const members = [
+        ...(existing.get(key)?.values() ?? []),
+        ...(updates.get(key)?.values() ?? []),
+      ];
+      if (members.some((data) => !compatibleWeightGroupType(node.data, data)))
+        throw new Error(
+          "Weight groups require the same node type and block interface, or compatible embedding and head matrices.",
+        );
+      const definition =
+        existing.get(key)?.get(node.data.kind) ??
+        updates.get(key)?.get(node.data.kind);
       if (definition && !sameWeightType(node.data, definition))
         throw new Error(
           "Weight groups can only be joined by the same node type and block interface.",
         );
-      if (!updates.has(key)) updates.set(key, definition ?? node.data);
+      if (!updates.get(key)?.has(node.data.kind))
+        set(updates, key, definition ?? node.data);
     }
   }
   if (!updates.size) return;
@@ -90,7 +110,9 @@ export function synchronizeDefinitions(before: Project, next: Project) {
         throw new Error(
           "A weight group cannot contain an application of itself. Use a Loop container for recurrence.",
         );
-      const definition = group ? updates.get(group) : undefined;
+      const definition = group
+        ? updates.get(group)?.get(n.data.kind)
+        : undefined;
       if (definition) {
         const { kind, params, body, role, description } =
           structuredClone(definition);

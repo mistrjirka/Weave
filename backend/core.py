@@ -97,6 +97,20 @@ def params(node, config):
     return resolve(node['data'].get('params', {}), config)
 
 
+def mixed_matrix_groups(graph):
+    kinds = {}
+    def visit(body):
+        for n in body.get('nodes', []):
+            data = n.get('data', {})
+            group = data.get('share')
+            if group:
+                kinds.setdefault(group, set()).add(data.get('kind'))
+            if isinstance(data.get('body'), dict):
+                visit(data['body'])
+    visit(graph)
+    return {group for group, members in kinds.items() if members == {'embedding', 'head'}}
+
+
 
 def graph_context(project, path):
     """The same lexical variables are used by compilation and graph rewrites."""
@@ -191,6 +205,7 @@ def validate_project(project, *, input_contracts=None, moe_body=False, include_a
         if field in cfg and (not isinstance(cfg[field],int) or isinstance(cfg[field],bool) or cfg[field]<1):
             errors.append({'node':None,'message':f'Model {field} must be a positive integer.'})
     shared = {}
+    mixed_groups = mixed_matrix_groups(project.get('graph', {}))
     if project.get('version') != VERSION:
         errors.append({'node': None, 'message': 'Unsupported project version.'})
     tok = project.get('tokenizer')
@@ -635,16 +650,27 @@ def validate_project(project, *, input_contracts=None, moe_body=False, include_a
                 if out and out['dtype'] not in ('float32','int64','bool','attention_pattern'):raise ValueError('Unsupported output dtype.')
                 share = d.get('share')
                 raw_counts[key]=count
-                if share:
+                if share and out is not None:
+                    if share in mixed_groups and p.get('tie'):
+                        raise ValueError('Use either this weight group or the legacy embedding tie on an output head.')
                     config_key={k:cfg.get(k) for k in ('width','heads','ffn_width','vocab','mask_id')}
                     feature_dim=None if kind=='embedding' else (x['shape'][-1] if x else None)
                     signature = (definition_signature(n,cfg), config_key, feature_dim)
-                    if share in shared and shared[share][0]['kind'] != kind:
-                        raise ValueError(f'Weight group {share} belongs to {shared[share][0]["kind"]} nodes; choose a group for {kind} nodes.')
-                    if share in shared and shared[share] != signature:
+                    group = shared.setdefault(share, {})
+                    if kind not in group and group and share not in mixed_groups:
+                        previous = next(iter(group))
+                        raise ValueError(f'Weight group {share} belongs to {previous} nodes; choose a group for {kind} nodes.')
+                    if kind in group and group[kind] != signature:
                         raise ValueError('Shared module instances must have identical operation, parameters, and output shape.')
-                    if share in shared: count = 0
-                    else: shared[share] = signature
+                    if share in mixed_groups:
+                        matrix = (capacity, width) if kind == 'embedding' else (outdim, dim)
+                        if '_matrix' in group and group['_matrix'] != matrix:
+                            raise ValueError(f'Weight group {share} needs matching embedding and head matrix dimensions.')
+                        group['_matrix'] = matrix
+                    if kind in group: count = 0
+                    elif share in mixed_groups and len(group) > 1:
+                        count = outdim if kind == 'head' and p.get('bias', False) else 0
+                    group[kind] = signature
             except (ValueError, TypeError, KeyError, IndexError, SyntaxError) as exc:
                 fail(n, str(exc), getattr(exc, 'port', None)); out = None
             local[n['id']] = out
@@ -666,20 +692,27 @@ def validate_project(project, *, input_contracts=None, moe_body=False, include_a
         outputs, total = [], 0
     if not errors:
         allocated=set()
+        allocated_matrices=set()
         def allocation(graph,prefix='',multiple=1,config=None):
             config={**(config if config is not None else project.get('config',{})), **graph.get('variables', {})}
             result=0
             for n in ordered(graph):
                 d=n['data'];key=prefix+n['id'];share=d.get('share');p=params(n,config)
-                if share and share in allocated:
+                slot=(share,d['kind']) if share in mixed_groups else share
+                if share and slot in allocated:
                     count=0
                 else:
-                    if share:allocated.add(share)
+                    if share:allocated.add(slot)
                     factor=1 if share else multiple
                     if d.get('body'):
                         repetitions=p.get('iterations',1) if d['kind']=='loop' and not p.get('shared',True) else 1
                         count=allocation(d['body'],key+'/',factor*repetitions,{**config,**p})
-                    else:count=raw_counts.get(key,0)*factor
+                    else:
+                        count=raw_counts.get(key,0)*factor
+                        if share in mixed_groups and d['kind'] in ('embedding','head'):
+                            matrix_size=raw_counts.get(key,0)-(p.get('out',config.get('vocab')) if d['kind']=='head' and p.get('bias',False) else 0)
+                            if share in allocated_matrices:count-=matrix_size
+                            else:allocated_matrices.add(share)
                 counts[key]=count;result+=count
             return result
         total=allocation(project['graph'])

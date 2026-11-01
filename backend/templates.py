@@ -39,13 +39,13 @@ def transformer(causal=True, sandwich=False, ffn=True, cross=False, heads='$head
 def predictor(causal=False):
     return {'nodes':[
         node('ids','input','Token IDs',0,200,{'index':0,'shape':['B','T'],'dtype':'int64'}),
-        node('emb','embedding','Token embedding',280,60,{'width':'$width','vocab':'$vocab'}),
+        node('emb','embedding','Token embedding',280,60,{'width':'$width','vocab':'$vocab'},share='token_embedding'),
         node('grams','ngram','N-gram windows',280,360,{'orders':[2,3],'buckets':2048}),
         node('memory','lookup','Hashed n-gram memory',560,360,{'buckets':2048,'width':'$width'}),
         node('fusion','add','Feature fusion',840,160),
         node('refine','loop','Recurrent transformer',1120,160,{'iterations':3,'shared':True},transformer(causal=causal,kv=2)),
         node('norm','norm','Final RMSNorm',1460,160),
-        node('head','head','Vocabulary projection',1740,160,{'out':'$vocab','tie':'emb'}),
+        node('head','head','Vocabulary projection',1740,160,{'out':'$vocab'},share='token_embedding'),
         node('out','output','Token logits',2020,160)],
         'edges':[edge('ids','emb'),edge('ids','grams'),edge('grams','memory'),edge('emb','fusion'),edge('memory','fusion','b'),edge('fusion','refine'),edge('refine','norm'),edge('norm','head'),edge('head','out')]}
 
@@ -69,7 +69,7 @@ def combined():
 
 
 def language_model(body=None, layers=6, width=128):
-    return {'nodes':[node('ids','input','Token IDs',0,150,{'index':0,'shape':['B','T'],'dtype':'int64'}),node('emb','embedding','Token embedding',280,150,{'width':'$width','vocab':'$vocab'}),node('stack','loop','Transformer layers',600,150,{'iterations':layers,'shared':False},body or transformer(kv=2)),node('norm','norm','Final RMSNorm',940,150),node('head','head','Tied language head',1220,150,{'out':'$vocab','tie':'emb'}),node('out','output','Token logits',1500,150)],'edges':[edge('ids','emb'),edge('emb','stack'),edge('stack','norm'),edge('norm','head'),edge('head','out')]}
+    return {'nodes':[node('ids','input','Token IDs',0,150,{'index':0,'shape':['B','T'],'dtype':'int64'}),node('emb','embedding','Token embedding',280,150,{'width':'$width','vocab':'$vocab'},share='token_embedding'),node('stack','loop','Transformer layers',600,150,{'iterations':layers,'shared':False},body or transformer(kv=2)),node('norm','norm','Final RMSNorm',940,150),node('head','head','Tied language head',1220,150,{'out':'$vocab'},share='token_embedding'),node('out','output','Token logits',1500,150)],'edges':[edge('ids','emb'),edge('emb','stack'),edge('stack','norm'),edge('norm','head'),edge('head','out')]}
 
 
 def explicit_looped():
@@ -196,14 +196,14 @@ def needle_network(conf):
         id=f'layer_{i}';stack['nodes'].append(node(id,'block',f'Layer {i+1}'+(' · Engram' if i in conf['extras']['engram']['sites'] else ''),340*(i+1),150,{},needle_layer(i,conf)))
         stack['edges'].extend([edge(last,id),edge('ids',id,'b')]);last=id
     stack['nodes'].append(node('out','output','Residual lanes out',340*(layers+1),150));stack['edges'].append(edge(last,'out'))
-    return {'nodes':[node('ids','input','Token IDs',0,150,{'index':0,'shape':['B','T'],'dtype':'int64'}),node('emb','embedding','Token embedding',280,150,{'width':'$width','vocab':'$vocab'}),node('scale','scale','Scale embeddings · √D',570,150,{'factor':'$sqrt_width'}),node('lanes','lane_expand','Expand residual lanes',850,150,{'lanes':lanes}),node('stack','block',f'{layers}-layer Simple Attention Network',1180,150,{},stack),node('reduce','lane_reduce','Mean residual lanes',1520,150,{'lanes':lanes}),node('norm','norm','Final RMSNorm',1800,150),node('head','head','Tied vocabulary head',2080,150,{'out':'$vocab','tie':'emb'}),node('out','output','Token logits',2360,150)],'edges':[edge('ids','emb'),edge('emb','scale'),edge('scale','lanes'),edge('lanes','stack'),edge('ids','stack','b'),edge('stack','reduce'),edge('reduce','norm'),edge('norm','head'),edge('head','out')]}
+    return {'nodes':[node('ids','input','Token IDs',0,150,{'index':0,'shape':['B','T'],'dtype':'int64'}),node('emb','embedding','Token embedding',280,150,{'width':'$width','vocab':'$vocab'},share='token_embedding'),node('scale','scale','Scale embeddings · √D',570,150,{'factor':'$sqrt_width'}),node('lanes','lane_expand','Expand residual lanes',850,150,{'lanes':lanes}),node('stack','block',f'{layers}-layer Simple Attention Network',1180,150,{},stack),node('reduce','lane_reduce','Mean residual lanes',1520,150,{'lanes':lanes}),node('norm','norm','Final RMSNorm',1800,150),node('head','head','Tied vocabulary head',2080,150,{'out':'$vocab'},share='token_embedding'),node('out','output','Token logits',2360,150)],'edges':[edge('ids','emb'),edge('emb','scale'),edge('scale','lanes'),edge('lanes','stack'),edge('ids','stack','b'),edge('stack','reduce'),edge('reduce','norm'),edge('norm','head'),edge('head','out')]}
 
 
 
 def model_overview(layers, layer_description, layer_notes):
     """Source-based diagrams with explicit placeholders for unsupported operators."""
     g = {'nodes': [node('ids','input','Token IDs',0,150,{'index':0,'shape':['B','T'],'dtype':'int64'}),
-                   node('emb','embedding','Token embedding',300,150,{'width':'$width','vocab':'$vocab'})],
+                   node('emb','embedding','Token embedding',300,150,{'width':'$width','vocab':'$vocab'},share='token_embedding')],
          'edges': [edge('ids','emb')]}
     previous = 'emb'
     annotated_kinds = set()
@@ -214,7 +214,7 @@ def model_overview(layers, layer_description, layer_notes):
         annotated_kinds.add(kind)
         g['edges'].append(edge(previous,key)); previous = key
     x = 600 + len(layers)*290
-    g['nodes'].extend([node('norm','norm','Final RMSNorm',x,150),node('head','head','Tied vocabulary head',x+290,150,{'out':'$vocab','tie':'emb'}),node('out','output','Token logits',x+580,150)])
+    g['nodes'].extend([node('norm','norm','Final RMSNorm',x,150),node('head','head','Tied vocabulary head',x+290,150,{'out':'$vocab'},share='token_embedding'),node('out','output','Token logits',x+580,150)])
     g['edges'].extend([edge(previous,'norm'),edge('norm','head'),edge('head','out')])
     return g
 
@@ -258,10 +258,10 @@ def gpt2_model():
         node('down','linear','Project to model width',2400,120,{'out':'$width','bias':True}),
         node('drop2','dropout','Feed-forward residual dropout',2700,120,{'probability':0.1}),node('r2','add','Feed-forward residual',3000,120),node('y','output','Hidden state out',3300,120)],
         'edges':[edge('x','n1'),edge('n1','attn'),edge('attn','drop1'),edge('x','r1'),edge('drop1','r1','b'),edge('r1','n2'),edge('n2','up'),edge('up','gelu'),edge('gelu','down'),edge('down','drop2'),edge('r1','r2'),edge('drop2','r2','b'),edge('r2','y')]}
-    nodes=[node('ids','input','Token IDs',0,120,{'index':0,'shape':['B','T'],'dtype':'int64'}),node('emb','embedding','Token embeddings',300,120,{'vocab':'$vocab','width':'$width'}),
+    nodes=[node('ids','input','Token IDs',0,120,{'index':0,'shape':['B','T'],'dtype':'int64'}),node('emb','embedding','Token embeddings',300,120,{'vocab':'$vocab','width':'$width'},share='token_embedding'),
         node('pos','position_embedding','Learned positions · 1024',600,120,{'max_length':1024}),node('drop','dropout','Embedding dropout',900,120,{'probability':0.1}),
         node('stack','loop','12 decoder layers',1200,120,{'iterations':12,'shared':False},body),node('norm','layer_norm','Final LayerNorm',1500,120,{'eps':1e-5,'affine':True,'bias':True}),
-        node('head','head','Tied vocabulary head',1800,120,{'out':'$vocab','tie':'emb'}),node('out','output','Token logits',2100,120)]
+        node('head','head','Tied vocabulary head',1800,120,{'out':'$vocab'},share='token_embedding'),node('out','output','Token logits',2100,120)]
     return {'nodes':nodes,'edges':[edge('ids','emb'),edge('emb','pos'),edge('pos','drop'),edge('drop','stack'),edge('stack','norm'),edge('norm','head'),edge('head','out')]}
 
 
@@ -274,7 +274,7 @@ def templates():
            project('looped','Looped transformer','Three applications share one transformer’s weights, with independently learned layers between them. Click any connection to insert more layers.',explicit_looped()),
            project('diffusion','Masked text diffusion','LLaDA-style bidirectional prediction with iterative confidence-based unmasking.',combined(),references=[{'title':'LLaDA sampling reference','url':'https://github.com/ML-GSAI/LLaDA/blob/9182493720ed723ef8031210d85959364e51cbe0/generate.py','revision':'9182493720ed723ef8031210d85959364e51cbe0','notes':'Composable LLaDA-style example, not an 8B checkpoint reproduction. Linear remaining-token schedule; no classifier-free guidance.'}])]
     # Needle 1 has a real encoder-decoder topology and no feed-forward network.
-    n1={'nodes':[node('source','input','Source token IDs',0,80,{'index':0,'shape':['B','S'],'dtype':'int64'}),node('target','input','Decoder token IDs',0,440,{'index':1,'shape':['B','T'],'dtype':'int64'}),node('se','embedding','Shared embedding · encoder',290,80,{'width':'$width','vocab':'$vocab'},share='token_embedding'),node('te','embedding','Shared embedding · decoder',290,440,{'width':'$width','vocab':'$vocab'},share='token_embedding'),node('encoder','loop','Encoder · 12 attention layers',620,80,{'iterations':12,'shared':False},transformer(causal=False,ffn=False,residual='gate')),node('decoder','loop','Decoder · 8 attention layers',1000,440,{'iterations':8,'shared':False},transformer(causal=True,ffn=False,cross=True,residual='gate')),node('norm','norm','Final RMSNorm',1360,440),node('head','head','Tied language head',1640,440,{'out':'$vocab','tie':'te'}),node('out','output','Decoder logits',1920,440)],'edges':[edge('source','se'),edge('target','te'),edge('se','encoder'),edge('te','decoder'),edge('encoder','decoder','b'),edge('decoder','norm'),edge('norm','head'),edge('head','out')]}
+    n1={'nodes':[node('source','input','Source token IDs',0,80,{'index':0,'shape':['B','S'],'dtype':'int64'}),node('target','input','Decoder token IDs',0,440,{'index':1,'shape':['B','T'],'dtype':'int64'}),node('se','embedding','Shared embedding · encoder',290,80,{'width':'$width','vocab':'$vocab'},share='token_embedding'),node('te','embedding','Shared embedding · decoder',290,440,{'width':'$width','vocab':'$vocab'},share='token_embedding'),node('encoder','loop','Encoder · 12 attention layers',620,80,{'iterations':12,'shared':False},transformer(causal=False,ffn=False,residual='gate')),node('decoder','loop','Decoder · 8 attention layers',1000,440,{'iterations':8,'shared':False},transformer(causal=True,ffn=False,cross=True,residual='gate')),node('norm','norm','Final RMSNorm',1360,440),node('head','head','Tied language head',1640,440,{'out':'$vocab'},share='token_embedding'),node('out','output','Decoder logits',1920,440)],'edges':[edge('source','se'),edge('target','te'),edge('se','encoder'),edge('te','decoder'),edge('encoder','decoder','b'),edge('decoder','norm'),edge('norm','head'),edge('head','out')]}
     # Original Needle scales both token embeddings and normalizes the encoder output.
     n1['nodes'].extend([node('se_scale','scale','Scale source embeddings · √D',460,80,{'factor':'$sqrt_width'}),
                         node('te_scale','scale','Scale decoder embeddings · √D',460,440,{'factor':'$sqrt_width'}),

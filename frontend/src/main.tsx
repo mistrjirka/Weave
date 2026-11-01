@@ -129,7 +129,6 @@ import { canvasFitPadding, canvasFitInsets } from "./canvasFitPadding";
 import { GraphVariableCard } from "./GraphVariableCard";
 import { GraphAnnotations } from "./GraphAnnotations";
 import { GraphVariables } from "./GraphVariables";
-import { EmbeddingTiePicker } from "./EmbeddingTiePicker";
 import {
   graphVariableScope,
   graphVariableUses,
@@ -1971,6 +1970,7 @@ function Workbench({
         data: copy(data),
         selected: true,
       };
+      makeIndependent(node);
       const port = source?.targetHandle ?? nodePorts(node)[0];
       if (port && !nodePorts(node).includes(port))
         throw new Error("The target input port is no longer available.");
@@ -4366,18 +4366,6 @@ function Workbench({
                         independently of the backend.
                       </p>
                     )}
-                    {selected.data.kind === "head" && (
-                      <EmbeddingTiePicker
-                        graph={graph}
-                        value={String(selected.data.params.tie ?? "")}
-                        onChange={(v) =>
-                          updateNode((n) => {
-                            if (v) n.data.params.tie = v;
-                            else delete n.data.params.tie;
-                          })
-                        }
-                      />
-                    )}
                     {selected.data.iteration && (
                       <>
                         <div className="section-label">
@@ -4405,25 +4393,63 @@ function Workbench({
                     )}
                     {supportsWeightSharing(selected.data) && (
                       <WeightGroupPicker
-                        value={selected.data.share ?? ""}
-                        choices={weightGroupChoices(
-                          allNodes(project),
-                          selected.data,
+                        value={
+                          selected.data.share ??
+                          (selected.data.kind === "head" &&
+                          selected.data.params.tie
+                            ? `legacy:${selected.data.params.tie}`
+                            : "")
+                        }
+                        matrixSharing={["embedding", "head"].includes(
+                          selected.data.kind,
                         )}
-                        onChange={(group) =>
+                        choices={[
+                          ...weightGroupChoices(
+                            allNodes(project),
+                            selected.data,
+                          ),
+                          ...(selected.data.kind === "head" &&
+                          selected.data.params.tie &&
+                          !selected.data.share
+                            ? [
+                                {
+                                  id: `legacy:${selected.data.params.tie}`,
+                                  label: `Legacy tie · ${graph.nodes.find((n) => n.id === selected.data.params.tie)?.data.label ?? selected.data.params.tie}`,
+                                  compatible: false,
+                                },
+                              ]
+                            : []),
+                        ]}
+                        onChange={(group) => {
+                          if (
+                            !selected.data.share &&
+                            group === `legacy:${selected.data.params.tie}`
+                          )
+                            return;
                           updateNode((node) => {
+                            delete node.data.params.tie;
                             if (group) node.data.share = group;
                             else makeIndependent(node);
-                          })
-                        }
+                          });
+                        }}
                         onCreate={() =>
                           updateNode((node) => {
+                            delete node.data.params.tie;
                             makeIndependent(node);
                             node.data.share = "weights_" + uid();
                           })
                         }
                       />
                     )}
+                    {selected.data.kind === "head" &&
+                      selected.data.params.tie &&
+                      selected.data.share && (
+                        <p className="field-help">
+                          This head also has a legacy embedding tie. Selecting a
+                          weight group or Independent weights clears the legacy
+                          tie.
+                        </p>
+                      )}
                     {selected.data.kind === "custom" && (
                       <Field
                         name="source"
