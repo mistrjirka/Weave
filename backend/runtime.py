@@ -9,6 +9,27 @@ except ImportError:
     from sparse_runtime import AttentionPattern,as_pattern,attend
 
 
+def initialize_tied_embeddings(model, std=0.02):
+    """Initialize each shared embedding/output matrix once, after tying.
+
+    Call only during fresh model construction, before loading a checkpoint.
+    Untied embeddings, projections, and normalization parameters retain their
+    own initialization. Parameter identity (and therefore sharing) is preserved.
+    """
+    output_weights = {
+        id(module.weight) for module in model.modules()
+        if isinstance(module, nn.Linear)
+    }
+    initialized = set()
+    for module in model.modules():
+        if not isinstance(module, nn.Embedding):
+            continue
+        identity = id(module.weight)
+        if identity in output_weights and identity not in initialized:
+            nn.init.normal_(module.weight, mean=0.0, std=std)
+            initialized.add(identity)
+
+
 class SparseMoE(nn.Module):
     """Top-k per-token routing through independently editable expert modules."""
     def __init__(self, width, experts, top_k, balance_weight, router="softmax"):

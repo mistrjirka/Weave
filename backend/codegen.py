@@ -363,6 +363,14 @@ def has_shared_modules(graph):
     )
 
 
+def has_legacy_ties(graph):
+    return any(
+        n["data"].get("params", {}).get("tie")
+        or (n["data"].get("body") and has_legacy_ties(n["data"]["body"]))
+        for n in graph["nodes"]
+    )
+
+
 class SourceGenerator:
     def __init__(self, project, report):
         self.project, self.report = project, report
@@ -372,6 +380,7 @@ class SourceGenerator:
             for group in (op.runtime, op.helpers, op.sparse)
             for name in group
         }
+        imported_names.add("initialize_tied_embeddings")
         self.imported_names = imported_names
         self.class_names = Names(
             imported_names
@@ -587,6 +596,12 @@ class SourceGenerator:
                         f"self.{attributes[node['id']]}.weight = self.{attributes[tie]}.weight",
                     ]
                 )
+        if not prefix and (self.mixed_groups or has_legacy_ties(graph)):
+            self.imports["runtime"].add("initialize_tied_embeddings")
+            init.extend([
+                "# Small initial logits; initialize shared matrices once, after tying.",
+                "initialize_tied_embeddings(self, std=0.02)",
+            ])
         if not prefix:
             self.files["graph_modules.json"] = json.dumps(attributes, indent=2)
         values = [value for _, value in sorted(returns)]

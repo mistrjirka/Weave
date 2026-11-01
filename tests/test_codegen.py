@@ -3,6 +3,7 @@
 import ast
 import copy
 import inspect
+import io
 import json
 import sys
 
@@ -69,6 +70,37 @@ def test_tied_head_shares_one_parameter_and_receives_both_gradients(monkeypatch)
     torch.optim.SGD(model.parameters(), lr=0.01).step()
     assert not torch.equal(before, embedding.weight)
     assert head.weight is embedding.weight
+
+
+@pytest.mark.parametrize("head_first", [False, True])
+def test_tied_initialization_is_once_per_matrix_and_leaves_other_parameters_alone(monkeypatch, head_first):
+    model = nn.Module()
+    embedding = nn.Embedding(1024, 64)
+    head = nn.Linear(64, 1024, bias=True)
+    head.weight = embedding.weight
+    model.add_module("first", head if head_first else embedding)
+    model.add_module("second", embedding if head_first else head)
+    model.alias = embedding
+    model.other_embedding = nn.Embedding(1024, 64)
+    model.other_linear = nn.Linear(64, 64)
+    model.norm = nn.RMSNorm(64)
+    before = {name: value.detach().clone() for name, value in model.named_parameters()}
+    weight = embedding.weight
+    calls = []
+    normal = nn.init.normal_
+
+    def record(tensor, *args, **kwargs):
+        calls.append(id(tensor))
+        return normal(tensor, *args, **kwargs)
+
+    monkeypatch.setattr(nn.init, "normal_", record)
+    runtime.initialize_tied_embeddings(model)
+    assert calls == [id(weight)]
+    assert embedding.weight is head.weight is weight
+    assert weight.std().item() == pytest.approx(0.02, rel=0.02)
+    for name, value in model.named_parameters():
+        if value is not weight:
+            torch.testing.assert_close(value, before[name], rtol=0, atol=0)
 
 
 def test_tied_head_counts_independent_bias(monkeypatch):
@@ -181,6 +213,8 @@ def test_nested_head_first_group_shares_matrix_through_independent_loop(monkeypa
     embedding = next(m for m in getattr(model, names["block"]).modules() if isinstance(m, nn.Embedding))
     assert heads[0] is heads[1] is heads[2]
     assert heads[0].weight is embedding.weight
+    assert files["model.py"].count("initialize_tied_embeddings(self, std=0.02)") == 1
+    assert embedding.weight.abs().max() < 0.1
     assert heads[0].bias is not None
     assert sum(p.numel() for p in model.parameters()) == report["parameters"]
     logits, embedded = model(torch.randn(2, 3, 4), torch.randint(0, 4, (2, 3)))
@@ -231,6 +265,8 @@ def test_legacy_ties_in_independent_loop_keep_each_iteration_separate(monkeypatc
     heads = [next(m for m in layer.modules() if isinstance(m, nn.Linear)) for layer in layers]
     assert all(head.weight is embedding.weight for head, embedding in zip(heads, embeddings))
     assert len({id(embedding.weight) for embedding in embeddings}) == 3
+    assert files["model.py"].count("initialize_tied_embeddings(self, std=0.02)") == 1
+    assert all(embedding.weight.abs().max() < 0.1 for embedding in embeddings)
     assert sum(p.numel() for p in model.parameters()) == report["parameters"]
 
 
@@ -288,6 +324,28 @@ def test_shared_three_block_model_count_and_causality(monkeypatch):
         with torch.no_grad():
             a, b = model(first), model(changed)
         torch.testing.assert_close(a[:, :3], b[:, :3], rtol=1e-5, atol=1e-5)
+        # Check initialization as well as wiring: PyTorch's N(0,1) embedding
+        # default previously produced initial next-token losses in the hundreds.
+        embedding = getattr(model, names["emb"])
+        assert embedding.weight.std().item() == pytest.approx(0.02, rel=0.02)
+        loss = F.cross_entropy(a[:, :-1].reshape(-1, 16000), first[:, 1:].reshape(-1))
+        assert 8 < loss.item() < 12
+        assert a.std().item() < 1.5
+        training_logits = model(first)
+        F.cross_entropy(training_logits[:, :-1].reshape(-1, 16000), first[:, 1:].reshape(-1)).backward()
+        assert all(p.grad is None or torch.isfinite(p.grad).all() for p in model.parameters())
+
+        # A fresh constructor may initialize weights, but loading a checkpoint
+        # must restore the learned values without changing the weight alias.
+        checkpoint = io.BytesIO()
+        torch.save(model.state_dict(), checkpoint)
+        restored, _ = instantiate(project, monkeypatch)
+        checkpoint.seek(0)
+        restored.load_state_dict(torch.load(checkpoint, weights_only=True))
+        assert getattr(restored, names["head"]).weight is getattr(restored, names["emb"]).weight
+        restored.eval()
+        with torch.no_grad():
+            torch.testing.assert_close(restored(first), a, rtol=0, atol=0)
     finally:
         torch.set_num_threads(previous_threads)
 

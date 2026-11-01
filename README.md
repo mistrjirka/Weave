@@ -93,6 +93,8 @@ python example.py
 
 Generated code is formatted with Black on the server; exported models do not depend on Black. Input and layer names come from graph labels, with safe identifiers and automatic handling of duplicate/reserved names. Differentiable prediction graphs support standard PyTorch autograd; training requires data, a loss and an optimizer. Discrete sampling nodes are inference operations. New exports use descriptive `state_dict` keys; checkpoints from older numbered exports require key mapping. Export regression checks cover forward execution, parameter counts and sharing, compact/unrolled sampling parity, safe Python identifiers, optional input positions, and loss/backward/optimizer/checkpoint reloads for the seven prediction-model examples.
 
+Fresh models initialize tied embedding/output matrices with a normal distribution of standard deviation `0.02`, once per distinct shared matrix after all ties are connected. This avoids inheriting the embedding's unit-variance initialization in the vocabulary head. The explicit `initialize_tied_embeddings(self, std=0.02)` call in generated code can be adjusted for a training recipe. Other parameters keep their layer-specific initialization; this is not an exact reproduction of every reference model's initialization recipe. Checkpoints loaded afterward restore their saved weights normally. Existing exported scripts and frozen training snapshots are not rewritten; re-export for the new default, and do not reinitialize an already trained checkpoint.
+
 The example uses small batch/sequence dimensions but retains the graph's feature widths and layer counts. Reference architectures can therefore allocate their full parameter count. The automated tests use reduced configurations.
 
 ## Verify

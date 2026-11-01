@@ -157,6 +157,16 @@ def load_tokenizer(input_node=None):
         + json.dumps(project.get("references", []), indent=2)
         + "\n"
     )
+    files["README.md"] += (
+        "\n## Initialization\n\n"
+        "Tied embedding/output matrices are initialized once with normal standard "
+        "deviation 0.02 after weight sharing is connected. The explicit "
+        "`initialize_tied_embeddings(self, std=0.02)` call in `model.py`, when present, "
+        "can be adjusted for your training recipe. Other layers retain their own "
+        "initialization. Load checkpoints after constructing the model; do not "
+        "reinitialize trained weights. Reference graphs do not reproduce every "
+        "original training initialization recipe.\n"
+    )
     if has_moe(project["graph"]):
         files[
             "README.md"
