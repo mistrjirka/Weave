@@ -36,6 +36,9 @@ SCRIPT_FIELDS = {
     "cpu_threads": "cpu_threads",
     "evaluation_device": "evaluation_device",
     "placement": "placement",
+    "compile_mode": "compile_mode",
+    "fused_optimizer": "fused_optimizer",
+    "profile_steps": "profile_steps",
 }
 
 

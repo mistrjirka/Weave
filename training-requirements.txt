@@ -1,4 +1,6 @@
 # Install a CPU/CUDA/ROCm PyTorch build separately for your hardware.
+# Required by the Triton compiler bundled with some supported PyTorch versions.
+setuptools>=70
 transformers>=4.48,<5
 tokenizers>=0.21,<0.23
 sentencepiece>=0.2

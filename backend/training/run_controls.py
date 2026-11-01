@@ -44,6 +44,8 @@ EXCLUDED_CODE_FOLDERS = {
 # The release before live controls has the same optimizer, scheduler and loader
 # checkpoint contract. Other unknown trainer revisions retain strict resume checks.
 VALIDATION_UPGRADE_FROM = {
+    # Pre-performance trainer: same optimizer, scheduler and loader state format.
+    "f21dbe649c45fa8e4f997e7ef4f6e5226e068a0ad4e828d90c17d0e7a36df093",
     "357a3523cf43d2a2df3a429e72aca24d5da638c218e8d31e1ccffd3b7bbc0630",
     "469f4a2fb01e81e9ab3f11a755bae691e65b924be68463613d978988987f7560",
     # Initial live-controls rollout, before legacy train_eval alias normalization.

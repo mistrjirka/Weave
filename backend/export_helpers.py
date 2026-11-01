@@ -15,25 +15,85 @@ except ImportError:
     from sparse_runtime import AttentionPattern, as_pattern
 
 
-def rotary_positions(x, theta=10000.0, rope_scaling="none", rope_factor=1.0, rope_original_context=32768):
+def rotary_positions(
+    x, theta=10000.0, rope_scaling="none", rope_factor=1.0, rope_original_context=32768
+):
     width = x.shape[-1]
     positions = torch.arange(x.shape[-2], device=x.device).float()
     frequencies = theta ** (-torch.arange(0, width, 2, device=x.device).float() / width)
     scale = 1.0
     if rope_scaling == "yarn":
+
         def correction(rotations):
-            return width * math.log(rope_original_context / (rotations * 2 * math.pi)) / (2 * math.log(theta))
-        low, high = max(math.floor(correction(32)), 0), min(math.ceil(correction(1)), width - 1)
+            return (
+                width
+                * math.log(rope_original_context / (rotations * 2 * math.pi))
+                / (2 * math.log(theta))
+            )
+
+        low, high = max(math.floor(correction(32)), 0), min(
+            math.ceil(correction(1)), width - 1
+        )
         if low == high:
             high += 0.001
-        ramp = ((torch.arange(width // 2, device=x.device, dtype=torch.float32) - low) / (high - low)).clamp(0, 1)
+        ramp = (
+            (torch.arange(width // 2, device=x.device, dtype=torch.float32) - low)
+            / (high - low)
+        ).clamp(0, 1)
         frequencies = frequencies * ((1 - ramp) + ramp / rope_factor)
         scale = 1 + 0.1 * math.log(rope_factor)
     angles = torch.outer(positions, frequencies)
-    angles = torch.cat((angles, angles), dim=-1).to(x.dtype)
+    angles = torch.cat((angles, angles), dim=-1)
     first, second = x.chunk(2, dim=-1)
     rotated = torch.cat((-second, first), dim=-1)
-    return scale * (x * angles.cos() + rotated * angles.sin())
+    return scale * (x * angles.cos().to(x.dtype) + rotated * angles.sin().to(x.dtype))
+
+
+def linear_cross_entropy(hidden, weight, targets, bias=None, chunk_size=1024):
+    """Exact mean token loss with bounded logits memory, using ordinary PyTorch.
+
+    Targets are already shifted by the data loader; -100 masks unsupervised
+    tokens. Recompute each chunk during backward rather than retain all logits.
+    This trades extra projection work for memory and needs no third-party kernel.
+    """
+    from torch.utils.checkpoint import checkpoint
+
+    if type(chunk_size) is not int or chunk_size < 1:
+        raise ValueError("loss_chunk_size must be a positive integer")
+    if targets.shape != hidden.shape[:-1]:
+        raise ValueError(
+            "Loss targets must match the model's batch and sequence dimensions"
+        )
+    # Split placement normally transfers tensors through the Linear pre-hook;
+    # this functional loss intentionally bypasses that module call.
+    hidden = hidden.to(weight.device)
+    targets = targets.to(weight.device)
+    flat, labels = hidden.reshape(-1, hidden.shape[-1]), targets.reshape(-1)
+    count = (labels != -100).sum()
+
+    def chunk_loss(features, matrix, labels, bias):
+        return F.cross_entropy(
+            F.linear(features, matrix, bias).float(),
+            labels,
+            ignore_index=-100,
+            reduction="sum",
+        )
+
+    loss = hidden.new_zeros((), dtype=torch.float32)
+    for start in range(0, flat.shape[0], chunk_size):
+        args = (
+            flat[start : start + chunk_size],
+            weight,
+            labels[start : start + chunk_size],
+            bias,
+        )
+        loss = loss + (
+            checkpoint(chunk_loss, *args, use_reentrant=False)
+            if torch.is_grad_enabled()
+            else chunk_loss(*args)
+        )
+    # An all-masked batch is rejected by the training helper before the forward.
+    return loss / count.clamp_min(1)
 
 
 def fuse_memory(hidden_states, memory):

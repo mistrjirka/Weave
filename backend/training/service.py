@@ -38,6 +38,10 @@ class TrainingConfig(BaseModel):
     evaluation_device: int | Literal["cpu"] | None = None
     evaluation_mode: Literal["script", "inline", "async"] = "script"
     compute_mode: Literal["script", "override"] = "script"
+    performance_mode: Literal["script", "override"] = "script"
+    compile_mode: Literal["off", "default", "reduce-overhead", "max-autotune"] = "off"
+    fused_optimizer: bool = False
+    profile_steps: int = Field(default=0, ge=0, le=100, strict=True)
     placement: dict[str, int] = Field(default_factory=dict)
     use_gpu_tuning: bool = True
     dataset: str = ""
@@ -544,10 +548,17 @@ class TrainingService:
                     "evaluation_mode",
                     "compute_mode",
                     "use_gpu_tuning",
+                    "performance_mode",
                 }
             )
             if stage.config.evaluation_mode != "script":
                 controls["evaluation_device"] = stage.config.evaluation_device
+            if stage.config.performance_mode == "override":
+                controls.update(
+                    stage.config.model_dump(
+                        include={"compile_mode", "fused_optimizer", "profile_steps"}
+                    )
+                )
             if stage.config.compute_mode == "override":
                 controls.update(
                     stage.config.model_dump(
@@ -605,7 +616,18 @@ class TrainingService:
                     raise ValueError(
                         "This trainer revision needs a new stage from weights; its exact-resume upgrade has not been verified."
                     )
-                shutil.copytree(frozen_source / PACKAGE, directory / PACKAGE)
+                if restart_record and restart_record.get("refresh_support"):
+                    # Re-export the *frozen graph*, never an independently edited
+                    # project. Tensor and optimizer identity are checked on restore.
+                    bundle = export_zip(project, tokenizer_dirs=directories)
+                    write_support(directory, bundle)
+                else:
+                    shutil.copytree(frozen_source / PACKAGE, directory / PACKAGE)
+                    # The upgraded trainer imports this new helper even when
+                    # keeping the model/runtime from an older frozen run.
+                    (directory / PACKAGE / "performance.py").write_text(
+                        rewrite_imports((HERE / "performance.py").read_text(), ".")
+                    )
                 (directory / PACKAGE / "trainer.py").write_text(current_trainer)
                 if restart_record and restart_record["script_source"] == "edited":
                     extras = list(restart_record["user_files"])
@@ -850,9 +872,12 @@ class TrainingService:
                             and restart_record["script_source"] == "edited"
                         ),
                         "reason": (
-                            "User-requested edited-script resume; restore only compatible checkpoint state."
+                            "User-requested script/support refresh; restore only compatible checkpoint state."
                             if restart_record
-                            and restart_record["script_source"] == "edited"
+                            and (
+                                restart_record["script_source"] == "edited"
+                                or restart_record.get("refresh_support")
+                            )
                             else "Verified trainer upgrade; frozen model, recipe and user helpers preserved."
                         ),
                     },
@@ -995,7 +1020,14 @@ class TrainingService:
                 return None
         return None
 
-    def restart(self, run_id, validation_settings=None, *, script_source="previous"):
+    def restart(
+        self,
+        run_id,
+        validation_settings=None,
+        *,
+        script_source="previous",
+        refresh_support=False,
+    ):
         """Snapshot each attempt. Failed restores can retry the last usable state."""
         if script_source not in ("previous", "edited"):
             raise ValueError("Choose the previous or edited script")
@@ -1068,6 +1100,7 @@ class TrainingService:
                 "requested_from": run_id,
                 "source_run": source.name,
                 "script_source": script_source,
+                "refresh_support": refresh_support,
                 "script_sha256": hashlib.sha256(stage.script.encode()).hexdigest(),
                 "user_files": {
                     name: file_hash(inside(attempt / "user-files", name))

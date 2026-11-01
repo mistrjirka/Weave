@@ -70,6 +70,9 @@ config = TrainingConfig(
 | `evaluation_only` | Read-only: true inside a background evaluator. A data hook can return `(None, val_loader)`. |
 | `data_fingerprint`, `trace_batches` | Source stat/SHA256 provenance and optional consumed-batch tracing. |
 | `find_unused_parameters` | Optional DDP override, useful for some routed/conditional graphs. |
+| `compile_mode` | `"off"` (default), `"default"`, `"reduce-overhead"`, or `"max-autotune"`. Compiles the model while preserving checkpoint keys. New batch shapes may compile separately. |
+| `fused_optimizer` | Opt-in CUDA AdamW execution; preserves optimizer groups and restored state. Rejects CPU/custom optimizers rather than silently replacing them. |
+| `profile_steps` | `0` disables profiling; `1`–`100` captures a bounded CPU/CUDA trace after two warm-up updates. Each rank writes `profiles/rank-N.json`. |
 
 An unsized stream can end an epoch at StopIteration. The starter's cosine scheduler still needs `len(train_loader)` or an explicit optimizer-update budget. A finite stream must be repeatable for multiple epochs. A random sampler run for a token budget does not guarantee each document is visited once.
 
@@ -92,9 +95,9 @@ import torch
 from torch.nn import functional as F
 
 def training_step(model, batch, device):
+    count = int((batch["labels"] != -100).sum())       # Count before GPU transfer.
     logits = model(batch["input_ids"].to(device))       # [B, T, V]
     labels = batch["labels"].to(logits.device)         # [B, T]
-    count = int((labels != -100).sum())
     if count == 0:
         raise ValueError("Batch has no supervised targets")
     loss = F.cross_entropy(
@@ -106,6 +109,27 @@ def training_step(model, batch, device):
 Labels here are already shifted by the loader: input `[a,b,c]` predicts `[b,c,d]`. Shift once. `-100` excludes padding or other untrained positions from cross-entropy. `weight=count` lets Trainer combine mean losses correctly when batches have different numbers of supervised tokens, including across ranks. A scalar loss or `(loss, metrics)` is also supported, with equal microbatch weights. Adapt this hook for another objective or model signature.
 
 Trainer calls backward, scales gradients, accumulates, clips, updates and reports. Do not repeat backward/optimizer.step in this hook. Optional `evaluation_step_fn` defaults to the loss hook under inference mode. `samples_fn(model, tokenizer, config, device)` can yield dictionaries containing `prompt`, `output`, and optional `metadata` for custom generation. Optimizer and scheduler hooks remain plain PyTorch functions; keeping AdamW and a short cosine/warmup function in your recipe is often clearer than a large configuration framework.
+
+### Execution performance and memory-saving token loss
+
+The GUI's **Execution and profiling (advanced)** section can override compilation, fused AdamW and profiling for a new launch without rewriting your script. Compilation is lazy: the first forward/backward for each shape can take much longer. Variable-length loaders with a small set of buckets are easier to compile than an unbounded range of shapes. CUDA graphs are attempted by `reduce-overhead` when eligible; they are not guaranteed. Split placement currently requires eager execution. Benchmark steady-state throughput, excluding compilation and profiler capture, before keeping an option enabled.
+
+Profiling is optional and adds overhead during capture. Download the rank-0 trace from the run's Logs tab, or open `profiles/rank-N.json` from the run folder in Perfetto or Chrome tracing. Traces include tensor shapes; they do not copy dataset contents. Compare GPU kernels, CPU gaps, transfers and NCCL communication. Asynchronous validation on a training GPU still shares its memory and compute.
+
+For a generated graph with one terminal **Vocabulary head**, the optional helper avoids materializing all vocabulary logits at once:
+
+```python
+from weave_support.trainer import language_model_step
+
+def training_step(model, batch, device):
+    return language_model_step(model, batch, device, chunk_size=1024)
+```
+
+This implements the same already-shifted, mean cross-entropy with `ignore_index=-100` and token-weighted `StepResult`. It preserves embedding/head weight tying, including their combined gradients. It checkpoints chunks of the final projection, recomputing them during backward: memory use improves, but extra projection work can make it slower. It uses ordinary PyTorch on CPU or CUDA without a third-party kernel. Omit `chunk_size` to use ordinary full logits. For custom losses, multiple outputs, auxiliary objectives or different input signatures, keep your own training hook. This helper does not automatically include MoE auxiliary losses.
+
+At the model level, `model(input_ids)` still returns logits. `model(input_ids, loss_targets=labels, loss_chunk_size=1024)` returns the scalar token loss only on eligible freshly exported graphs. In DDP, call the wrapped model as usual; do not bypass its forward with `model.module`.
+
+Existing run snapshots remain unchanged. When resuming, **Apply current Weave runtime fixes** re-exports the run's recorded graph with the current runtime and records the new code in the restart snapshot. Tensor names/shapes, optimizer mappings, data identity and cursor compatibility are still checked before training updates. Ordinary resume keeps the frozen model runtime. A numerical runtime fix can change outputs despite compatible tensor shapes; the revision records this change.
 
 ## Optional document/token cache
 

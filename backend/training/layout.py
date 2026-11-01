@@ -26,6 +26,7 @@ MANAGED_MODULES = {
     "tuning_math",
     "tuning_runtime",
     "preparation",
+    "performance",
 }
 
 
@@ -148,7 +149,7 @@ def write_support(directory, bundle):
     generated.extend(write_helpers(package))
     requirements = package / "requirements.txt"
     requirements.write_text(
-        requirements.read_text() + "jsonschema>=4,<5\npyarrow>=18,<27\nnumpy>=1.26,<3\n"
+        requirements.read_text() + "jsonschema>=4,<5\npyarrow>=18,<27\nnumpy>=1.26,<3\nsetuptools>=70\n"
     )
     return generated
 
@@ -167,6 +168,7 @@ def write_helpers(package):
         "tuning_math.py",
         "tuning_runtime.py",
         "preparation.py",
+        "performance.py",
     ):
         source = rewrite_imports((HERE / name).read_text(), ".")
         target = package / name

@@ -62,6 +62,7 @@ class Command(BaseModel):
 class RestartRequest(BaseModel):
     validation: ValidationSettings | None = None
     script_source: Literal["previous", "edited"] = "previous"
+    refresh_support: bool = False
 
 
 def directory_size(directory):
@@ -329,7 +330,10 @@ actual training code when your model/data/optimizer are ready.
                     body.project, saved, service.tokenizer_root
                 )
             except (ValueError, OSError) as exc:
-                saved.workspace_warning = "Script saved, but the stage model/tokenizer could not be synchronized: " + str(exc)
+                saved.workspace_warning = (
+                    "Script saved, but the stage model/tokenizer could not be synchronized: "
+                    + str(exc)
+                )
             # Generating a previously unsaved graph can assign its readable folder.
             # Return paths after that move rather than the earlier ID-based paths.
             refreshed = service.workspaces.read(body.project["id"], saved)
@@ -360,7 +364,9 @@ actual training code when your model/data/optimizer are ready.
                 "Local execution is disabled. Run bash scripts/install.sh --training cpu, or configure an existing training Python, then restart Weave.",
             )
         try:
-            service.workspaces.ensure_model(body.project, body.stage, service.tokenizer_root)
+            service.workspaces.ensure_model(
+                body.project, body.stage, service.tokenizer_root
+            )
             try:
                 disk_stage = service.workspaces.get_stage(
                     body.project["id"], body.stage.id
@@ -663,6 +669,7 @@ actual training code when your model/data/optimizer are ready.
                 run_id,
                 body.validation.model_dump() if body.validation else None,
                 script_source=body.script_source,
+                refresh_support=body.refresh_support,
             )
         except (ValueError, FileNotFoundError) as exc:
             raise HTTPException(409, str(exc))

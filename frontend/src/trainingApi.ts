@@ -12,6 +12,12 @@ export const trainingConfigSchema = z.object({
     .nullable(),
   evaluation_mode: z.enum(["script", "inline", "async"]).default("script"),
   compute_mode: z.enum(["script", "override"]).default("script"),
+  performance_mode: z.enum(["script", "override"]).default("script"),
+  compile_mode: z
+    .enum(["off", "default", "reduce-overhead", "max-autotune"])
+    .default("off"),
+  fused_optimizer: z.boolean().default(false),
+  profile_steps: z.number().int().min(0).max(100).default(0),
   placement: z.record(z.string(), z.number()),
   use_gpu_tuning: z.boolean().default(true),
   dataset: z.string(),

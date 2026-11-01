@@ -10,6 +10,9 @@ from weave_support.trainer import Trainer, TrainingConfig, StepResult
 config = TrainingConfig(
     devices=[],  # CPU; [0] for GPU 0, [0, 1] for DDP.
     precision="fp32",
+    compile_mode="off",  # Try "default" or "reduce-overhead" after benchmarking.
+    fused_optimizer=False,  # CUDA AdamW only; preserves your optimizer groups.
+    profile_steps=0,  # Capture this many updates (1–100) after two warm-up updates.
     micro_batch_size=16,
     gradient_accumulation_steps=2,
     max_epochs=3,
@@ -58,11 +61,12 @@ def configure_scheduler(optimizer, config: TrainingConfig):
 # Example objective: next-token prediction.
 # The loader supplies input_ids and already-shifted labels.
 def training_step(model, batch, device):
-    logits = model(batch["input_ids"].to(device))
-    labels = batch["labels"].to(logits.device)
-    count = int((labels != -100).sum())
+    # Count on the CPU before transfer; no GPU synchronization for this scalar.
+    count = int((batch["labels"] != -100).sum())
     if not count:
         raise ValueError("Batch has no supervised targets.")
+    logits = model(batch["input_ids"].to(device))
+    labels = batch["labels"].to(logits.device)
     loss = F.cross_entropy(
         logits.float().flatten(0, 1),
         labels.flatten(),

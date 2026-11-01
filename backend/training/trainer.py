@@ -38,6 +38,7 @@ from weave_training import Run, atomic_json, atomic_checkpoint_path, file_hash
 from token_cache import cache_progress_reporting
 from tuning_runtime import load_tuning, tune_loader, WeightedBatchSampler
 from preparation import distributed_preparation, preparation_barrier
+from performance import configure_execution, training_profile
 
 
 @dataclass
@@ -50,6 +51,9 @@ class TrainingConfig:
     evaluation_device: int | Literal["cpu"] | None = None
     async_evaluation: bool = False
     precision: Literal["fp32", "fp16", "bf16"] = "fp32"
+    compile_mode: Literal["off", "default", "reduce-overhead", "max-autotune"] = "off"
+    fused_optimizer: bool = False
+    profile_steps: int = 0
     seed: int = 42
     micro_batch_size: int = 2
     gradient_accumulation_steps: int = 1
@@ -98,6 +102,17 @@ class TrainingConfig:
             raise ValueError("Unknown device strategy")
         if self.precision not in ("fp32", "fp16", "bf16"):
             raise ValueError("precision must be fp32, fp16 or bf16")
+        if self.compile_mode not in (
+            "off",
+            "default",
+            "reduce-overhead",
+            "max-autotune",
+        ):
+            raise ValueError("Unknown compile_mode")
+        if type(self.fused_optimizer) is not bool:
+            raise ValueError("fused_optimizer must be a boolean")
+        if type(self.profile_steps) is not int or not 0 <= self.profile_steps <= 100:
+            raise ValueError("profile_steps must be an integer from 0 to 100")
         if self.evaluation_device not in (None, "cpu") and (
             type(self.evaluation_device) is not int or self.evaluation_device < 0
         ):
@@ -168,6 +183,35 @@ class StepResult:
     weight: float = 1.0
 
 
+def language_model_step(model, batch, device, *, chunk_size=None):
+    """Next-token objective; optional chunked projection for generated LM heads.
+
+    The loader owns shifting, sequence lengths and masking. Count labels on the
+    CPU before transfer, avoiding a CUDA scalar read in the usual loader path.
+    """
+    labels = batch["labels"]
+    count = int((labels != -100).sum())
+    if not count:
+        raise ValueError("Batch has no supervised targets.")
+    inputs = batch["input_ids"].to(device, non_blocking=True)
+    labels = labels.to(device, non_blocking=True)
+    if chunk_size is not None:
+        raw = model.module if isinstance(model, DDP) else model
+        if not getattr(raw, "supports_chunked_loss", False):
+            raise ValueError(
+                "Chunked loss requires a newly exported graph with one terminal Vocabulary head"
+            )
+        loss = model(inputs, loss_targets=labels, loss_chunk_size=chunk_size)
+    else:
+        logits = model(inputs)
+        loss = torch.nn.functional.cross_entropy(
+            logits.float().flatten(0, 1),
+            labels.to(logits.device).flatten(),
+            ignore_index=-100,
+        )
+    return StepResult(loss, weight=count)
+
+
 class Trainer:
     def __init__(
         self,
@@ -198,6 +242,7 @@ class Trainer:
         self.resuming = False
         self.evaluation_job = None
         self.evaluation_pending = None
+        self.profiler = None
 
     def train(self):
         parser = argparse.ArgumentParser()
@@ -217,6 +262,9 @@ class Trainer:
             cfg.precision = launch["precision"]
             cfg.placement = dict(launch.get("placement", {}))
         mode = launch.get("evaluation_mode", "script")
+        if launch.get("performance_mode") == "override":
+            for key in ("compile_mode", "fused_optimizer", "profile_steps"):
+                setattr(cfg, key, launch[key])
         if mode != "script":
             cfg.async_evaluation = mode == "async"
             cfg.evaluation_device = launch.get("evaluation_device")
@@ -517,6 +565,17 @@ class Trainer:
             if args.evaluate:
                 self._evaluate(str(args.evaluate))
                 return
+            configure_execution(self.model, self.optimizer, cfg)
+            run.emit(
+                "execution",
+                {
+                    "compile_mode": cfg.compile_mode,
+                    "fused_optimizer": bool(
+                        self.optimizer.param_groups[0].get("fused")
+                    ),
+                    "profile_steps": cfg.profile_steps,
+                },
+            )
             if self.world > 1:
                 dataset = getattr(self.train_loader, "dataset", None)
                 sampler = getattr(self.train_loader, "sampler", None)
@@ -549,7 +608,8 @@ class Trainer:
             if not self.resuming:
                 random.seed(cfg.seed + self.rank)
                 torch.manual_seed(cfg.seed + self.rank)
-            stopped = self._loop(directory)
+            with training_profile(directory, cfg, self.rank, run) as self.profiler:
+                stopped = self._loop(directory)
             if self.rank == 0 and (cfg.background_evaluation or self.evaluation_job):
                 if stopped:
                     self._cancel_evaluation(directory)
@@ -756,6 +816,9 @@ class Trainer:
             "cpu_threads",
             "generation_context_length",
             "trace_batches",
+            "compile_mode",
+            "fused_optimizer",
+            "profile_steps",
         }
         changed = [
             key
@@ -810,7 +873,7 @@ class Trainer:
         )
 
     @staticmethod
-    def _result(value):
+    def _result(value, *, check_finite=True):
         result = (
             value
             if isinstance(value, StepResult)
@@ -825,7 +888,7 @@ class Trainer:
             raise ValueError(
                 "Step hook must return a scalar mean loss with a positive finite weight"
             )
-        if not torch.isfinite(result.loss):
+        if check_finite and not torch.isfinite(result.loss):
             raise ValueError("Nonfinite loss; optimizer update was not applied")
         return result
 
@@ -899,10 +962,13 @@ class Trainer:
                     iterator = self._advance_epoch()
                     self._progress()
                     continue
+                if cfg.compile_mode in ("reduce-overhead", "max-autotune"):
+                    torch.compiler.cudagraph_mark_step_begin()
                 self.batches_in_epoch += len(batches)
                 self.batches_processed += len(batches)
                 self.optimizer.zero_grad(set_to_none=True)
-                weight, loss_sum, tokens = 0.0, 0.0, 0
+                weight, tokens = 0.0, 0
+                loss_sum = torch.zeros((), device=self.device, dtype=torch.float64)
                 metrics, records = {}, []
                 for index, batch in enumerate(batches):
                     sync = (
@@ -920,19 +986,17 @@ class Trainer:
                             raise ValueError(
                                 "Unequal tuned DDP batches require StepResult(loss, weight=supervised_token_count) or another correct objective weight. Return a weighted StepResult, or disable GPU tuning for this stage."
                             )
-                        result = self._result(value)
+                        result = self._result(value, check_finite=False)
                         scaled_loss = result.loss * (
                             result.weight / cfg.gradient_accumulation_steps
                         )
                     self.scaler.scale(scaled_loss).backward()
                     weight += result.weight
-                    loss_sum += float(result.loss.detach()) * result.weight
+                    loss_sum += result.loss.detach().to(torch.float64) * result.weight
                     for key, value in result.metrics.items():
                         metrics[key] = (
                             metrics.get(key, 0.0)
-                            + float(
-                                value.detach() if isinstance(value, Tensor) else value
-                            )
+                            + (value.detach() if isinstance(value, Tensor) else value)
                             * result.weight
                         )
                     if isinstance(batch, dict):
@@ -940,28 +1004,40 @@ class Trainer:
                         tokens += inputs.numel() if isinstance(inputs, Tensor) else 0
                     if cfg.trace_batches != "none":
                         records.append(self._batch_trace(batch))
-                stats = torch.tensor(
-                    [weight, loss_sum, tokens], dtype=torch.float64, device=self.device
+                stats = torch.stack(
+                    (loss_sum.new_tensor(weight), loss_sum, loss_sum.new_tensor(tokens))
                 )
                 if self.world > 1:
                     dist.all_reduce(stats)
+                # One scalar transfer at the update boundary, after all ranks
+                # agree on the objective. No per-microbatch loss synchronization;
+                # a nonfinite loss on any rank stops every worker before stepping.
+                host_stats = stats.tolist()
+                if not math.isfinite(host_stats[1]):
+                    raise ValueError("Nonfinite loss; optimizer update was not applied")
                 self.scaler.unscale_(self.optimizer)
-                factor = self.world * cfg.gradient_accumulation_steps / stats[0].item()
-                for param in self.model.parameters():
-                    if param.grad is not None:
-                        param.grad.mul_(factor)
+                factor = self.world * cfg.gradient_accumulation_steps / stats[0]
+                gradients = [
+                    p.grad for p in self.model.parameters() if p.grad is not None
+                ]
+                # One foreach launch per device/dtype rather than one per tensor.
+                groups = {}
+                for grad in gradients:
+                    groups.setdefault((grad.device, grad.dtype), []).append(grad)
+                for (device, _), group in groups.items():
+                    torch._foreach_mul_(group, factor.to(device))
                 norm = nn.utils.clip_grad_norm_(
                     self.model.parameters(),
                     cfg.gradient_clip,
                     error_if_nonfinite=cfg.precision != "fp16",
-                    foreach=False,
+                    foreach=None,
                 )
                 applied_lrs = [group["lr"] for group in self.optimizer.param_groups]
                 old_scale = self.scaler.get_scale()
                 self.scaler.step(self.optimizer)
                 self.scaler.update()
                 skipped = self.scaler.get_scale() < old_scale
-                run.tokens += int(stats[2].item())
+                run.tokens += int(host_stats[2])
                 if skipped:
                     overflow_count += 1
                     run.warning(
@@ -999,10 +1075,13 @@ class Trainer:
                         missing_trace_warned = True
                 if epoch_ended:
                     iterator = self._advance_epoch()
+                if self.profiler is not None:
+                    self.profiler.step()
                 if skipped:
                     self._progress()
                     continue
                 if run.step % cfg.log_every == 0 or run.step == 1:
+                    metrics = {key: float(value) for key, value in metrics.items()}
                     profile = {
                         "rank": self.rank,
                         "device": self.device,
@@ -1012,7 +1091,7 @@ class Trainer:
                     }
                     profiles = [profile]
                     values = {
-                        "train/loss": stats[1].item() / stats[0].item(),
+                        "train/loss": host_stats[1] / host_stats[0],
                         "train/gradient_norm": float(norm),
                         "train/tokens_per_second": (run.tokens - initial_tokens)
                         / max(0.001, time.monotonic() - started),
@@ -1039,7 +1118,7 @@ class Trainer:
                         )
                     values.update(
                         {
-                            "train/" + key: value / stats[0].item()
+                            "train/" + key: value / host_stats[0]
                             for key, value in metrics.items()
                         }
                     )

@@ -76,6 +76,9 @@ RESERVED = (
         "step",
         "steps",
         "shared_modules",
+        "loss_targets",
+        "loss_chunk_size",
+        "supports_chunked_loss",
     }
 )
 
@@ -475,6 +478,22 @@ class SourceGenerator:
             parameters.append(name + ("=None" if index > last_required else ""))
         if needs_schedule(graph):
             parameters.extend(["*", "step=0", "steps=1"])
+        # Only expose token loss for a sole, terminal vocabulary projection.
+        # General graphs keep their original forward contract.
+        outputs = [n for n in sequence if n["data"]["kind"] == "output"]
+        loss_head = None
+        if not prefix and len(outputs) == 1:
+            sources = [
+                e["source"] for e in graph["edges"] if e["target"] == outputs[0]["id"]
+            ]
+            if len(sources) == 1 and by_id[sources[0]]["data"]["kind"] == "head":
+                candidate = sources[0]
+                if sum(e["source"] == candidate for e in graph["edges"]) == 1:
+                    loss_head = candidate
+                    if "*" not in parameters:
+                        parameters.append("*")
+                    parameters.extend(["loss_targets=None", "loss_chunk_size=1024"])
+                    self.imports["export_helpers"].add("linear_cross_entropy")
         forward = []
         if not prefix and has_moe(graph):
             self.imports["runtime"].add("clear_moe_losses")
@@ -586,6 +605,13 @@ class SourceGenerator:
                     args = [args[0], f"memory={args[1]}", f"mask={args[2]}"]
             self.add_module(init, name, constructor, data.get("share"), kind)
             attributes[node["id"]] = name
+            if node["id"] == loss_head:
+                forward.extend(
+                    [
+                        "if loss_targets is not None:",
+                        f"    return linear_cross_entropy({args[0]}, self.{name}.weight, loss_targets, self.{name}.bias, loss_chunk_size)",
+                    ]
+                )
             forward.append(f"{name} = self.{name}({', '.join(args)})")
         for node in sequence:
             tie = params(node, config).get("tie")
@@ -598,10 +624,12 @@ class SourceGenerator:
                 )
         if not prefix and (self.mixed_groups or has_legacy_ties(graph)):
             self.imports["runtime"].add("initialize_tied_embeddings")
-            init.extend([
-                "# Small initial logits; initialize shared matrices once, after tying.",
-                "initialize_tied_embeddings(self, std=0.02)",
-            ])
+            init.extend(
+                [
+                    "# Small initial logits; initialize shared matrices once, after tying.",
+                    "initialize_tied_embeddings(self, std=0.02)",
+                ]
+            )
         if not prefix:
             self.files["graph_modules.json"] = json.dumps(attributes, indent=2)
         values = [value for _, value in sorted(returns)]
@@ -619,6 +647,12 @@ class SourceGenerator:
             f"class {class_name}(nn.Module):\n    def __init__({init_signature}):\n"
             + "\n".join("        " + line for line in init)
         )
+        if loss_head is not None:
+            source = source.replace(
+                "    def __init__",
+                "    supports_chunked_loss = True\n\n    def __init__",
+                1,
+            )
         source += f"\n\n    def forward({signature}):\n" + "\n".join(
             "        " + line for line in forward
         )

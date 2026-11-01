@@ -2151,6 +2151,138 @@ export function TrainingWorkspace({ project }: { project: Project }) {
                         </label>
                       </div>
                     )}
+                    {codeFirst && (
+                      <details>
+                        <summary>Execution and profiling (advanced)</summary>
+                        <div className="training-form-grid">
+                          <label>
+                            Performance settings
+                            <select
+                              aria-label="Performance settings"
+                              value={config.performance_mode}
+                              onChange={(event) =>
+                                setting(
+                                  "performance_mode",
+                                  z
+                                    .enum(["script", "override"])
+                                    .parse(event.target.value),
+                                )
+                              }
+                            >
+                              <option value="script">
+                                Use train.py settings
+                              </option>
+                              <option value="override">
+                                Override for this launch
+                              </option>
+                            </select>
+                          </label>
+                          <label>
+                            Compilation
+                            <select
+                              aria-label="Compilation"
+                              value={
+                                config.performance_mode === "script"
+                                  ? "script"
+                                  : config.compile_mode
+                              }
+                              disabled={config.performance_mode !== "override"}
+                              onChange={(event) =>
+                                setting(
+                                  "compile_mode",
+                                  z
+                                    .enum([
+                                      "off",
+                                      "default",
+                                      "reduce-overhead",
+                                      "max-autotune",
+                                    ])
+                                    .parse(event.target.value),
+                                )
+                              }
+                            >
+                              {config.performance_mode === "script" && (
+                                <option value="script">
+                                  Defined in train.py
+                                </option>
+                              )}
+                              <option value="off">Off · eager PyTorch</option>
+                              <option value="default">
+                                Default · kernel fusion
+                              </option>
+                              <option value="reduce-overhead">
+                                Reduce overhead · CUDA graphs when eligible
+                              </option>
+                              <option value="max-autotune">
+                                Maximum autotuning · longer compilation
+                              </option>
+                            </select>
+                            <small>
+                              First use of each batch shape can compile slowly
+                              and use extra memory. Split placement requires
+                              eager execution.
+                            </small>
+                          </label>
+                          {config.performance_mode === "override" && (
+                            <>
+                              <label className="training-inline-check">
+                                <input
+                                  type="checkbox"
+                                  checked={config.fused_optimizer}
+                                  disabled={
+                                    config.performance_mode !== "override"
+                                  }
+                                  onChange={(event) =>
+                                    setting(
+                                      "fused_optimizer",
+                                      event.target.checked,
+                                    )
+                                  }
+                                />
+                                Fused AdamW (CUDA only)
+                              </label>
+                              <label>
+                                Profile updates (0 disables capture)
+                                <input
+                                  aria-label="Profile updates (0 disables capture)"
+                                  type="number"
+                                  min={0}
+                                  max={100}
+                                  value={config.profile_steps}
+                                  disabled={
+                                    config.performance_mode !== "override"
+                                  }
+                                  onChange={(event) => {
+                                    const value = event.target.valueAsNumber;
+                                    if (
+                                      Number.isInteger(value) &&
+                                      value >= 0 &&
+                                      value <= 100
+                                    )
+                                      setting("profile_steps", value);
+                                  }}
+                                />
+                                <small>
+                                  Captures after two warm-up updates. Traces are
+                                  saved under profiles/ in the run folder;
+                                  profiling temporarily slows training.
+                                </small>
+                              </label>
+                            </>
+                          )}
+                        </div>
+                        {config.performance_mode === "script" && (
+                          <p className="training-muted">
+                            Compilation, fused AdamW and profiling are defined
+                            by TrainingConfig in your Python script.
+                          </p>
+                        )}
+                        <p className="training-muted">
+                          These options apply at the next launch. Your training
+                          script and existing run snapshots are preserved.
+                        </p>
+                      </details>
+                    )}
                     <details>
                       <summary>GPU tuning (advanced)</summary>
                       <label className="gpu-tuning-toggle">
@@ -3030,6 +3162,20 @@ export function TrainingWorkspace({ project }: { project: Project }) {
                   <a href={artifactURL("output.log")}>
                     Download full training log
                   </a>
+                  {detail.events
+                    .filter(
+                      (event) =>
+                        event.kind === "profile" &&
+                        typeof event.payload.path === "string",
+                    )
+                    .map((event) => (
+                      <p key={event.id}>
+                        <a href={artifactURL(String(event.payload.path))}>
+                          Download performance trace
+                        </a>{" "}
+                        · Open in Perfetto or Chrome tracing
+                      </p>
+                    ))}
                 </>
               )}
               {dashboard === "checkpoints" && (

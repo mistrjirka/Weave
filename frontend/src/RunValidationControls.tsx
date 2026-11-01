@@ -44,6 +44,7 @@ export function RunValidationControls({
   const [error, setError] = useState("");
   const [requested, setRequested] = useState<string | null>(null);
   const [confirmRestart, setConfirmRestart] = useState(false);
+  const [refreshSupport, setRefreshSupport] = useState(false);
   const [scriptSource, setScriptSource] = useState<"previous" | "edited">(
     "previous",
   );
@@ -80,6 +81,7 @@ export function RunValidationControls({
     setRequested(null);
     setConfirmRestart(false);
     setScriptSource("previous");
+    setRefreshSupport(false);
     setOpen(true);
   }
 
@@ -154,7 +156,11 @@ export function RunValidationControls({
       const run = await trainingRequest(
         endpoint + "/restart",
         runSchema,
-        { validation: settings, script_source: scriptSource },
+        {
+          validation: settings,
+          script_source: scriptSource,
+          refresh_support: refreshSupport,
+        },
         "POST",
         controller.signal,
       );
@@ -379,6 +385,24 @@ export function RunValidationControls({
                       <option value="edited">Edited stage script</option>
                     </select>
                   </label>
+                  <label className="training-inline-check">
+                    <input
+                      type="checkbox"
+                      checked={refreshSupport}
+                      disabled={busy}
+                      onChange={(event) =>
+                        setRefreshSupport(event.target.checked)
+                      }
+                    />
+                    Apply current Weave runtime fixes
+                  </label>
+                  {refreshSupport && (
+                    <p className="training-muted">
+                      Regenerates support from this run’s recorded graph. The
+                      restart snapshot records all code; incompatible checkpoint
+                      tensors or optimizer mappings stop the attempt.
+                    </p>
+                  )}
                   <p>
                     {active
                       ? "Save a checkpoint, stop safely, and resume"
