@@ -20,6 +20,29 @@ they are not expected speedups for every Weave graph.
 - Every comparison starts from the same model checkpoint with fresh optimizer
   state. AdamW uses LR 0.0003, betas (0.9, 0.95), and weight decay 0.1.
 
+## RoPE training history limits the quality conclusions
+
+The initial run trained through update 2,937 with a RoPE precision bug: rotation
+angles were cast to FP16 before sine/cosine. Rounding becomes particularly
+severe at long positions. The resumed run explicitly refreshed the runtime and
+used FP32 angles and trigonometry from update 2,938 through 3,653. Computing
+these values in FP32 before casting the resulting sine/cosine tables also
+matches the approach in the
+[Transformers Llama implementation](https://github.com/huggingface/transformers/blob/v4.46.3/src/transformers/models/llama/modeling_llama.py#L137-L156).
+
+The old run's trace records 62 updates at the 4k bucket and 170 at the 8k bucket,
+out of 2,937 completed updates. Smaller contexts also had angle rounding, though
+less severe. The first observed long-context update was 2,280; the loader's
+2,288-update curriculum boundary counts consumed batches, including skipped
+FP16 updates, rather than only successful optimizer updates.
+
+The fix changes future computation; it does not undo the previous training.
+Continued improvement in validation does not establish parity with training
+correctly from initialization. All optimizer experiments use the fixed runtime
+and the same inherited checkpoint, so their timing comparison remains useful,
+but their short quality checks describe continuation from affected weights.
+A fresh training run under the fixed runtime is needed for a clean baseline.
+
 ## Optimizer throughput
 
 | Optimizer | 511-token sequences | 8,191-token sequences |
@@ -148,8 +171,8 @@ The slow initial decline follows the cosine curve.
 Training metrics log one update every ten updates, rather than the mean of
 all ten. Recent 64-token buckets averaged loss 4.03, while 2,048-token buckets
 averaged 3.24. Differences in available context and sampled documents account
-for substantial point-to-point variation. Sequence lengths above 1,024 become
-eligible after update 2,288, changing the batch mix. Held-out validation loss
+for substantial point-to-point variation. Sequence lengths above 1,024 first
+appear at logged update 2,280, changing the batch mix. Held-out validation loss
 improved from 3.60 at update 2,900 to 3.46 at update 3,600. These observations
 do not show a scheduler failure or recent divergence.
 
