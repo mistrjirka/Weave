@@ -160,6 +160,9 @@ export const reportSchema: z.ZodType<ValidationReport> = z.object({
   errors: z.array(issue),
   warnings: z.array(issue),
   shapes: z.record(z.string(), contract.nullable()),
+  port_shapes: z
+    .record(z.string(), z.record(z.string(), contract.nullable()))
+    .optional(),
   counts: z.record(z.string(), z.number()),
   parameters: z.number(),
   outputs: z.array(contract.nullable()),

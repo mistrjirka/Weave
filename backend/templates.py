@@ -135,6 +135,27 @@ def embedding_example():
                      node('output','output','Token vectors',640,120)],
             'edges':[edge('ids','embedding'),edge('embedding','output')]}
 
+def residual_lanes_example():
+    """Separate wires make the lane axis explicit; branches are independently editable."""
+    ns = [node('features', 'input', 'Token features', 0, 260, {'index': 0, 'shape': ['B', 'T', '$width'], 'dtype': 'float32'}),
+          node('fork', 'lane_fork', 'Fork four residual lanes', 340, 260, {'lanes': 4},
+               annotation='Each output starts as the same feature vector. Different branch layers can make the lanes diverge. Forking itself adds no learned weights.'),
+          node('join', 'lane_join', 'Stack lanes into one tensor', 1120, 260, {'lanes': 4, 'mode': 'stack'},
+               annotation='Stack preserves the four separate representations in [B,T,4,D]. This packed form can enter Needle-style lane routing.'),
+          node('split', 'lane_split', 'Unpack the four lanes', 1480, 260, {'lanes': 4}),
+          node('mean', 'lane_join', 'Average the final lanes', 1840, 260, {'lanes': 4, 'mode': 'mean'},
+               annotation='Mean reduces four vectors to one [B,T,D] vector. Unlike stacking, this combines their values.'),
+          node('out', 'output', 'Token features out', 2200, 260)]
+    es = [edge('features', 'fork'), edge('join', 'split'), edge('mean', 'out')]
+    for i in range(4):
+        ident = f'branch_{i}'
+        ns.append(node(ident, 'linear', f'Independent branch {i+1}', 720, i*260, {'out': '$width', 'bias': False}))
+        es.extend([{**edge('fork', ident), 'id': f'fork-{i}', 'sourceHandle': f'lane{i}'},
+                   edge(ident, 'join', f'lane{i}'),
+                   {**edge('split', 'mean', f'lane{i}'), 'sourceHandle': f'lane{i}'}])
+    return {'nodes': ns, 'edges': es}
+
+
 def sparse_transformer():
     g=language_model();body=g['nodes'][2]['data']['body']
     body['nodes'].extend([node('local','attention_pattern','Local attention window',0,500,{'pattern':'local','window':32,'causal':False}),node('global','attention_pattern','Global anchor tokens',0,800,{'pattern':'global','global_tokens':[0],'global_stride':0,'causal':False}),node('combine','pattern_union','Local ∪ global attention',320,600)])
@@ -354,4 +375,5 @@ def templates():
     items.append(project('embedding-table','Embedding table','Token IDs index a learned table of vectors.',embedding_example()))
     items.append(project('moe-transformer','MoE transformer','A causal attention block followed by four editable experts and top-2 token routing.',moe_transformer(),references=[{'title':'Switch Transformer: top-1 routing and balancing','url':'https://arxiv.org/abs/2101.03961'},{'title':'Training MoEs at Scale with PyTorch','url':'https://pytorch.org/blog/training-moes/'}]))
     items.append(project('blank','Blank project','Start with token input and build your own architecture.',{'nodes':[node('ids','input','Token IDs',80,150,{'index':0,'shape':['B','T'],'dtype':'int64'}),node('out','output','Output',700,150)],'edges':[]}))
+    items.append(project('residual-lanes', 'Residual lanes · split and join', 'Four explicit lane wires, independently learned branches, stack, unpack and average.', residual_lanes_example()))
     return items

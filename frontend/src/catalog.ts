@@ -304,6 +304,27 @@ export const catalog: CatalogEntry[] = [
     params: { split: false },
   },
   {
+    kind: "lane_fork",
+    label: "Fork lanes",
+    description: "Copy one tensor onto separate editable lane wires",
+    category: "Memory & features",
+    params: { lanes: 4 },
+  },
+  {
+    kind: "lane_split",
+    label: "Split lanes",
+    description: "Unpack a lane tensor · one output wire per lane",
+    category: "Memory & features",
+    params: { lanes: 4 },
+  },
+  {
+    kind: "lane_join",
+    label: "Join lanes",
+    description: "Join matching wires · stack, average or sum",
+    category: "Memory & features",
+    params: { lanes: 4, mode: "stack" },
+  },
+  {
     kind: "lane_expand",
     label: "Expand lanes",
     description: "Features → parallel residual streams",

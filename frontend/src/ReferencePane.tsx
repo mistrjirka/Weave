@@ -1,3 +1,4 @@
+import { edgeContract } from "./lanePorts";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ReactFlow,
@@ -461,9 +462,8 @@ function ReferenceCanvas({
         .map((edge) => ({
           id: edge.id,
           text:
-            report?.shapes[prefix + edge.source]?.shape
-              .map(String)
-              .join(" × ") || "",
+            edgeContract(report, prefix, edge)?.shape.map(String).join(" × ") ||
+            "",
         }))
         .filter((label) => label.text);
       const sizes = measureLabels(texts);

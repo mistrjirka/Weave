@@ -307,3 +307,60 @@ for p,q in zip(a.parameters(),b.parameters()):
     0,
   );
 });
+
+test("two independent transformer layers in a shared loop execute A B A B A B", () => {
+  const project = structuredClone(template);
+  project.config = {
+    ...project.config,
+    width: 16,
+    heads: 4,
+    ffn_width: 32,
+    vocab: 32,
+  };
+  const loop = project.graph.nodes.find(
+    (node) => node.data.kind === "loop",
+  )!.data;
+  loop.role = "transformer";
+  loop.params = { iterations: 3, shared: true, heads: 4, ffn_width: 32 };
+  exposeTransformerSettings(loop);
+  wrapLoopTransformer(loop);
+  const graph = loop.body!;
+  const a = graph.nodes.find((node) => node.data.kind === "block")!;
+  const b = structuredClone(a);
+  b.id = "transformer_b";
+  b.data.label = "Transformer B";
+  graph.nodes.push(b);
+  const outgoing = graph.edges.find((edge) => edge.source === a.id)!;
+  outgoing.source = b.id;
+  graph.edges.push({
+    id: "a-b",
+    source: a.id,
+    sourceHandle: "out",
+    target: b.id,
+    targetHandle: "a",
+  });
+  python(
+    `
+import json, sys, torch
+from backend import runtime, export_helpers, sparse_runtime
+from backend.compiler import compile_project
+for name, module in [('runtime',runtime),('export_helpers',export_helpers),('sparse_runtime',sparse_runtime)]:
+    sys.modules[name] = module
+torch.set_num_threads(1)
+namespace={}
+exec(compile_project(json.load(sys.stdin))['model.py'], namespace)
+model=namespace['Model']()
+a=next(module for name,module in model.named_modules() if name.endswith('.transformer_layer'))
+b=next(module for name,module in model.named_modules() if name.endswith('.transformer_b'))
+assert set(map(id,a.parameters())).isdisjoint(set(map(id,b.parameters())))
+visited=[]
+a.register_forward_hook(lambda *_: visited.append('A'))
+b.register_forward_hook(lambda *_: visited.append('B'))
+out=model(torch.tensor([[1,2,3,4]]))
+assert visited == ['A','B','A','B','A','B'], visited
+out.square().mean().backward()
+assert all(p.grad is not None for p in [*a.parameters(),*b.parameters()])
+`,
+    JSON.stringify(project),
+  );
+});

@@ -11,9 +11,11 @@ No Python from custom blocks is executed.
 from copy import deepcopy
 import json
 
+from .lanes import source_contract
 from .core import (
     graph_context,
     optional_ports,
+    output_port_names,
     params,
     port_names,
     resolve,
@@ -168,6 +170,14 @@ def probe_valid(data, contracts, config, moe_body):
         ]
         + [{"source": "candidate", "target": "result", "targetHandle": "a"}],
     }
+    if data["kind"] == "output":
+        # Output terminates the graph and has no source socket of its own.
+        graph["nodes"].pop()
+        graph["edges"].pop()
+    else:
+        outputs = output_port_names(node, config)
+        if outputs:
+            graph["edges"][-1]["sourceHandle"] = outputs[0]
     report = validate_project(
         {"version": 1, "config": config, "graph": graph},
         input_contracts=[contracts[port] for port in inputs],
@@ -179,7 +189,7 @@ def probe_valid(data, contracts, config, moe_body):
 
 def compatible_ports(data, source, config, existing, moe_body=False):
     node = {"id": "candidate", "data": data}
-    ports = port_names(node)
+    ports = port_names(node, config)
     optional = set(optional_ports(node))
     settings = params(node, config)
     declared = declared_inputs(data, config)
@@ -222,15 +232,13 @@ def compatible_ports(data, source, config, existing, moe_body=False):
 
 
 def connection_options(project, path, source_id, handle, candidates):
-    if handle != "out":
-        raise ValueError("Choose a tensor output port.")
     graph, config = graph_context(project, path)
     if not any(node["id"] == source_id for node in graph["nodes"]):
         raise ValueError("The source node is no longer available.")
     report = validate_project(project, include_advice=False)
     prefix = "/".join([*path, ""])
     key = prefix + source_id if path else source_id
-    source = report["shapes"].get(key)
+    source = source_contract(report, key, handle)
     if source is None:
         return {
             "source": None,

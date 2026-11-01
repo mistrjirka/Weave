@@ -5,6 +5,7 @@ import ast
 import copy
 import re
 import math
+from .lanes import MULTI_OUTPUT_LANES, lane_count, lane_ports, port_label
 from .patterns import validate_pattern,validate_mask
 from .advice import design_advice
 from .tokenizer_bindings import bind_input_tokenizers
@@ -32,6 +33,7 @@ PORTS = {
     'loop': ['a'], 'block': ['a'], 'moe': ['a'], 'moe_router': ['a'], 'moe_combine': ['a'], 'custom': ['a'], 'reference': ['a'],
     'gate': ['a', 'b'], 'scale': ['a'], 'hadamard': ['a'],
     'mhc': ['a'], 'engram': ['a', 'b'], 'head': ['a'],
+    'lane_fork':['a'], 'lane_split':['a'], 'lane_join':[],
     'lane_expand':['a'], 'lane_reduce':['a'], 'routing':['a'],
     'lane_mix':['a','b'], 'lane_merge':['a','b','c'], 'subtract':['a','b'],
     'engram_hash':['a'], 'engram_lookup':['a'], 'memory_fuse':['a','b'], 'monarch':['a'],
@@ -110,8 +112,17 @@ def graph_context(project, path):
     return graph, config
 
 
-def port_names(node):
+def output_port_names(node, config=None):
     d = node['data']
+    if d['kind'] in MULTI_OUTPUT_LANES:
+        return lane_ports(params(node, config or {}))
+    return [] if d['kind'] == 'output' else ['out']
+
+
+def port_names(node, config=None):
+    d = node['data']
+    if d['kind'] == 'lane_join':
+        return lane_ports(params(node, config or {}))
     if d['kind']=='moe_combine':
         count=d.get('params',{}).get('experts',0)
         return ['a'] + [f'e{i}' for i in range(count)] if type(count) is int and 0 <= count <= 256 else ['a']
@@ -174,6 +185,7 @@ def moe_structure(node, settings):
 def validate_project(project, *, input_contracts=None, moe_body=False, include_advice=True):
     project, token_domains, binding_errors = bind_input_tokenizers(project, ordered)
     errors, warnings, shapes, counts, raw_counts = binding_errors, [], {}, {}, {}
+    port_shapes = {}
     cfg = project.get('config', {})
     for field in ('width','vocab','heads','ffn_width'):
         if field in cfg and (not isinstance(cfg[field],int) or isinstance(cfg[field],bool) or cfg[field]<1):
@@ -188,6 +200,8 @@ def validate_project(project, *, input_contracts=None, moe_body=False, include_a
     def visit(graph, inputs=None, prefix='', config=None, moe_body=False):
         cfg={**(config if config is not None else project.get('config',{})), **graph.get('variables', {})}
         local = {}
+        nodes_by_id = {node['id']: node for node in graph['nodes']}
+        local_outputs = {}
         total = 0
         outputs = []
         def fail(n, message, port=None):
@@ -207,12 +221,14 @@ def validate_project(project, *, input_contracts=None, moe_body=False, include_a
                     port = e.get('targetHandle') or 'a'
                     if port in incoming:
                         fail(n, f'Input {port} has multiple connections.', port)
-                    if port not in port_names(n):
+                    if port not in port_names(n, cfg):
                         fail(n, f'Unknown input port {port}.', port)
-                    incoming[port] = local.get(e['source'])
-                    if e.get('sourceHandle') not in (None,'out'):
-                        fail(n,'Connection uses an unknown source port.',port)
-            args = [incoming.get(k) for k in port_names(n)]
+                    handle = e.get('sourceHandle') or 'out'
+                    source = nodes_by_id.get(e['source'])
+                    incoming[port] = local_outputs.get(e['source'], {}).get(handle)
+                    if source and handle not in output_port_names(source, cfg):
+                        fail(n, f'Connection uses an unknown source port {handle}.', port)
+            args = [incoming.get(k) for k in port_names(n, cfg)]
             out = None; count = 0
             try:
                 missing = sorted(variable_names(d.get('params', {})) - set(cfg) - {'sqrt_width'})
@@ -221,14 +237,22 @@ def validate_project(project, *, input_contracts=None, moe_body=False, include_a
                 if d.get('iteration'):
                     schedule=d['iteration'];index=schedule.get('index');steps=schedule.get('total')
                     if not isinstance(index,int) or not isinstance(steps,int) or not 0<=index<steps:raise ValueError('Application schedule needs 0 ≤ index < total.')
+                if kind in ('lane_fork', 'lane_split', 'lane_join'):
+                    lane_count(p)
+                if kind == 'lane_join':
+                    known = [(port, arg) for port, arg in zip(port_names(n, cfg), args) if arg is not None]
+                    for port, arg in known[1:]:
+                        first = known[0][1]
+                        if arg['shape'] != first['shape'] or arg['dtype'] != first['dtype']:
+                            raise ContractError(f'Every joined lane must have matching shape and dtype. Expected {first}, received {arg}.', port)
                 if kind not in PORTS:
                     raise ValueError(f'Unknown operation: {kind}')
-                required=[a for port,a in zip(port_names(n),args) if port not in optional_ports(n)]
-                for port, arg in zip(port_names(n), args):
+                required=[a for port,a in zip(port_names(n, cfg),args) if port not in optional_ports(n)]
+                for port, arg in zip(port_names(n, cfg), args):
                     if arg is None and port not in optional_ports(n):
                         connected = next((e for e in graph.get('edges', []) if e['target'] == n['id'] and (e.get('targetHandle') or 'a') == port), None)
-                        message = (f"Input {port} is connected to {connected['source']}, whose shape is unresolved. Fix the upstream error first."
-                                   if connected else f'Input {port} is unconnected. Connect a tensor to this required port.')
+                        message = (f"Input {port_label(port)} is connected to {connected['source']}, whose shape is unresolved. Fix the upstream error first."
+                                   if connected else f'Input {port_label(port)} is unconnected. Connect a tensor to this required port.')
                         fail(n, message, port)
                 x = args[0] if args else None
                 width = p.get('width', cfg.get('width', 128))
@@ -342,6 +366,24 @@ def validate_project(project, *, input_contracts=None, moe_body=False, include_a
                         raise ValueError('Hash and lookup bucket counts differ.')
                     out = {'shape': x['shape'][:-1] + [width], 'dtype': 'float32'}
                     count = norders * buckets * width
+                elif kind in ('lane_fork', 'lane_split', 'lane_join'):
+                    lanes = lane_count(p)
+                    if kind == 'lane_fork':
+                        if not x['shape'] or x['dtype'] == 'attention_pattern':
+                            raise ValueError('Fork lanes expects a tensor with a feature dimension.')
+                        out = copy.deepcopy(x)
+                    elif kind == 'lane_split':
+                        if len(x['shape']) < 2 or x['shape'][-2] != lanes or x['dtype'] == 'attention_pattern':
+                            raise ValueError(f'Split lanes expects a tensor with {lanes} lanes in its second-to-last dimension.')
+                        out = {'shape': x['shape'][:-2] + x['shape'][-1:], 'dtype': x['dtype']}
+                    else:
+                        mode = p.get('mode', 'stack')
+                        if mode not in ('stack', 'mean', 'sum'):
+                            raise ValueError('Join mode must be stack, mean or sum.')
+                        if x['dtype'] == 'attention_pattern' or (mode != 'stack' and x['dtype'] != 'float32'):
+                            raise ValueError('Mean and sum joins require float features; stack also supports int64 and bool tensors.')
+                        shape = x['shape'][:-1] + [lanes, x['shape'][-1]] if mode == 'stack' else list(x['shape'])
+                        out = {'shape': shape, 'dtype': x['dtype']}
                 elif kind in ('lane_expand','lane_reduce','routing','lane_mix','lane_merge','engram_lookup','memory_fuse'):
                     lanes=p.get('lanes',4)
                     if kind=='lane_expand':
@@ -604,6 +646,9 @@ def validate_project(project, *, input_contracts=None, moe_body=False, include_a
             except (ValueError, TypeError, KeyError, IndexError, SyntaxError) as exc:
                 fail(n, str(exc), getattr(exc, 'port', None)); out = None
             local[n['id']] = out
+            local_outputs[n['id']] = {handle: out for handle in output_port_names(n, cfg)}
+            if kind in MULTI_OUTPUT_LANES:
+                port_shapes[key] = local_outputs[n['id']]
             shapes[key] = out; counts[key] = count; total += count
         if not any(n['data']['kind']=='output' for n in graph['nodes']):
             errors.append({'node': prefix.rstrip('/') or None, 'message': 'Graph needs an Output node.'})
@@ -640,4 +685,4 @@ def validate_project(project, *, input_contracts=None, moe_body=False, include_a
     # Skip structurally malformed graphs rather than hiding the original error.
     if include_advice and not any(e.get('node') is None for e in errors):
         warnings.extend(design_advice(project, shapes, counts, resolve))
-    return {'valid': not errors, 'errors': errors, 'warnings': warnings, 'shapes': shapes, 'counts': counts, 'parameters': total, 'outputs': outputs, 'tokenizers': token_domains}
+    return {'valid': not errors, 'errors': errors, 'warnings': warnings, 'shapes': shapes, 'port_shapes': port_shapes, 'counts': counts, 'parameters': total, 'outputs': outputs, 'tokenizers': token_domains}

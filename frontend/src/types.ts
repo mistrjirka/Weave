@@ -67,6 +67,7 @@ export interface ValidationReport {
   errors: ValidationIssue[];
   warnings: ValidationIssue[];
   shapes: Record<string, TensorContract | null>;
+  port_shapes?: Record<string, Record<string, TensorContract | null>>;
   counts: Record<string, number>;
   parameters: number;
   outputs: (TensorContract | null)[];
@@ -114,6 +115,7 @@ export interface NodeLocation {
 export interface DisplayData extends NodeData {
   _previewParams?: Parameters;
   _ports: string[];
+  _outputs: string[];
   _optional: string[];
   _role: string;
   _groupLabel?: string;

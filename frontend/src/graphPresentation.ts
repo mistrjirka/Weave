@@ -4,11 +4,12 @@ import type {
   DisplayNode,
   Parameters,
   Graph,
-  GraphNode,
   NodeLocation,
   Project,
   ValidationReport,
 } from "./types";
+import { nodePorts, optionalPorts } from "./nodePorts";
+import { outputPorts, edgeContract } from "./lanePorts";
 import { previewParameters } from "./graphVariables";
 import { allNodes, inferRole } from "./graph";
 
@@ -21,71 +22,7 @@ export function clearGraphSelection(graph: Graph) {
   for (const edge of graph.edges) if (edge.selected) edge.selected = false;
 }
 
-const ports: Record<string, string[]> = {
-  input: [],
-  output: ["a"],
-  add: ["a", "b"],
-  multiply: ["a", "b"],
-  subtract: ["a", "b"],
-  concat: ["a", "b"],
-  gate: ["a", "b"],
-  attention: ["a", "b"],
-  cross_attention: ["a", "b", "c"],
-  select: ["a", "b"],
-  engram: ["a", "b"],
-  lane_mix: ["a", "b"],
-  lane_merge: ["a", "b", "c"],
-  memory_fuse: ["a", "b"],
-  sdpa: ["a", "b", "c", "d"],
-  matmul: ["a", "b"],
-  attention_pattern: ["a", "b"],
-  pattern_union: ["a", "b"],
-  pattern_intersection: ["a", "b"],
-};
-export function optionalPorts(n: GraphNode) {
-  if (n.data.body)
-    return n.data.body.nodes
-      .filter(
-        (v: GraphNode) => v.data.kind === "input" && v.data.params?.optional,
-      )
-      .map((v: GraphNode) =>
-        String.fromCharCode(97 + Number(v.data.params.index || 0)),
-      );
-  return (
-    {
-      attention: ["b"],
-      cross_attention: ["c"],
-      sdpa: ["d"],
-      attention_pattern: ["b"],
-    }[n.data.kind] || []
-  );
-}
-export function nodePorts(n: GraphNode) {
-  if (n.data.kind === "moe_combine") {
-    const count = n.data.params.experts;
-    return [
-      "a",
-      ...Array.from(
-        {
-          length:
-            typeof count === "number" && Number.isInteger(count)
-              ? Math.max(0, Math.min(256, count))
-              : 0,
-        },
-        (_, i) => `e${i}`,
-      ),
-    ];
-  }
-  return n.data.kind === "custom" && n.data.params?.input_shapes?.length
-    ? n.data.params.input_shapes.map((_, i: number) =>
-        String.fromCharCode(97 + i),
-      )
-    : n.data.body
-      ? n.data.body.nodes
-          .filter((n: GraphNode) => n.data.kind === "input")
-          .map((_, i: number) => String.fromCharCode(97 + i))
-      : ports[n.data.kind] || ["a"];
-}
+export { nodePorts } from "./nodePorts";
 
 export function parameterGroups(project: Project) {
   const groups = new Map<string, { label: string; members: NodeLocation[] }>();
@@ -121,7 +58,17 @@ export function presentNodes(
       ...n.data,
       _focused: n.id === selection,
       _previewParams: previewParameters(n.data.params, options.variables ?? {}),
-      _ports: nodePorts(n),
+      _ports: nodePorts({
+        ...n,
+        data: {
+          ...n.data,
+          params: previewParameters(n.data.params, options.variables ?? {}),
+        },
+      }),
+      _outputs: outputPorts({
+        ...n.data,
+        params: previewParameters(n.data.params, options.variables ?? {}),
+      }),
       _optional: optionalPorts(n),
       _role: inferRole(n.data),
       _groupLabel: n.data.share ? groups.get(n.data.share)?.label : undefined,
@@ -157,8 +104,7 @@ export function presentEdges(graph: Graph, options: ViewOptions): Edge[] {
           .filter((e) => e.source === edge.source).length,
       },
       label:
-        report?.shapes[prefix + edge.source]?.shape.map(String).join(" × ") ||
-        "",
+        edgeContract(report, prefix, edge)?.shape.map(String).join(" × ") || "",
     })),
     ...Array.from(groups.entries()).flatMap(([group, info]) => {
       const members = graph.nodes.filter((n) => n.data.share === group);

@@ -148,6 +148,19 @@ const common: Record<string, string> = {
 };
 
 const byKind: Record<string, Record<string, string>> = {
+  lane_fork: {
+    lanes:
+      "How many identical output wires to start with (1–32). Each wire can then go through different layers. This adds no learned parameters; it does not split the feature width.",
+  },
+  lane_split: {
+    lanes:
+      "How many lanes to unpack (1–32). This must match the second-to-last dimension of the input. For example [B,T,4,D] becomes four separate [B,T,D] output wires.",
+  },
+  lane_join: {
+    lanes:
+      "How many input wires to join (1–32). All inputs are required and must have the same shape and dtype. Each wire is a separate input, rather than several connections into one socket.",
+    mode: "Stack keeps every lane: four [B,T,D] wires become [B,T,4,D]. Mean averages the wires into [B,T,D]; sum adds them. Mean and sum require floating-point features. This is not concatenation of feature widths, and it does not learn routing weights.",
+  },
   attention_pattern: {
     window:
       "The distance covered by the local attention pattern. With causal masking, a window of 16 includes the current token and up to 15 earlier tokens.",

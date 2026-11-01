@@ -356,6 +356,11 @@ class Functional(nn.Module):
                 # A pair of custom boolean masks can also be composed directly.
                 return a|b if k=='pattern_union' else a&b
             return AttentionPattern('union' if k=='pattern_union' else 'intersection',base.q,base.k,children=[as_pattern(a,base.q,base.k),as_pattern(b,base.q,base.k)])
+        if k == 'lane_fork':return tuple(x for _ in range(p.get('lanes',4)))
+        if k == 'lane_split':return torch.unbind(x,dim=-2)
+        if k == 'lane_join':
+            result=torch.stack((x,*args),dim=-2)
+            return result.mean(-2) if p.get('mode')=='mean' else result.sum(-2) if p.get('mode')=='sum' else result
         if k == 'lane_expand':return x.unsqueeze(-2).expand(*x.shape[:-1],p.get('lanes',4),x.shape[-1])
         if k == 'lane_reduce':return x.mean(-2)
         if k == 'lane_mix':return torch.einsum('btn,btnc->btc',args[0][...,:p.get('lanes',4)],x)

@@ -1,3 +1,10 @@
+import {
+  outputPorts,
+  portLabel,
+  edgeContract,
+  multiOutputLanes,
+  portTop,
+} from "./lanePorts";
 import { ProjectTokenizerPicker } from "./ProjectTokenizerPicker";
 import {
   connectionFeedback,
@@ -28,6 +35,7 @@ import {
   applyEdgeChanges,
   addEdge,
   useReactFlow,
+  useUpdateNodeInternals,
   type FitViewOptions,
   Panel,
   useViewport,
@@ -257,6 +265,9 @@ const family = (kind: string) =>
         ? "violet"
         : [
               "loop",
+              "lane_fork",
+              "lane_split",
+              "lane_join",
               "lane_expand",
               "lane_reduce",
               "routing",
@@ -316,6 +327,38 @@ function Diagram({
   body?: Graph;
   role?: string;
 }) {
+  if (multiOutputLanes.has(kind) || kind === "lane_join") {
+    const count =
+      typeof p.lanes === "number" ? Math.min(8, Math.max(1, p.lanes)) : 4;
+    const split = kind !== "lane_join";
+    return (
+      <div className="explicit-lane-preview">
+        <svg viewBox={`0 0 100 ${count * 20}`} aria-hidden="true">
+          {Array.from({ length: count }, (_, i) => (
+            <path
+              key={i}
+              d={
+                split
+                  ? `M5 ${count * 10} H30 L70 ${10 + i * 20} H95`
+                  : `M5 ${10 + i * 20} H30 L70 ${count * 10} H95`
+              }
+            />
+          ))}
+        </svg>
+        <span>
+          {kind === "lane_fork"
+            ? "identical copies"
+            : kind === "lane_split"
+              ? "unpack lanes"
+              : p.mode === "mean"
+                ? "average"
+                : p.mode === "sum"
+                  ? "add lanes"
+                  : "stack lanes"}
+        </span>
+      </div>
+    );
+  }
   const preview = renderPreview({ kind, p, body, role });
   if (preview) return preview;
   if (kind.startsWith("lane_") || kind === "routing")
@@ -583,12 +626,21 @@ function ArchitectureNode({ id, data, selected }: NodeProps<DisplayNode>) {
   const role = data._role || inferRole(data);
   const color = role === "denoising" ? "coral" : family(kind);
   const shape = data._shape;
+  const updateInternals = useUpdateNodeInternals();
+  const portSignature = JSON.stringify([data._ports, data._outputs]);
+  useEffect(() => {
+    updateInternals(id);
+  }, [id, portSignature, updateInternals]);
+  const laneNode = multiOutputLanes.has(kind) || kind === "lane_join";
   return (
     <div
-      className={`arch-node ${color} role-${role} ${expanded ? "container-node" : ""} ${selected || data._focused ? "selected" : ""} ${data._error ? "has-error" : ""}`}
+      className={`arch-node ${color} role-${role} ${expanded ? "container-node" : ""} ${selected || data._focused ? "selected" : ""} ${data._error ? "has-error" : ""} ${laneNode ? "explicit-lane-node" : ""}`}
       style={
-        kind === "moe_combine"
-          ? { minHeight: 105 + data._ports.length * 28 }
+        kind === "moe_combine" || laneNode
+          ? {
+              minHeight:
+                105 + Math.max(data._ports.length, data._outputs.length) * 28,
+            }
           : undefined
       }
       data-visual-role={role}
@@ -608,24 +660,35 @@ function ArchitectureNode({ id, data, selected }: NodeProps<DisplayNode>) {
                   : `Input ${port}`
             }
             className={`${data._optional.includes(port) ? "optional-port" : ""} ${data._portErrors?.[port] ? "port-error" : ""}`}
-            style={{ top: 68 + i * 28 }}
+            style={{ top: portTop(kind) + i * 28 }}
           />
           <span
             className={`port-name ${data._portErrors?.[port] ? "port-error-label" : ""}`}
-            style={{ top: 60 + i * 28 }}
+            style={{ top: portTop(kind) - 8 + i * 28 }}
           >
-            {port}
+            {portLabel(port)}
           </span>
         </React.Fragment>
       ))}
-      {kind !== "output" && (
-        <Handle
-          type="source"
-          position={Position.Right}
-          id="out"
-          style={{ top: 68 }}
-        />
-      )}
+      {data._outputs.map((port, i) => (
+        <React.Fragment key={port}>
+          <Handle
+            type="source"
+            position={Position.Right}
+            id={port}
+            title={`Output ${portLabel(port)}`}
+            style={{ top: portTop(kind) + i * 28 }}
+          />
+          {port !== "out" && (
+            <span
+              className="port-name output-port-name"
+              style={{ top: portTop(kind) - 8 + i * 28 }}
+            >
+              {portLabel(port)}
+            </span>
+          )}
+        </React.Fragment>
+      ))}
       {data.share && (
         <>
           <Handle
@@ -682,7 +745,17 @@ function ArchitectureNode({ id, data, selected }: NodeProps<DisplayNode>) {
           )}
         </div>
       )}
-      <div className="node-body">
+      <div
+        className="node-body"
+        style={
+          laneNode
+            ? {
+                minHeight:
+                  50 + Math.max(data._ports.length, data._outputs.length) * 28,
+              }
+            : undefined
+        }
+      >
         <Diagram kind={kind} p={p} body={data.body} role={role} />
         {kind === "input" && data._tokenizer && (
           <div className="input-tokenizer-summary">
@@ -697,7 +770,7 @@ function ArchitectureNode({ id, data, selected }: NodeProps<DisplayNode>) {
       <div className="node-footer">
         <code>
           {shape
-            ? `[${shape.shape.join(", ")}]`
+            ? `${data._outputs.length > 1 ? data._outputs.length + " × " : ""}[${shape.shape.join(", ")}]`
             : data._error
               ? "shape unresolved"
               : "connect input"}
@@ -744,8 +817,10 @@ function Field<T extends JsonValue>({
   onChange,
   disabledReason,
   help,
+  options,
 }: {
   name: string;
+  options?: string[];
   value: T;
   onChange: (value: T) => void;
   disabledReason?: string;
@@ -835,7 +910,8 @@ function Field<T extends JsonValue>({
     ],
     backend: ["dense", "auto", "flex"],
   };
-  if (selects[name])
+  const choices = options ?? selects[name];
+  if (choices)
     return (
       <div className="property-field">
         {heading}
@@ -849,7 +925,7 @@ function Field<T extends JsonValue>({
           value={String(value)}
           onChange={(e) => onChange(e.target.value as T)}
         >
-          {selects[name].map((v: string) => (
+          {choices.map((v: string) => (
             <option key={v}>{v}</option>
           ))}
         </select>
@@ -1502,7 +1578,7 @@ function Workbench({
       ? referenceInspection
       : null;
   const connectionShape = connection
-    ? report?.shapes[prefix + connection.source]
+    ? edgeContract(report, prefix, connection)
     : null;
   const updateNode = (fn: (n: GraphNode) => void) =>
     changeGraph((g) => {
@@ -1883,8 +1959,7 @@ function Workbench({
       .map((edge) => ({
         id: edge.id,
         text:
-          report?.shapes[key + edge.source]?.shape.map(String).join(" × ") ||
-          "",
+          edgeContract(report, key, edge)?.shape.map(String).join(" × ") || "",
       }))
       .filter((label) => label.text);
     const sizes = measureLabels(texts),
@@ -2106,7 +2181,7 @@ function Workbench({
       const next = addSharedApplication(
         g,
         selected.id,
-        input ? report?.shapes[prefix + input.source] : null,
+        input ? edgeContract(report, prefix, input) : null,
         report?.shapes[prefix + selected.id],
       );
       setSelection(next.id);
@@ -2170,7 +2245,15 @@ function Workbench({
     const outgoing = graph.edges.filter(
       (e) => ids.has(e.source) && !ids.has(e.target),
     );
-    const outputIds = [...new Set(outgoing.map((e) => e.source))];
+    const outputStreams = [
+      ...new Map(
+        outgoing.map((e) => [
+          JSON.stringify([e.source, e.sourceHandle || "out"]),
+          e,
+        ]),
+      ).values(),
+    ];
+    const outputIds = outputStreams.map((e) => e.source);
     if (outputIds.length > 1) {
       notify(
         "A reusable block needs one output stream. Select nodes with a single outgoing stream.",
@@ -2200,6 +2283,21 @@ function Workbench({
       notify("Select a subgraph with an output");
       return;
     }
+    const outputNode = selectedNodes.find((node) => node.id === output);
+    const outputHandle =
+      outputStreams[0]?.sourceHandle ||
+      (outputNode ? outputPorts(outputNode.data)[0] : "out");
+    if (
+      !outputHandle ||
+      (!outputStreams.length &&
+        outputNode &&
+        outputPorts(outputNode.data).length > 1)
+    ) {
+      notify(
+        "Connect a single outgoing lane or include a Join lanes node before creating a block.",
+      );
+      return;
+    }
     const id = uid();
     const minX = Math.min(...selectedNodes.map((n: GraphNode) => n.position.x)),
       minY = Math.min(...selectedNodes.map((n: GraphNode) => n.position.y));
@@ -2216,11 +2314,11 @@ function Workbench({
     const external = new Map<string, number>();
     const newIn: Edge[] = [];
     incoming.forEach((e) => {
-      const key = e.source;
+      const key = JSON.stringify([e.source, e.sourceHandle || "out"]);
       if (!external.has(key)) {
         const i = external.size;
         external.set(key, i);
-        const shape = report?.shapes[prefix + e.source];
+        const shape = edgeContract(report, prefix, e);
         body.nodes.push({
           id: "in" + i,
           type: "architecture",
@@ -2263,7 +2361,7 @@ function Workbench({
       source: output,
       target: "result",
       targetHandle: "a",
-      sourceHandle: "out",
+      sourceHandle: outputHandle,
       type: "smoothstep",
     });
     const block: GraphNode = {
@@ -2277,7 +2375,7 @@ function Workbench({
       g.edges = [
         ...g.edges.filter((e) => !ids.has(e.source) && !ids.has(e.target)),
         ...newIn,
-        ...outgoing.map((e) => ({ ...e, source: id })),
+        ...outgoing.map((e) => ({ ...e, source: id, sourceHandle: "out" })),
       ];
     });
     setSelection(id);
@@ -3104,7 +3202,7 @@ function Workbench({
                             state.fromHandle?.type !== "source" ||
                             !state.fromNode ||
                             (state.fromHandle.id &&
-                              state.fromHandle.id !== "out")
+                              state.fromHandle.id.startsWith("weights-"))
                           )
                             return;
                           const point =
@@ -3846,6 +3944,11 @@ function Workbench({
                         <React.Fragment key={k}>
                           <Field
                             name={k}
+                            options={
+                              selected.data.kind === "lane_join" && k === "mode"
+                                ? ["stack", "mean", "sum"]
+                                : undefined
+                            }
                             value={v ?? null}
                             help={settingHelp(selected.data.kind, k)}
                             disabledReason={

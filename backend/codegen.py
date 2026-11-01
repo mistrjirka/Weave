@@ -15,7 +15,15 @@ import re
 import unicodedata
 from collections.abc import Callable
 
-from .core import definition_signature, ordered, params, port_names, moe_structure
+from .core import (
+    definition_signature,
+    ordered,
+    params,
+    port_names,
+    output_port_names,
+    moe_structure,
+)
+from .lanes import MULTI_OUTPUT_LANES, source_contract
 
 MODULE_NAMES = {
     "forward",
@@ -117,13 +125,30 @@ OPERATIONS = {
     "head": Operation(
         constructor=lambda p, c, s: f"nn.Linear(in_features={s[-1]!r}, out_features={p.get('out', c.get('vocab'))!r}, bias={p.get('bias', False)!r})"
     ),
-    "layer_norm": Operation(constructor=lambda p, c, s: f"nn.LayerNorm({s[-1]!r}, eps={p.get('eps', 1e-5)!r}, elementwise_affine={p.get('affine', True)!r}, bias={p.get('bias', True)!r})"),
-    "dropout": Operation(constructor=lambda p, c, s: f"nn.Dropout(p={p.get('probability', 0.1)!r})"),
-    "position_embedding": Operation(constructor=lambda p, c, s: f"LearnedPositions(width={s[-1]!r}, max_length={p.get('max_length', 2048)!r})", runtime=("LearnedPositions",)),
-    "conv1d": Operation(constructor=lambda p, c, s: f"SequenceConv1d(in_channels={s[-1]!r}, out_channels={p.get('out', s[-1])!r}, kernel_size={p.get('kernel_size', 3)!r}, stride={p.get('stride', 1)!r}, padding={p.get('padding', 0)!r}, bias={p.get('bias', True)!r})", runtime=("SequenceConv1d",)),
-    "pool1d": Operation(constructor=lambda p, c, s: f"SequencePool1d(kernel_size={p.get('kernel_size', 2)!r}, stride={p.get('stride', 2)!r}, mode={p.get('mode', 'max')!r})", runtime=("SequencePool1d",)),
-    "conv2d": Operation(constructor=lambda p, c, s: f"nn.Conv2d(in_channels={s[1]!r}, out_channels={p.get('out_channels', 32)!r}, kernel_size={p.get('kernel_size', 3)!r}, stride={p.get('stride', 1)!r}, padding={p.get('padding', 0)!r}, bias={p.get('bias', True)!r})"),
-    "pool2d": Operation(constructor=lambda p, c, s: f"nn.{('MaxPool2d' if p.get('mode', 'max') == 'max' else 'AvgPool2d')}(kernel_size={p.get('kernel_size', 2)!r}, stride={p.get('stride', 2)!r})"),
+    "layer_norm": Operation(
+        constructor=lambda p, c, s: f"nn.LayerNorm({s[-1]!r}, eps={p.get('eps', 1e-5)!r}, elementwise_affine={p.get('affine', True)!r}, bias={p.get('bias', True)!r})"
+    ),
+    "dropout": Operation(
+        constructor=lambda p, c, s: f"nn.Dropout(p={p.get('probability', 0.1)!r})"
+    ),
+    "position_embedding": Operation(
+        constructor=lambda p, c, s: f"LearnedPositions(width={s[-1]!r}, max_length={p.get('max_length', 2048)!r})",
+        runtime=("LearnedPositions",),
+    ),
+    "conv1d": Operation(
+        constructor=lambda p, c, s: f"SequenceConv1d(in_channels={s[-1]!r}, out_channels={p.get('out', s[-1])!r}, kernel_size={p.get('kernel_size', 3)!r}, stride={p.get('stride', 1)!r}, padding={p.get('padding', 0)!r}, bias={p.get('bias', True)!r})",
+        runtime=("SequenceConv1d",),
+    ),
+    "pool1d": Operation(
+        constructor=lambda p, c, s: f"SequencePool1d(kernel_size={p.get('kernel_size', 2)!r}, stride={p.get('stride', 2)!r}, mode={p.get('mode', 'max')!r})",
+        runtime=("SequencePool1d",),
+    ),
+    "conv2d": Operation(
+        constructor=lambda p, c, s: f"nn.Conv2d(in_channels={s[1]!r}, out_channels={p.get('out_channels', 32)!r}, kernel_size={p.get('kernel_size', 3)!r}, stride={p.get('stride', 1)!r}, padding={p.get('padding', 0)!r}, bias={p.get('bias', True)!r})"
+    ),
+    "pool2d": Operation(
+        constructor=lambda p, c, s: f"nn.{('MaxPool2d' if p.get('mode', 'max') == 'max' else 'AvgPool2d')}(kernel_size={p.get('kernel_size', 2)!r}, stride={p.get('stride', 2)!r})"
+    ),
     "norm": Operation(
         constructor=lambda p, c, s: f"nn.RMSNorm({s[-1]!r}, eps={p.get('eps', 1e-6)!r})"
     ),
@@ -141,7 +166,8 @@ OPERATIONS = {
     ),
     "gate": Operation(constructor=lambda p, c, s: "Gate()", runtime=("Gate",)),
     "hadamard": Operation(
-        constructor=lambda p, c, s: f"{'HadamardTwoStage' if p.get('variant') == 'two_stage' else 'Hadamard'}({s[-1]!r})", runtime=("Hadamard", "HadamardTwoStage")
+        constructor=lambda p, c, s: f"{'HadamardTwoStage' if p.get('variant') == 'two_stage' else 'Hadamard'}({s[-1]!r})",
+        runtime=("Hadamard", "HadamardTwoStage"),
     ),
     "monarch": Operation(
         constructor=lambda p, c, s: f"Monarch(width={s[-1]!r}, split={p.get('split', False)!r})",
@@ -169,7 +195,9 @@ OPERATIONS = {
     "concat": Operation(
         expression=lambda a, p, c: f"torch.cat(({a[0]}, {a[1]}), dim=-1)"
     ),
-    "gelu": Operation(expression=lambda a, p, c: f"F.gelu({a[0]}, approximate={p.get('approximate', 'none')!r})"),
+    "gelu": Operation(
+        expression=lambda a, p, c: f"F.gelu({a[0]}, approximate={p.get('approximate', 'none')!r})"
+    ),
     "relu": Operation(expression=lambda a, p, c: f"F.relu({a[0]})"),
     "silu": Operation(expression=lambda a, p, c: f"F.silu({a[0]})"),
     "sigmoid": Operation(expression=lambda a, p, c: f"torch.sigmoid({a[0]})"),
@@ -209,6 +237,18 @@ OPERATIONS = {
     "pattern_intersection": Operation(
         expression=lambda a, p, c: f"combine_patterns({a[0]}, {a[1]}, intersection=True)",
         helpers=("combine_patterns",),
+    ),
+    "lane_fork": Operation(
+        expression=lambda a, p, c: f"({', '.join([a[0]] * p.get('lanes', 4))},)"
+    ),
+    "lane_split": Operation(expression=lambda a, p, c: f"torch.unbind({a[0]}, dim=-2)"),
+    "lane_join": Operation(
+        expression=lambda a, p, c: f"torch.stack(({', '.join(a)},), dim=-2)"
+        + (
+            {"mean": ".mean(dim=-2)", "sum": ".sum(dim=-2)"}.get(
+                p.get("mode", "stack"), ""
+            )
+        )
     ),
     "lane_expand": Operation(
         expression=lambda a, p, c: f"{a[0]}.unsqueeze(-2).expand(*{a[0]}.shape[:-1], {p.get('lanes', 4)!r}, {a[0]}.shape[-1])"
@@ -383,6 +423,21 @@ class SourceGenerator:
             n["id"]: pool.take(identifier(n["data"].get("label") or n["data"]["kind"]))
             for n in sequence
         }
+        by_id = {node["id"]: node for node in sequence}
+
+        def edge_value(edge):
+            source = by_id[edge["source"]]
+            name = names[source["id"]]
+            if source["data"]["kind"] in MULTI_OUTPUT_LANES:
+                ports = output_port_names(source, config)
+                return f"{name}[{ports.index(edge.get('sourceHandle') or 'out')}]"
+            return name
+
+        def edge_contract(edge):
+            return source_contract(
+                self.report, prefix + edge["source"], edge.get("sourceHandle")
+            )
+
         init = ["super().__init__()"]
         if self.shared:
             init.append(
@@ -426,8 +481,8 @@ class SourceGenerator:
                 if e["target"] == node["id"]
             }
             args = [
-                names[edges[port]["source"]] if port in edges else "None"
-                for port in port_names(node)
+                edge_value(edges[port]) if port in edges else "None"
+                for port in port_names(node, config)
             ]
             if kind == "input":
                 input_name = input_names[p.get("index", 0)]
@@ -438,8 +493,7 @@ class SourceGenerator:
                 returns.append((p.get("index", 0), args[0]))
                 continue
             if kind == "moe":
-                source = edges["a"]["source"]
-                width = contracts[source]["shape"][-1]
+                width = edge_contract(edges["a"])["shape"][-1]
                 nested = self.moe_class(node, prefix, config, width)
                 constructor = nested + ("(shared_modules)" if self.shared else "()")
             elif kind in ("block", "loop"):
@@ -512,8 +566,8 @@ class SourceGenerator:
                 if operation.expression:
                     forward.append(f"{name} = {operation.expression(args, p, config)}")
                     continue
-                source = edges.get("a", {}).get("source")
-                shape = contracts.get(source, {}).get("shape") if source else None
+                contract = edge_contract(edges["a"]) if "a" in edges else None
+                shape = contract.get("shape") if contract else None
                 constructor = operation.constructor(p, config, shape)
                 if kind == "attention":
                     args = [args[0], f"mask={args[1]}"]

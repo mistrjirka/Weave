@@ -5126,3 +5126,33 @@ textarea:focus-visible {
   min-width: 32px;
   min-height: 32px;
 }
+
+.output-port-name {
+  left: auto;
+  right: 12px;
+  text-align: right;
+}
+
+.explicit-lane-node .node-body {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.explicit-lane-preview {
+  width: 100px;
+  color: var(--accent);
+  font-size: 11px;
+  text-align: center;
+}
+.explicit-lane-preview svg {
+  width: 100%;
+  display: block;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  margin-bottom: 8px;
+}
+.explicit-lane-node .port-name {
+  font-size: 10px;
+  color: var(--theme-text);
+}

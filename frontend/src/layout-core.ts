@@ -2,6 +2,8 @@ import type { ElkNode, ElkExtendedEdge, ElkPort } from "elkjs/lib/elk-api";
 import type { Graph, GraphNode } from "./types";
 import type { XYPosition, Node, Edge } from "@xyflow/react";
 import type { LabelSize } from "./labels";
+import { nodePorts } from "./nodePorts.ts";
+import { outputPorts, portTop, portIndex } from "./lanePorts.ts";
 import { nodeRectangles } from "./routing.ts";
 
 export interface PlannedEdge {
@@ -56,16 +58,26 @@ export function buildLayoutGraph(
     const ports: ElkPort[] = incoming.map((handle) => ({
       id: portId(node.id, handle, "in"),
       x: -10.5,
-      y: 69 + 28 * Math.max(0, handle.charCodeAt(0) - 97),
+      y: portTop(node.data.kind) + 1 + 28 * portIndex(handle, nodePorts(node)),
       width: 0,
       height: 0,
       layoutOptions: { "elk.port.side": "WEST" },
     }));
-    if (graph.edges.some((e) => e.source === node.id))
+    const outgoing = [
+      ...new Set(
+        graph.edges
+          .filter((edge) => edge.source === node.id)
+          .map((edge) => edge.sourceHandle || "out"),
+      ),
+    ];
+    for (const handle of outgoing)
       ports.push({
-        id: portId(node.id, "out", "out"),
+        id: portId(node.id, handle, "out"),
         x: width + 10.5,
-        y: 69,
+        y:
+          portTop(node.data.kind) +
+          1 +
+          28 * portIndex(handle, outputPorts(node.data)),
         width: 0,
         height: 0,
         layoutOptions: { "elk.port.side": "EAST" },
@@ -85,7 +97,7 @@ export function buildLayoutGraph(
       const label = labels.get(edge.id);
       return {
         id: edge.id,
-        sources: [portId(edge.source, "out", "out")],
+        sources: [portId(edge.source, edge.sourceHandle || "out", "out")],
         targets: [portId(edge.target, edge.targetHandle || "a", "in")],
         ...(label
           ? {

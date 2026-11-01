@@ -58,7 +58,7 @@ def bind_input_tokenizers(project, ordered):
                 for edge in graph.get("edges", [])
                 if edge["target"] == node["id"]
             }
-            domain = ports.get("b" if kind == "select" else "a")
+            domain = ports.get("b" if kind == "select" else "lane0" if kind == "lane_join" else "a")
             if kind == "input":
                 index = raw.get("index", 0)
                 inherited = inputs.get(index) if inputs is not None else None
