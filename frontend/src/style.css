@@ -5162,3 +5162,162 @@ textarea:focus-visible {
   font-size: 10px;
   color: var(--theme-text);
 }
+
+.tokenizer-panel {
+  display: grid;
+  gap: 18px;
+  font-size: 14px;
+}
+.tokenizer-panel p {
+  margin: 0;
+  line-height: 1.6;
+}
+.tokenizer-panel .tokenizer-result {
+  margin: 0;
+  padding: 16px;
+  border: 1px solid var(--theme-neutral-border, #dde5d9);
+  border-radius: 10px;
+  background: var(--theme-base, #f8faf5);
+}
+.tokenizer-panel .result-heading {
+  margin-bottom: 12px;
+  font-size: 15px;
+  align-items: flex-start;
+}
+.tokenizer-panel .result-heading b {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-weight: 600;
+}
+.tokenizer-panel .result-heading > span {
+  font-size: 12px;
+  flex-shrink: 0;
+}
+.tokenizer-panel .token-stats {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-bottom: 12px;
+}
+.tokenizer-panel .token-stats span,
+.tokenizer-panel small {
+  font-size: 12px;
+}
+.tokenizer-details summary {
+  cursor: pointer;
+  padding: 10px 0;
+  font-size: 14px;
+}
+.tokenizer-details p {
+  margin-bottom: 12px;
+}
+.tokenizer-panel .special-tokens {
+  margin: 12px 0;
+}
+.tokenizer-panel .special-tokens > span,
+.tokenizer-panel .special-tokens code {
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.tokenizer-replace {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+.tokenizer-replace h3 {
+  margin: 0;
+  font-size: 15px;
+}
+.tokenizer-methods {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.tokenizer-methods button {
+  padding: 10px 12px;
+  border: 1px solid var(--theme-neutral-border, #dde5d9);
+  border-radius: 6px;
+  font-size: 13px;
+  min-height: 44px;
+}
+.tokenizer-methods button[aria-pressed="true"] {
+  background: var(--theme-green-surface, #edf4e4);
+  border-color: var(--theme-green-text, #465f39);
+  color: var(--theme-green-text, #465f39);
+}
+.tokenizer-panel .modal-actions {
+  flex-wrap: wrap;
+  margin: 12px 0;
+}
+.tokenizer-panel .modal-actions button {
+  min-height: 44px;
+  font-size: 14px;
+}
+.tokenizer-panel code {
+  overflow-wrap: anywhere;
+}
+.tokenizer-panel .property-field {
+  margin: 12px 0;
+}
+.tokenizer-status {
+  padding: 12px;
+  border: 1px solid var(--theme-green-border, #dce6d3);
+  background: var(--theme-green-surface, #edf4e4);
+  border-radius: 6px;
+  overflow-wrap: anywhere;
+}
+.tokenizer-hint {
+  font-size: 13px;
+}
+
+.modal.tokenizer-dialog {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 20px;
+}
+.tokenizer-dialog .modal-heading {
+  flex-shrink: 0;
+  margin-bottom: 16px;
+}
+.tokenizer-dialog .eyebrow {
+  display: none;
+}
+.tokenizer-dialog .modal-heading h2 {
+  margin-top: 0;
+}
+.tokenizer-dialog .tokenizer-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  overflow: hidden;
+  min-height: 0;
+}
+.tokenizer-body {
+  display: grid;
+  gap: 16px;
+  overflow-y: auto;
+  min-height: 0;
+  padding: 0 4px 4px 0;
+  overscroll-behavior: contain;
+}
+.tokenizer-panel .token-stats > div {
+  border: 0;
+  background: transparent;
+  padding: 4px 0;
+  gap: 4px;
+}
+.tokenizer-footer {
+  display: flex;
+  flex-shrink: 0;
+  justify-content: flex-end;
+  gap: 10px;
+  border-top: 1px solid var(--theme-neutral-border, #dde5d9);
+  margin-top: 16px;
+  padding-top: 16px;
+}
+.tokenizer-footer button {
+  min-height: 44px;
+  padding: 10px 16px;
+  border: 1px solid var(--theme-neutral-border, #dde5d9);
+  border-radius: 6px;
+  font-size: 14px;
+}

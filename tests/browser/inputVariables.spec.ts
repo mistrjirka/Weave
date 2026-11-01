@@ -427,6 +427,9 @@ test("a tokenizer load cannot attach its result to a different project", async (
   ).toBeVisible();
   await openInputTokenizer(page);
   await page
+    .getByRole("button", { name: "Repository / path", exact: true })
+    .click();
+  await page
     .getByPlaceholder("e.g. gpt2 or /path/to/tokenizer")
     .fill("test-tokenizer");
   await page
@@ -438,9 +441,7 @@ test("a tokenizer load cannot attach its result to a different project", async (
   await page.getByRole("button", { name: "Close dialog" }).click();
   await openExample(page, "Blank project");
   release();
-  await expect(page.getByRole("status")).toContainText(
-    "active project changed",
-  );
+  await expect(page.getByRole("dialog")).toHaveCount(0);
   expect(
     (await document(page)).graph.nodes.some((node) => node.data.tokenizer),
   ).toBe(false);

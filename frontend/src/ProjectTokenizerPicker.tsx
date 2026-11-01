@@ -96,7 +96,10 @@ export function ProjectTokenizerPicker({
             return (
               <option key={key} value={key}>
                 {choice.project_name} ·{" "}
-                {choice.tokenizer.repo || choice.tokenizer.class || "Tokenizer"}{" "}
+                {choice.tokenizer.display_name ||
+                  choice.tokenizer.repo ||
+                  choice.tokenizer.class ||
+                  "Tokenizer"}{" "}
                 · {choice.tokenizer.capacity.toLocaleString()} tokens
               </option>
             );

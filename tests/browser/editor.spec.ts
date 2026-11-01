@@ -75,6 +75,7 @@ test('tokenizer upload detects capacity, updates dimensions and previews token I
   await page.locator('input[type=file]').last().setInputFiles({name:'tokenizer.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(bundle))});
   await expect(page.locator('.tokenizer-result')).toContainText('Embedding capacity',{timeout:45000});
   await expect(page.locator('.token-stats')).toContainText('4');
+  await page.getByText('Details & tokenization preview', {exact:true}).click();
   await page.locator('.tokenizer-result textarea').fill('hello world');
   await page.getByRole('button',{name:'Tokenize sample'}).click();
   await expect(page.locator('.token-pills')).toContainText('hello');

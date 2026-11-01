@@ -37,6 +37,9 @@ test("reuse another project's tokenizer without inspection and retain special to
     page.getByRole("button", { name: "Shapes compatible" }),
   ).toBeVisible();
   await openInputTokenizer(page);
+  await page
+    .getByRole("button", { name: "Other project", exact: true })
+    .click();
   const picker = page.getByRole("combobox", {
     name: "Tokenizer from another project",
   });

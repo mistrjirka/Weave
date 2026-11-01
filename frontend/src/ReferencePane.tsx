@@ -609,7 +609,10 @@ function ReferenceCanvas({
                     {
                       name: "Tokenizer",
                       value:
-                        tokenizer.repo || tokenizer.class || "Local tokenizer",
+                        tokenizer.display_name ||
+                        tokenizer.repo ||
+                        tokenizer.class ||
+                        "Local tokenizer",
                     },
                     {
                       name: "Vocabulary capacity",

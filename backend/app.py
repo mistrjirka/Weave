@@ -13,6 +13,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.responses import Response, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 from .core import validate_project, params, graph_context
 from .attention import expand_attention
@@ -213,11 +214,14 @@ async def upload_tokenizer(files:list[UploadFile]=File(...)):
             if total>64*1024*1024:raise HTTPException(413,'Tokenizer bundle exceeds 64 MB')
             name=Path(f.filename or '').name
             if Path(name).suffix not in ALLOWED_SUFFIXES:raise HTTPException(422,'Upload tokenizer JSON, model, vocabulary, or merges files.')
+            if (target/name).exists():raise HTTPException(422,'Multiple files have the same name. Upload files for one tokenizer only.')
             (target/name).write_bytes(content)
         source=target
-        names=list(target.iterdir())
+        names=sorted(target.iterdir(),key=lambda path:(path.name!='tokenizer.json',path.name))
+        if not names:raise HTTPException(422,'Choose at least one tokenizer file.')
         if len(names)==1 and names[0].suffix in ('.json','.model') and names[0].name not in ('tokenizer_config.json','config.json'):source=names[0]
-        try:return tokenizers.load(source)
+        label=names[0].name if len(names)==1 else f"{names[0].name} + {len(names)-1} {'file' if len(names)==2 else 'files'}"
+        try:return await run_in_threadpool(tokenizers.load, source, display_name=label)
         except Exception as exc:raise HTTPException(422,str(exc))
     finally:
         shutil.rmtree(target, ignore_errors=True)

@@ -74,6 +74,7 @@ export interface ValidationReport {
   tokenizers?: Record<string, TokenizerInfo>;
 }
 export interface TokenizerInfo {
+  display_name?: string;
   mask_id?: number | null;
   id: string;
   repo?: string | null;

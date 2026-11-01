@@ -110,6 +110,7 @@ export const graphSchema: z.ZodType<Graph> = z.lazy(() =>
 );
 export const tokenizerSchema: z.ZodType<TokenizerInfo> = z
   .object({
+    display_name: z.string().optional(),
     id: z.string(),
     repo: z.string().nullable().optional(),
     class: z.string().optional(),

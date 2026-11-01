@@ -14,7 +14,7 @@ import {
   multiOutputLanes,
   portTop,
 } from "./lanePorts";
-import { ProjectTokenizerPicker } from "./ProjectTokenizerPicker";
+import { TokenizerPanel, tokenizerLabel } from "./TokenizerPanel";
 import {
   connectionFeedback,
   type ConnectionAttempt,
@@ -197,8 +197,6 @@ import {
   projectsSchema,
   savedProjectsSchema,
   graphSchema,
-  tokenizerSchema,
-  previewSchema,
   unrollSchema,
   codeSchema,
   recoveryStatusSchema,
@@ -216,7 +214,6 @@ import type {
   CatalogEntry,
   ValidationReport,
   ValidationIssue,
-  TokenPreview,
   TokenizerInfo,
 } from "./types";
 const copy = <T,>(v: T): T => structuredClone(v);
@@ -775,9 +772,7 @@ function ArchitectureNode({ id, data, selected }: NodeProps<DisplayNode>) {
         {kind === "input" && data._tokenizer && (
           <div className="input-tokenizer-summary">
             <Database size={12} />
-            <span>
-              {data._tokenizer.repo || data._tokenizer.class || "Tokenizer"}
-            </span>
+            <span>{tokenizerLabel(data._tokenizer)}</span>
             <small>{format(data._tokenizer.capacity)} IDs</small>
           </div>
         )}
@@ -1349,11 +1344,6 @@ function Workbench({
   const [saving, setSaving] = useState(false);
   const [deletedProject, setDeletedProject] = useState<Project | null>(null);
   const [tokenizerTarget, setTokenizerTarget] = useState<string | null>(null);
-  const [tokSource, setTokSource] = useState(""),
-    [tokRevision, setTokRevision] = useState(""),
-    [tokText, setTokText] = useState("The cat sat on the mat."),
-    [tokPreview, setTokPreview] = useState<TokenPreview | null>(null),
-    [tokError, setTokError] = useState("");
   const viewPath = useRef(path),
     focusedNode = useRef(selection);
   viewPath.current = path;
@@ -1373,8 +1363,7 @@ function Workbench({
   const reactFlow = useReactFlow();
   const canvasRef = useRef<HTMLDivElement>(null);
   const pasteSequence = useRef({ key: "", count: 0 });
-  const fileRef = useRef<HTMLInputElement>(null),
-    tokenFiles = useRef<HTMLInputElement>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
   const ref = useRef<Project>(project);
   ref.current = project;
   const notify = (s: string) => {
@@ -2483,59 +2472,6 @@ function Workbench({
       if (input) input.data.tokenizer = info;
     });
     return true;
-  }
-  async function inspectTokenizer() {
-    setBusy(true);
-    setTokError("");
-    try {
-      const info = tokenizerSchema.parse(
-        await api("/tokenizers/inspect", {
-          source: tokSource,
-          revision: tokRevision || null,
-        }),
-      );
-      if (applyInputTokenizer(info))
-        notify("Tokenizer loaded · linked vocabulary dimensions updated");
-    } catch (e) {
-      setTokError(String(e));
-    } finally {
-      setBusy(false);
-    }
-  }
-  async function uploadTokenizer(files: FileList | null) {
-    if (!files?.length) return;
-    setBusy(true);
-    setTokError("");
-    try {
-      const form = new FormData();
-      Array.from(files).forEach((f) => form.append("files", f));
-      const r = await fetch("/api/tokenizers/upload", {
-        method: "POST",
-        body: form,
-      });
-      const info = tokenizerSchema.parse(await responseData(r));
-      if (applyInputTokenizer(info)) notify("Tokenizer bundle inspected");
-    } catch (e) {
-      setTokError(String(e));
-    } finally {
-      setBusy(false);
-    }
-  }
-  async function previewTokenizer() {
-    if (!inputTokenizer) return;
-    try {
-      setTokPreview(
-        previewSchema.parse(
-          await api("/tokenizers/preview", {
-            id: inputTokenizer.id,
-            text: tokText,
-          }),
-        ),
-      );
-      setTokError("");
-    } catch (e) {
-      setTokError(String(e));
-    }
   }
   function focusError(e: ValidationIssue) {
     if (!e.node) return;
@@ -3879,18 +3815,14 @@ function Workbench({
                             }
                             onClick={() => {
                               setTokenizerTarget(prefix + selected.id);
-                              setTokError("");
-                              setTokPreview(null);
-                              setTokSource(selected.data.tokenizer?.repo ?? "");
-                              setTokRevision("");
                               setModal("tokenizer");
                             }}
                           >
                             <Database size={14} />
                             <span>
-                              {selectedTokenizer?.repo ||
-                                selectedTokenizer?.class ||
-                                "Select tokenizer"}
+                              {selectedTokenizer
+                                ? tokenizerLabel(selectedTokenizer)
+                                : "Select tokenizer"}
                             </span>
                             {selected.data.tokenizer && (
                               <small>
@@ -4699,7 +4631,13 @@ function Workbench({
       {modal && (
         <Dialog
           key={modal}
-          className={modal === "projects" ? "wide" : ""}
+          className={
+            modal === "projects"
+              ? "wide"
+              : modal === "tokenizer"
+                ? "tokenizer-dialog"
+                : ""
+          }
           label={
             modal === "tokenizer"
               ? "Tokenizer configuration"
@@ -4714,6 +4652,7 @@ function Workbench({
                       : "Projects & examples"
           }
           onClose={() => {
+            if (modal === "tokenizer" && saving) return;
             setModal(null);
             setPendingLoad(null);
           }}
@@ -4741,7 +4680,11 @@ function Workbench({
                           : "Project settings"}
               </h2>
             </div>
-            <button onClick={() => setModal(null)} aria-label="Close dialog">
+            <button
+              disabled={modal === "tokenizer" && saving}
+              onClick={() => setModal(null)}
+              aria-label="Close dialog"
+            >
               <X size={20} />
             </button>
           </div>
@@ -4810,131 +4753,21 @@ function Workbench({
               onChange={updateGraphVariables}
             />
           ) : modal === "tokenizer" ? (
-            <>
-              <p>
-                Tokenizer for <strong>{tokenizerInput?.data.label}</strong>. Its
-                vocabulary and special tokens follow this input through
-                connected blocks. Embedding and output-head capacities follow
-                the tokenizer automatically; manual overrides stay independent.
-              </p>
-              <ProjectTokenizerPicker
-                projectId={project.id}
-                disabled={busy}
-                onSelect={(info) => {
-                  if (applyInputTokenizer(info)) {
-                    setTokSource(info.repo ?? "");
-                    setTokRevision("");
-                    setTokError("");
-                    setTokPreview(null);
-                    notify(
-                      "Tokenizer copied · linked vocabulary dimensions updated",
-                    );
-                  }
-                }}
-              />
-              <label className="property-field">
-                <span>Hugging Face repository or server-local path</span>
-                <input
-                  placeholder="e.g. gpt2 or /path/to/tokenizer"
-                  value={tokSource}
-                  onChange={(e) => setTokSource(e.target.value)}
-                />
-              </label>
-              <label className="property-field">
-                <span>
-                  Revision <small>optional commit or tag</small>
-                </span>
-                <input
-                  placeholder="main"
-                  value={tokRevision}
-                  onChange={(e) => setTokRevision(e.target.value)}
-                />
-              </label>
-              <div className="modal-actions">
-                <button
-                  className="primary"
-                  disabled={busy || !tokSource.trim()}
-                  onClick={inspectTokenizer}
-                >
-                  {busy ? "Inspecting…" : "Load & inspect"}
-                  <ArrowRight size={14} />
-                </button>
-                <button onClick={() => tokenFiles.current?.click()}>
-                  <Upload size={14} />
-                  Upload bundle
-                </button>
-              </div>
-              <input
-                ref={tokenFiles}
-                hidden
-                multiple
-                type="file"
-                accept=".json,.model,.txt,.vocab,.merges"
-                onChange={(e) => uploadTokenizer(e.target.files)}
-              />
-              {tokError && <div className="inline-error">{tokError}</div>}
-              {inputTokenizer && (
-                <div className="tokenizer-result">
-                  <div className="result-heading">
-                    <CheckCircle2 size={17} />
-                    <b>{inputTokenizer.repo || inputTokenizer.class}</b>
-                    <span>Loaded</span>
-                  </div>
-                  <div className="token-stats">
-                    <div>
-                      <span>Vocabulary</span>
-                      <b>{inputTokenizer.size.toLocaleString()}</b>
-                    </div>
-                    <div>
-                      <span>Embedding capacity</span>
-                      <b>{inputTokenizer.capacity.toLocaleString()}</b>
-                    </div>
-                    <div>
-                      <span>Base vocabulary</span>
-                      <b>{inputTokenizer.base_size.toLocaleString()}</b>
-                    </div>
-                  </div>
-                  <div className="special-tokens">
-                    {Object.entries(inputTokenizer.special_tokens).map(
-                      ([k, v]) => (
-                        <span key={k}>
-                          {k.replace("_token", "")}{" "}
-                          <code>
-                            {v.token} · {v.id}
-                          </code>
-                        </span>
-                      ),
-                    )}
-                  </div>
-                  <label className="property-field">
-                    <span>Tokenization preview</span>
-                    <textarea
-                      value={tokText}
-                      onChange={(e) => setTokText(e.target.value)}
-                    />
-                  </label>
-                  <button className="small-button" onClick={previewTokenizer}>
-                    Tokenize sample
-                    <ArrowRight size={13} />
-                  </button>
-                  {tokPreview && (
-                    <>
-                      <div className="token-pills">
-                        {tokPreview.tokens.map((t: string, i: number) => (
-                          <span key={i}>
-                            {t}
-                            <small>{tokPreview.ids[i]}</small>
-                          </span>
-                        ))}
-                      </div>
-                      <p className="preview-shape">
-                        Token IDs: [{tokPreview.shape.join(", ")}] · int64
-                      </p>
-                    </>
-                  )}
-                </div>
-              )}
-            </>
+            <TokenizerPanel
+              key={project.id + ":" + tokenizerTarget}
+              projectId={project.id}
+              inputName={tokenizerInput?.data.label ?? "Input"}
+              info={inputTokenizer}
+              onApply={applyInputTokenizer}
+              saving={saving}
+              onClose={() => setModal(null)}
+              onSave={async () => {
+                if (!(await saveProject())) return false;
+                setModal(null);
+                notify("Tokenizer and project saved on server");
+                return true;
+              }}
+            />
           ) : modal === "new-project" ? (
             <NewProjectForm
               templates={templates}

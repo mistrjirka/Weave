@@ -17,7 +17,7 @@ class TokenizerService:
     def __init__(self, root):
         self.root=Path(root); self.root.mkdir(parents=True,exist_ok=True); self.loaded={}
 
-    def load(self, source, revision=None):
+    def load(self, source, revision=None, display_name=None):
         from transformers import AutoTokenizer, PreTrainedTokenizerFast
         source=str(source)
         path=Path(source).expanduser()
@@ -38,6 +38,7 @@ class TokenizerService:
         self.loaded[token_id]=tok
         vocab=tok.get_vocab();ids=list(vocab.values())
         info={'id':token_id,'source':source,'repo':None if path.exists() else source,'revision':revision,'size':len(vocab),'capacity':max(ids)+1 if ids else 0,'base_size':tok.vocab_size,'added_tokens':tok.get_added_vocab(),'special_tokens':{k:{'token':str(v),'id':tok.convert_tokens_to_ids(str(v))} for k,v in tok.special_tokens_map.items() if not isinstance(v,list)},'mask_id':tok.mask_token_id,'pad_id':tok.pad_token_id,'max_length':tok.model_max_length if tok.model_max_length < 10**9 else None,'class':type(tok).__name__}
+        info['display_name']=display_name or (path.name if path.exists() else source)
         (target/'studio_metadata.json').write_text(json.dumps(info))
         return info
 

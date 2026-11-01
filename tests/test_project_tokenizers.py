@@ -66,3 +66,35 @@ def test_saved_project_tokenizers_include_nested_and_legacy_bindings(
     assert [row["input_path"] for row in nested] == ["tokens", "block/nested_tokens"]
     assert nested[0]["tokenizer"] == info
     assert nested[1]["tokenizer"] == other
+
+
+def test_upload_bundle_preserves_special_tokens_and_readable_name(tmp_path, monkeypatch):
+    from tokenizers import Tokenizer
+    from tokenizers.models import WordLevel
+    from backend.tokenizers import TokenizerService
+
+    monkeypatch.setattr(server, "DATA", tmp_path)
+    service = TokenizerService(tmp_path / "tokenizers")
+    monkeypatch.setattr(server, "tokenizers", service)
+    tokenizer = Tokenizer(WordLevel({"[UNK]": 0, "hello": 1, "</s>": 2}, unk_token="[UNK]"))
+    files = [
+        ("files", ("tokenizer.json", tokenizer.to_str(), "application/json")),
+        ("files", ("tokenizer_config.json", json.dumps({"tokenizer_class": "PreTrainedTokenizerFast", "eos_token": "</s>", "unk_token": "[UNK]"}), "application/json")),
+    ]
+    client = TestClient(server.app)
+    response = client.post("/api/tokenizers/upload", files=files)
+    assert response.status_code == 200, response.text
+    info = response.json()
+    assert info["display_name"] == "tokenizer.json + 1 file"
+    assert info["capacity"] == 3
+    assert info["special_tokens"]["eos_token"] == {"token": "</s>", "id": 2}
+    service.loaded.clear()
+    preview = client.post("/api/tokenizers/preview", json={"id": info["id"], "text": "hello"})
+    assert preview.status_code == 200
+    assert preview.json()["ids"] == [1]
+    metadata = json.loads((service.root / info["id"] / "studio_metadata.json").read_text())
+    assert metadata["display_name"] == info["display_name"]
+    duplicate = client.post("/api/tokenizers/upload", files=[files[0], files[0]])
+    assert duplicate.status_code == 422
+    assert "same name" in duplicate.json()["detail"]
+    assert not list((tmp_path / "uploads").iterdir())
