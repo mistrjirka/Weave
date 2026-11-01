@@ -147,15 +147,15 @@ def _builder_lock(path, timeout, report):
     import fcntl
 
     with path.open("a") as lock:
-        started, announced = time.monotonic(), False
+        started, last_report = time.monotonic(), None
         while True:
             try:
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 break
             except BlockingIOError:
-                if not announced:
+                if last_report is None or time.monotonic() - last_report >= 5:
                     report({"phase": "waiting", "documents": 0, "tokens": 0})
-                    announced = True
+                    last_report = time.monotonic()
                 if time.monotonic() - started >= timeout:
                     raise TimeoutError(
                         f"Another process is building this cache: {path}"
@@ -165,6 +165,52 @@ def _builder_lock(path, timeout, report):
             yield
         finally:
             fcntl.flock(lock, fcntl.LOCK_UN)
+
+
+def _publish_progress(path, progress):
+    descriptor, temporary = tempfile.mkstemp(prefix=".progress-", dir=path.parent)
+    try:
+        with os.fdopen(descriptor, "w") as output:
+            json.dump(progress, output)
+        os.replace(temporary, path)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+
+
+def _builder_progress(root, key, dtype):
+    """Read shared progress, including approximate counts from older builders."""
+    path = root / f".{key}.progress.json"
+    try:
+        progress = json.loads(path.read_text())
+        if progress.get("key") == key and time.time() - progress.get("updated", 0) < 30:
+            return {
+                **{
+                    name: progress[name]
+                    for name in ("documents", "tokens", "total_documents")
+                    if name in progress
+                },
+                "builder_phase": progress.get("phase"),
+            }
+    except (OSError, ValueError, TypeError):
+        pass
+    candidates = []
+    for temporary in root.glob(f".{key}.*.tmp"):
+        try:
+            tokens = (temporary / "tokens.bin").stat()
+            offsets = (temporary / "offsets.bin").stat()
+            candidates.append(
+                (
+                    tokens.st_mtime_ns,
+                    max(0, offsets.st_size // 8 - 1),
+                    tokens.st_size // np.dtype(dtype).itemsize,
+                )
+            )
+        except OSError:
+            continue
+    if candidates:
+        _, documents, tokens = max(candidates)
+        return {"documents": documents, "tokens": tokens, "progress_estimated": True}
+    return {}
 
 
 def cache_documents(
@@ -227,12 +273,26 @@ def cache_documents(
     destination = root / key
 
     def report(progress):
+        if progress["phase"] == "waiting":
+            progress = {**progress, **_builder_progress(root, key, dtype)}
+            progress["message"] = (
+                "Another process is preparing this cache. Showing its progress."
+                + (
+                    " Counts are approximate while files are buffered."
+                    if progress.get("progress_estimated")
+                    else ""
+                )
+            )
         progress = {
             **progress,
             "key": key,
             "directory": str(destination),
-            "total_documents": total_documents,
+            "total_documents": progress.get("total_documents") or total_documents,
         }
+        if progress["phase"] in ("building", "importing", "complete", "failed"):
+            _publish_progress(
+                root / f".{key}.progress.json", {**progress, "updated": time.time()}
+            )
         sink = _progress_sink.get()
         if sink:
             sink(progress)

@@ -37,6 +37,7 @@ from runtime import SparseMoE
 from weave_training import Run, atomic_json, atomic_checkpoint_path, file_hash
 from token_cache import cache_progress_reporting
 from tuning_runtime import load_tuning, tune_loader, WeightedBatchSampler
+from preparation import distributed_preparation, preparation_barrier
 
 
 @dataclass
@@ -68,6 +69,7 @@ class TrainingConfig:
     generation_context_length: int | None = None
     sample_prompts: list[str | dict] = field(default_factory=list)
     cpu_threads: int = 2
+    preparation_timeout_seconds: int = 86400
     find_unused_parameters: bool | None = None
     data_fingerprint: Literal["stat", "sha256"] = "stat"
     trace_batches: Literal["metadata", "sha256", "none"] = "metadata"
@@ -82,6 +84,7 @@ class TrainingConfig:
             "eval_batches",
             "generation_tokens",
             "cpu_threads",
+            "preparation_timeout_seconds",
         ):
             if type(getattr(self, name)) is not int or getattr(self, name) < 1:
                 raise ValueError(f"{name} must be a positive integer")
@@ -358,7 +361,10 @@ class Trainer:
                 preparation.emit("preparation", progress)
 
             try:
-                with cache_progress_reporting(report_cache):
+                with (
+                    distributed_preparation(cfg.preparation_timeout_seconds),
+                    cache_progress_reporting(report_cache),
+                ):
                     self.tokenizer = (
                         self.tokenizer_factory()
                         if callable(self.tokenizer_factory)

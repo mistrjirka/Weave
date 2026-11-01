@@ -223,3 +223,64 @@ def test_automatic_progress_sink(tmp_path):
     assert events[0]["phase"] == "building"
     assert events[-1]["phase"] == "reused"
     assert events[-1]["documents"] > 0
+
+
+def test_waiter_forwards_external_builder_progress_and_reuses_cache(tmp_path):
+    from backend.training.token_cache import _publish_progress
+
+    entered, release, waiting = threading.Event(), threading.Event(), threading.Event()
+    observed = []
+
+    def progress(event):
+        if event["phase"] == "building":
+            root = Path(event["directory"]).parent
+            _publish_progress(
+                root / f".{event['key']}.progress.json",
+                {
+                    **event,
+                    "updated": time.time(),
+                    "documents": 123,
+                    "tokens": 456,
+                    "total_documents": 1000,
+                },
+            )
+            entered.set()
+            assert release.wait(10)
+
+    def watch(event):
+        observed.append(event)
+        if event["phase"] == "waiting":
+            waiting.set()
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        builder = executor.submit(setup_cache, tmp_path, on_progress=progress)
+        assert entered.wait(10)
+        follower = executor.submit(setup_cache, tmp_path, on_progress=watch)
+        try:
+            assert waiting.wait(10)
+            event = next(event for event in observed if event["phase"] == "waiting")
+            assert (event["documents"], event["tokens"], event["total_documents"]) == (
+                123,
+                456,
+                1000,
+            )
+        finally:
+            release.set()
+        assert (
+            builder.result(timeout=10).directory
+            == follower.result(timeout=10).directory
+        )
+    assert observed[-1]["phase"] == "reused"
+
+
+def test_waiter_reads_counts_from_older_builder_without_progress_sidecar(tmp_path):
+    from backend.training.token_cache import _builder_progress
+
+    directory = tmp_path / ".test-key.writer.tmp"
+    directory.mkdir()
+    (directory / "tokens.bin").write_bytes(
+        np.array([1, 2, 3, 4, 5], dtype="<u2").tobytes()
+    )
+    (directory / "offsets.bin").write_bytes(np.array([0, 2, 5], dtype="<u8").tobytes())
+    result = _builder_progress(tmp_path, "test-key", "<u2")
+    assert result == {"documents": 2, "tokens": 5, "progress_estimated": True}

@@ -2560,6 +2560,9 @@ export function TrainingWorkspace({ project }: { project: Project }) {
                   const cacheReady =
                     event.payload.phase === "complete" ||
                     event.payload.phase === "reused";
+                  const preparationInterrupted = ["failed", "stopped"].includes(
+                    detail.status.state,
+                  );
                   const trainingHasMetrics = detail.events.some(
                     (entry) =>
                       entry.kind === "metrics" && entry.channel === "training",
@@ -2572,18 +2575,22 @@ export function TrainingWorkspace({ project }: { project: Project }) {
                         aria-label="Data preparation progress"
                       >
                         <strong>
-                          {event.payload.phase === "failed"
-                            ? "Data preparation failed"
-                            : cacheReady
-                              ? "Token cache ready"
-                              : "Preparing data"}
+                          {preparationInterrupted
+                            ? "Data preparation interrupted"
+                            : event.payload.phase === "failed"
+                              ? "Data preparation failed"
+                              : cacheReady
+                                ? "Token cache ready"
+                                : "Preparing data"}
                         </strong>
                         <p role="status">
-                          {event.payload.phase === "waiting"
-                            ? "Waiting for another process to finish this cache. "
-                            : event.payload.phase === "initializing"
-                              ? "Loading tokenizer and creating data loaders. "
-                              : ""}
+                          {preparationInterrupted
+                            ? "This run ended before training started. "
+                            : event.payload.phase === "waiting"
+                              ? "Waiting for another process to finish this cache. "
+                              : event.payload.phase === "initializing"
+                                ? "Loading tokenizer and creating data loaders. "
+                                : ""}
                           {documents.toLocaleString()}
                           {total ? ` / ${total.toLocaleString()}` : ""}{" "}
                           documents ·{" "}
@@ -2592,13 +2599,15 @@ export function TrainingWorkspace({ project }: { project: Project }) {
                             : "0"}{" "}
                           tokens
                         </p>
-                        {!cacheReady && event.payload.phase !== "failed" && (
-                          <progress
-                            aria-label="Cache preparation progress"
-                            value={total ? documents : undefined}
-                            max={total}
-                          />
-                        )}
+                        {!cacheReady &&
+                          !preparationInterrupted &&
+                          event.payload.phase !== "failed" && (
+                            <progress
+                              aria-label="Cache preparation progress"
+                              value={total ? documents : undefined}
+                              max={total}
+                            />
+                          )}
                         {!!event.payload.message && (
                           <p>{String(event.payload.message)}</p>
                         )}

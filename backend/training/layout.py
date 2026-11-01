@@ -25,6 +25,7 @@ MANAGED_MODULES = {
     "token_cache",
     "tuning_math",
     "tuning_runtime",
+    "preparation",
 }
 
 
@@ -165,6 +166,7 @@ def write_helpers(package):
         "token_cache.py",
         "tuning_math.py",
         "tuning_runtime.py",
+        "preparation.py",
     ):
         source = rewrite_imports((HERE / name).read_text(), ".")
         target = package / name

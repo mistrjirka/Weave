@@ -273,3 +273,20 @@ If restoration fails, the UI shows a compatibility error and **Retry resume**. F
 The activity badge in the top navbar opens **Active training**, listing running/preparing jobs across all projects with direct dashboard links. It refreshes every five seconds while the page is visible. It does not limit concurrent launches. Each training dashboard also has a **Run** selector. Bookmarked run URLs retain their selected history; when another run of that stage is active, a prominent notice links to the running training.
 
 To reuse a recipe, open **Stage setup → Python script → Copy script from project…**. Choose another saved project and one of its training stages, review the saved server script and path, then select **Replace editor script**. Nothing is written until you use **Save file**. This copies `train.py` only: its Python configuration comes with it, while the current graph, GUI launch overrides, dataset files and user helper files stay separate. Adapt paths/imports as needed. Copying does not change a frozen running job.
+
+### Waiting for a shared cache in DDP
+
+All ranks can call `cache_documents`; its file lock ensures only one process builds a given cache. Waiting ranks forward the builder's document/token counts to the UI, including when another terminal process is building it. Counts inferred from an older builder's buffered output files are marked approximate.
+
+If your loader does additional preparation only on rank 0, use the CPU preparation barrier instead of a GPU collective:
+
+```python
+from weave_support.trainer import preparation_barrier
+
+# Inside get_dataloaders(), on every rank:
+if rank == 0:
+    prepare_extra_files()
+preparation_barrier()
+```
+
+Every rank must call this helper in the same order. The Trainer also waits on this CPU group after all loader hooks finish, before starting training collectives. `TrainingConfig(preparation_timeout_seconds=86400)` controls the preparation timeout (24 hours by default). Normal training collective timeouts remain unchanged. Calling `torch.distributed.barrier()` directly in a data hook still uses the default training group and can time out during a long preparation job.
