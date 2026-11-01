@@ -2442,7 +2442,7 @@ export function TrainingWorkspace({ project }: { project: Project }) {
                             {numeric(
                               "cpu_threads",
                               "CPU threads",
-                              "PyTorch CPU worker threads per process.",
+                              "PyTorch CPU threads per process. New scripts default to all CPUs available on the machine; set a lower limit to reserve CPU capacity.",
                             )}
                             {numeric(
                               "summary_every",

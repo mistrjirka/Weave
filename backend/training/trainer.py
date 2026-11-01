@@ -34,7 +34,13 @@ from text_training import (
     evaluate as text_evaluate,
 )
 from runtime import SparseMoE
-from weave_training import Run, atomic_json, atomic_checkpoint_path, file_hash
+from weave_training import (
+    Run,
+    atomic_json,
+    atomic_checkpoint_path,
+    file_hash,
+    available_cpu_threads,
+)
 from token_cache import cache_progress_reporting
 from tuning_runtime import load_tuning, tune_loader, WeightedBatchSampler
 from preparation import distributed_preparation, preparation_barrier
@@ -72,7 +78,7 @@ class TrainingConfig:
     generation_tokens: int = 32
     generation_context_length: int | None = None
     sample_prompts: list[str | dict] = field(default_factory=list)
-    cpu_threads: int = 2
+    cpu_threads: int = field(default_factory=available_cpu_threads)
     preparation_timeout_seconds: int = 86400
     find_unused_parameters: bool | None = None
     data_fingerprint: Literal["stat", "sha256"] = "stat"

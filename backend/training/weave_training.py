@@ -23,6 +23,19 @@ import uuid
 PROTOCOL_VERSION = 1
 
 
+def available_cpu_threads():
+    """Use all CPUs available to this process, respecting Linux CPU affinity."""
+    if hasattr(os, "sched_getaffinity"):
+        try:
+            affinity = os.sched_getaffinity(0)
+            if affinity:
+                return len(affinity)
+        except OSError:
+            pass  # Some platforms expose the API without supporting it.
+    count = getattr(os, "process_cpu_count", os.cpu_count)()
+    return max(1, count or 1)
+
+
 def atomic_json(path, value):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)

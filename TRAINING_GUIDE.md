@@ -74,6 +74,15 @@ config = TrainingConfig(
 | `fused_optimizer` | Opt-in CUDA AdamW execution; preserves optimizer groups and restored state. Rejects CPU/custom optimizers rather than silently replacing them. |
 | `profile_steps` | `0` disables profiling; `1`–`100` captures a bounded CPU/CUDA trace after two warm-up updates. Each rank writes `profiles/rank-N.json`. |
 
+`cpu_threads` defaults to all logical CPUs available to the process (respecting
+Linux CPU affinity), including for standalone CPU validation. It is resolved
+on the machine running the script, rather than fixed when the graph is exported.
+Set an explicit value such as `cpu_threads=8` to reserve CPU capacity or tune
+throughput. Each process has its own thread budget; when several CPU workers
+run together, divide the available threads between them to avoid contention.
+Existing scripts with an explicit thread limit retain that limit. Frozen running
+jobs keep their original runtime until resumed with current Weave support.
+
 An unsized stream can end an epoch at StopIteration. The starter's WSD scheduler still needs `len(train_loader)` or an explicit optimizer-update budget. A finite stream must be repeatable for multiple epochs. A random sampler run for a token budget does not guarantee each document is visited once.
 
 New scripts use warmup–stable–decay (WSD): linear warmup over the first 2% of optimizer updates, a constant `learning_rate` plateau, then linear decay to `min_learning_rate` over the final 20%. Edit `WARMUP_FRACTION`, `WSD_DECAY_FRACTION`, or `configure_scheduler` directly in `train.py`. Very short budgets may not have enough updates for every phase. WSD comes from the [MiniCPM training work](https://arxiv.org/abs/2404.06395); this default is a starting recipe, not an optimal schedule for every architecture. Existing scripts are not rewritten when the template changes.

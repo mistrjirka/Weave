@@ -21,7 +21,12 @@ from typing import Literal
 from pydantic import BaseModel, Field, ConfigDict
 from ..compiler import export_zip
 from ..core import validate_project
-from .weave_training import atomic_json, file_hash, instrumentation_warnings
+from .weave_training import (
+    atomic_json,
+    file_hash,
+    instrumentation_warnings,
+    available_cpu_threads,
+)
 from .layout import PACKAGE, normalize_script, write_support
 from .recipe import is_code_first, literal_settings
 
@@ -65,7 +70,7 @@ class TrainingConfig(BaseModel):
     parent_checkpoint: str | None = None
     chat_template: str = ""
     prompts: list[str | dict] = Field(default_factory=list, max_length=100)
-    cpu_threads: int = Field(default=2, ge=1, le=256)
+    cpu_threads: int = Field(default_factory=available_cpu_threads, ge=1)
     inspect_blocks: bool = False
     summary_every: int = Field(default=50, ge=1)
     custom: dict = Field(default_factory=dict)
@@ -627,6 +632,9 @@ class TrainingService:
                     # keeping the model/runtime from an older frozen run.
                     (directory / PACKAGE / "performance.py").write_text(
                         rewrite_imports((HERE / "performance.py").read_text(), ".")
+                    )
+                    (directory / PACKAGE / "weave_training.py").write_text(
+                        (HERE / "weave_training.py").read_text()
                     )
                 (directory / PACKAGE / "trainer.py").write_text(current_trainer)
                 if restart_record and restart_record["script_source"] == "edited":

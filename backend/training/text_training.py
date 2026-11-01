@@ -25,7 +25,13 @@ from torch.nn.parallel import DistributedDataParallel
 import torch.distributed as dist
 
 from model import Model
-from weave_training import Run, atomic_checkpoint_path, atomic_json, file_hash
+from weave_training import (
+    Run,
+    atomic_checkpoint_path,
+    atomic_json,
+    file_hash,
+    available_cpu_threads,
+)
 
 
 def move(value, device):
@@ -480,7 +486,7 @@ def main(loss_fn=None):
         directory = config_path.parent / "runs" / ("run-" + identity[0])
     if rank == 0:
         print(f"Run outputs: {directory}", flush=True)
-    torch.set_num_threads(config.get("cpu_threads", 2))
+    torch.set_num_threads(config.get("cpu_threads", available_cpu_threads()))
     random.seed(config["seed"])
     torch.manual_seed(config["seed"])
     tokenizer = None

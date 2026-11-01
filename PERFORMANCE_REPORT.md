@@ -255,3 +255,41 @@ Correctness checks on the actual run:
 Raw audit scripts and results are in the ignored local directory
 `data/performance-serius/validation-audit/`. The audit did not modify the
 project script, checkpoint, cache, or running training process.
+
+
+## CPU validation thread sweep
+
+A read-only CPU FP32 sweep used the same frozen update-2,000 Serius checkpoint
+and first held-out validation batch (two sequences of 8,192 tokens), including
+the vocabulary projection and chunked cross-entropy. GPU training continued
+concurrently; these are batch timings, not complete evaluator startup timings.
+
+| CPU threads | Seconds per validation batch |
+| ---: | ---: |
+| 2 | 58.46 |
+| 4 | 38.66 |
+| 8 | 17.77 |
+| 12 | 12.36 |
+| 16 | 12.99 |
+| 24 | 10.23 |
+| 48 | 11.72 |
+
+Repeats at two and 24 threads took 58.83 and 10.29 seconds, respectively.
+Every configuration produced loss 5.248840. At 48 threads, the 20-batch pass
+is estimated at 234 seconds, plus data setup, checkpoint loading and generation.
+This is roughly five times faster than two threads. The slightly faster 24-thread
+result shows that using all hardware threads is not always the fastest setting.
+The machine has 24 physical cores and 48 logical CPUs.
+
+As requested, new Weave training/CPU validation configurations default to all
+CPUs available to the process, respecting Linux CPU affinity. Explicit limits
+remain supported. Serius's explicit four-thread limit was removed so it follows
+the automatic default; its stage now selects asynchronous CPU validation every
+100 updates, with the existing 20-batch evaluation budget. The previous script
+and settings were backed up. A checkpointed resume preserves training state
+while replacing the old frozen runtime with the new CPU default.
+
+Raw measurements are in the ignored local directory
+`data/performance-serius/cpu-validation/`. If validation takes longer than the
+100-update interval, it continues in the background and the queue retains the
+latest pending checkpoint; it does not force training to wait for every pass.
