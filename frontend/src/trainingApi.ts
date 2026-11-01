@@ -249,6 +249,17 @@ export const detailSchema = z.object({
 });
 export type RunDetail = z.infer<typeof detailSchema>;
 
+export class TrainingRequestError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly path: string,
+  ) {
+    super(message);
+    this.name = "TrainingRequestError";
+  }
+}
+
 export async function trainingRequest<T>(
   path: string,
   schema: z.ZodType<T>,
@@ -275,18 +286,22 @@ export async function trainingRequest<T>(
   try {
     result = JSON.parse(await response.text());
   } catch {
-    throw new Error(
+    throw new TrainingRequestError(
       `Training server returned a non-JSON response (HTTP ${response.status}) for ${method ?? (body === undefined ? "GET" : "POST")} /api/training${path}.`,
+      response.status,
+      path,
     );
   }
   if (!response.ok) {
     const parsed = z.object({ detail: z.unknown() }).safeParse(result);
-    throw new Error(
+    throw new TrainingRequestError(
       parsed.success
         ? typeof parsed.data.detail === "string"
           ? parsed.data.detail
           : JSON.stringify(parsed.data.detail)
         : `Request failed (${response.status})`,
+      response.status,
+      path,
     );
   }
   return schema.parse(result);

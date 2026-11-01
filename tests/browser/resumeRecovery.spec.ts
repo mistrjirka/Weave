@@ -184,6 +184,7 @@ test("failed resume offers a previous-script retry or saved edits without clutte
     expect(submissions).toEqual([
       {
         script_source: "edited",
+        refresh_support: false,
         validation: {
           mode: "inline",
           device: "cpu",

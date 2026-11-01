@@ -30,6 +30,10 @@ import { RunValidationControls } from "./RunValidationControls";
 import { CopyTrainingScript } from "./CopyTrainingScript";
 import { RunOverview } from "./RunOverview";
 import { ExecutionStatus } from "./ExecutionStatus";
+import {
+  preferredTrainingRun,
+  runningTrainingStates as running,
+} from "./trainingRunSelection";
 import { TrainingCounters } from "./TrainingCounters";
 import { TrainingChart } from "./TrainingChart";
 import { TrainingETA } from "./TrainingETA";
@@ -51,6 +55,7 @@ import {
   runSchema,
   templateSchema,
   trainingRequest,
+  TrainingRequestError,
   trainingURL,
   type RunDetail,
   type TrainingConfig,
@@ -76,7 +81,6 @@ const reportingHooks: Record<string, string> = {
     '# Save weights + optimizer/scheduler/scaler/RNG/data state first.\n# Include snapshot_ids from run.poll_commands() to fulfill UI snapshots.\nrun.checkpoint(checkpoint_path, metadata={"snapshot_requests": snapshot_ids})\n',
 };
 
-const running = new Set(["starting", "running", "preparing", "evaluating"]);
 const previewSchema = z.object({
   records: z.array(
     z.object({
@@ -261,6 +265,7 @@ export function TrainingWorkspace({ project }: { project: Project }) {
       ),
     ])
       .then(([t, p, r, h]) => {
+        if (controller.signal.aborted) return;
         setTemplates(t);
         savedStagesRef.current = Object.fromEntries(
           p.stages.map((item) => [item.id, item]),
@@ -319,7 +324,20 @@ export function TrainingWorkspace({ project }: { project: Project }) {
             : p,
         );
         setLoaded(true);
-        if (!runId && r[0]) setRunId(r[0].id);
+        if (!runId || !r.some((run) => run.id === runId)) {
+          setMonitorError("");
+          const replacement = preferredTrainingRun(r, selected);
+          setRunId(replacement?.id ?? "");
+          if (replacement) setSelected(replacement.stage_id);
+          else setSetupOpen(true);
+          if (runId) {
+            setNotice(
+              replacement
+                ? "The linked run is unavailable. Opened the latest available run."
+                : "The linked run is unavailable. No saved runs were found for this project.",
+            );
+          }
+        }
       })
       .catch((e) => {
         if (!controller.signal.aborted) setError(message(e));
@@ -445,6 +463,8 @@ export function TrainingWorkspace({ project }: { project: Project }) {
   useEffect(() => {
     if (!runId || !capabilities?.authenticated) {
       setDetail(null);
+      setMonitorError("");
+      setLastRefreshed(null);
       return;
     }
     const controller = new AbortController();
@@ -452,12 +472,37 @@ export function TrainingWorkspace({ project }: { project: Project }) {
     setMonitorError("");
     setLastRefreshed(null);
     let pending = false;
+    const runEndpoint = `/runs/${encodeURIComponent(runId)}`;
+    const recoverMissingRun = async () => {
+      const list = await trainingRequest(
+        `/runs?project_id=${encodeURIComponent(project.id)}`,
+        z.array(runSchema),
+        undefined,
+        undefined,
+        controller.signal,
+      );
+      if (controller.signal.aborted) return;
+      const replacement = preferredTrainingRun(
+        list.filter((run) => run.id !== runId),
+        selected,
+      );
+      setRuns(list);
+      setMonitorError("");
+      setRunId(replacement?.id ?? "");
+      if (replacement) setSelected(replacement.stage_id);
+      else setSetupOpen(true);
+      setNotice(
+        replacement
+          ? "The selected run is unavailable. Opened the latest available run."
+          : "The selected run is unavailable. No saved runs were found for this project.",
+      );
+    };
     const refresh = async () => {
       if (pending) return;
       pending = true;
       try {
         const value = await trainingRequest(
-          `/runs/${encodeURIComponent(runId)}`,
+          runEndpoint,
           detailSchema,
           undefined,
           undefined,
@@ -477,7 +522,19 @@ export function TrainingWorkspace({ project }: { project: Project }) {
           setLastRefreshed(Date.now());
         }
       } catch (e) {
-        if (!controller.signal.aborted) setMonitorError(message(e));
+        if (controller.signal.aborted) return;
+        if (
+          e instanceof TrainingRequestError &&
+          e.status === 404 &&
+          e.path === runEndpoint
+        ) {
+          try {
+            await recoverMissingRun();
+          } catch (recoveryError) {
+            if (!controller.signal.aborted)
+              setMonitorError(message(recoveryError));
+          }
+        } else setMonitorError(message(e));
       } finally {
         pending = false;
       }
@@ -493,7 +550,7 @@ export function TrainingWorkspace({ project }: { project: Project }) {
       window.clearInterval(timer);
       stream.close();
     };
-  }, [runId, capabilities?.authenticated, project.id]);
+  }, [runId, capabilities?.authenticated, project.id, selected]);
   useEffect(() => {
     if (!comparisonId) {
       setComparison(null);
