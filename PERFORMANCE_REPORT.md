@@ -203,3 +203,55 @@ transferred across different batches, architectures and parameterizations.
 New Weave starter scripts also default to WSD, with proportional 2% warmup
 and 20% final linear decay. These are editable Python constants. Existing user
 scripts are not automatically converted.
+
+
+## Validation plateau audit of the fresh run
+
+The fresh Serius run's 8,192-token validation loss fell from 8.19 at update
+100 to 5.41 at update 1,000, then stayed around 5.36–5.41 through update
+2,100. This is a real measured plateau. Until update 2,279, the project loader's
+short-sequence curriculum only supplied buckets up to 1,024 tokens (actual
+inputs up to 1,023). Validation already used 8,192-token inputs throughout.
+The first 8k training batch completed at update 2,280. Thus early training
+loss and validation loss measure substantially different context regimes.
+
+A read-only audit loaded the frozen update-2,000 checkpoint on CPU in FP32.
+For the **same first 8,192 held-out tokens**, only the attention context and
+position resets were changed:
+
+| Evaluation layout | Mean next-token loss |
+| --- | ---: |
+| One 8,192-token sequence | 5.133783 |
+| Sixteen 512-token sequences | 3.283151 |
+| Eight 1,024-token sequences | 3.217267 |
+
+This supports a short-to-long context generalization problem during the
+curriculum, rather than a flat metric caused by reporting stale weights.
+The subsequent live result strengthens that explanation: the unchanged 8k
+validation loss dropped from **5.3942 at update 2,200 to 3.9515 at update 2,300**,
+after the first long-context training batch at update 2,280. Neither the running
+script nor evaluation settings were changed during the audit.
+It does not by itself establish final convergence or an optimal curriculum.
+Separate short- and long-context validation curves would make this distinction
+clearer without changing the existing 8k metric midway through training.
+
+Correctness checks on the actual run:
+
+- Independent ordinary cross-entropy and chunked projection loss agreed
+  within 2.4e-7 on a 512-token held-out prefix. Independent token-wise loss
+  also reproduced the complete 8k sequence loss.
+- The first full validation batch recomputed on CPU gave 5.248840; the saved
+  GPU FP16 evaluator reported 5.248831, an absolute difference of 9.3e-6.
+- Changing future tokens left all earlier logits unchanged (maximum absolute
+  difference zero). The input/label arrays have the expected next-token shift.
+- All checkpoint parameters were finite, and embedding/head weights remained tied.
+- All 6,932,204 cached training chunks were checked against document offsets:
+  none included a held-out document or extended beyond its source document.
+- Async evaluators loaded their own immutable checkpoint with strict state
+  loading and emitted the corresponding checkpoint step. The plateau began
+  before validation moved to GPU 0 at update 1,191. Evaluation used inference
+  mode, and loss aggregation weighted batches by supervised token count.
+
+Raw audit scripts and results are in the ignored local directory
+`data/performance-serius/validation-audit/`. The audit did not modify the
+project script, checkpoint, cache, or running training process.
