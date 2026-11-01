@@ -293,3 +293,55 @@ Raw measurements are in the ignored local directory
 `data/performance-serius/cpu-validation/`. If validation takes longer than the
 100-update interval, it continues in the background and the queue retains the
 latest pending checkpoint; it does not force training to wait for every pass.
+
+## Reusing validation workers: measured prototype
+
+At the user's request, Serius was stopped safely at update 4,121. Its saved
+stage selects asynchronous validation on V100 GPU 1 every 100 updates, retaining
+20 batches per pass. The live device change had applied at update 4,000; the
+in-flight CPU job was subsequently cancelled by the cooperative stop.
+
+Existing V100 job timelines show 28–31 seconds between subprocess launch and
+initial data preparation, approximately 0.3 seconds of cached data preparation,
+10–11 seconds of loss evaluation, and under one second of sample generation.
+A read-only import profile of the stage took 31.57 seconds: PyTorch cumulative
+import time was 8.77 seconds and the generated tokenizer helper's cumulative
+import time was 21.82 seconds, including Transformers AutoTokenizer and its
+model/flex-attention/Dynamo import chain. These cumulative times overlap within
+nested imports; they are not independent wall-clock components.
+
+A standalone prototype retained one actual Serius model on an otherwise idle
+V100, reloaded checkpoints strictly, and evaluated the same 40 held-out 8k
+sequences in 20 batches. A fresh AMP context was used for every pass, preventing
+cached FP16 weights from surviving an in-place checkpoint replacement.
+
+| Pass | Checkpoint update | Checkpoint reload | Loss evaluation | Mean loss |
+| --- | ---: | ---: | ---: | ---: |
+| First | 4,121 | 0.69 s | 6.32 s | 3.439360 |
+| Warm, different weights | 4,000 | 0.66 s | 4.17 s | 3.445572 |
+| Warm, original weights again | 4,121 | 0.61 s | 4.19 s | 3.439360 |
+
+The changed loss for update 4,000 and exact repeat for update 4,121 verify that
+the prototype did not accidentally retain the previous checkpoint's weights.
+These timings exclude tokenization setup, generated samples and contention
+with GPU training, so they are not a prediction of a complete production pass.
+
+PyTorch allocated about 200 MB for the initial model, retained about 219 MB of
+tensors after evaluation, peaked at 1.62 GB allocated, and reserved 2.43 GB in
+its CUDA allocator. CUDA context/library memory is additional. A production
+worker can keep the frozen model, tokenizer, repeatable validation loader,
+CUDA state and allocator warm; the dataset can remain memory-mapped instead of
+loading the full token cache into RAM.
+
+Recommended production design: one separate persistent worker per run/device,
+receiving immutable checkpoint paths and settings. Reload every checkpoint
+strictly, open a new AMP context per job, reset validation loader/RNG state to
+preserve the existing evaluation sample set, and attribute all outputs to the
+loaded checkpoint. Device changes or worker failure should replace the worker;
+pausing training must terminate it and release GPU memory. Stateful custom
+scripts need a fresh-process fallback. This prototype does not yet replace the
+production evaluator, which still launches one process per pass.
+
+The prototype and import profile are in the ignored local directory
+`data/performance-serius/validation-startup/`. Model weights, the training script
+and the frozen run were not changed by these measurements.
