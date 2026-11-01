@@ -408,3 +408,11 @@ added. Training resumed from update 4,121 as run
 data cursor, WSD recipe and both DDP GPUs. Validation remains asynchronous on
 V100 GPU 1, every 100 updates, with 20 batches. Raw measurements and isolated
 probes are under `data/performance-serius/validation-reuse/` (ignored).
+
+Live verification of the resumed production run completed evaluations at updates
+4,200 and 4,300 in the same V100 worker (PID 2332514). Their losses were 3.420539
+and 3.406250. The warm update-4,300 job loaded its RAM snapshot in 0.118 seconds
+and evaluated in 10.766 seconds; creating the snapshot paused the training rank
+for 0.189 seconds. The first live snapshot also took 0.189 seconds. No error
+events were emitted. Playwright verified the V100/async/100-update controls on
+mobile and the desktop metric display without browser errors.
