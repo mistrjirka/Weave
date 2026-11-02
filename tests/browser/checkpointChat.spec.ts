@@ -164,14 +164,16 @@ shutil.copytree(source,destination)
     await panel
       .getByRole("textbox", { name: "Message or prompt", exact: true })
       .fill("hello");
-    await panel.getByRole("button", { name: "Send", exact: true }).click();
+    await panel
+      .getByRole("button", { name: /^(Send|Apply & send)$/, exact: true })
+      .click();
     await expect(
       panel.getByRole("log", { name: "Chat conversation" }),
     ).toContainText("world world world");
     await expect(panel).toContainText("new-token limit reached");
     expect(readFileSync(sourcePath, "utf8")).toBe(original);
     await panel
-      .getByRole("button", { name: "New conversation", exact: true })
+      .getByRole("button", { name: "Clear messages", exact: true })
       .click();
     await panel
       .getByRole("combobox", { name: "Prompt format", exact: false })
@@ -182,13 +184,31 @@ shutil.copytree(source,destination)
     await panel
       .getByRole("textbox", { name: "Message or prompt", exact: true })
       .fill("hello world");
-    await panel.getByRole("button", { name: "Send", exact: true }).click();
+    await panel
+      .getByRole("button", { name: /^(Send|Apply & send)$/, exact: true })
+      .click();
     await expect(
       panel.getByRole("log", { name: "Chat conversation" }),
     ).toContainText("world world world");
     await expect(
       panel.getByRole("log", { name: "Chat conversation" }).locator("article"),
     ).toHaveCount(2);
+
+    await panel.getByText("Regression tests", { exact: true }).click();
+    await panel
+      .getByRole("textbox", { name: "Test cases JSONL", exact: true })
+      .fill('{"text":"hello","expected":[]}\n{"text":"world","expected":[]}');
+    await panel
+      .getByRole("button", { name: "Run test cases", exact: true })
+      .click();
+    await expect(
+      panel.locator(".chat-tests").getByRole("status"),
+    ).toContainText("complete · 2/2 tested", { timeout: 30000 });
+    await expect(panel.locator(".chat-tests")).toContainText("0 exact matches");
+    await expect(
+      panel.getByRole("button", { name: "Export test results", exact: true }),
+    ).toBeEnabled();
+    await panel.locator(".chat-tests > summary").click();
 
     // Exercise the tool editor against explicit session responses. Actual
     // worker/module isolation and masking are covered by test_chat_decoders.py.
@@ -208,6 +228,11 @@ shutil.copytree(source,destination)
     let configuredSession = await (
       await context.request.get(chatURL + "/session")
     ).json();
+    configuredSession = {
+      ...configuredSession,
+      messages: [],
+      conversation_settings: null,
+    };
     const applied: unknown[] = [];
     await page.route("**" + chatURL, (route) =>
       route.fulfill({
@@ -237,19 +262,31 @@ shutil.copytree(source,destination)
       };
       await route.fulfill({ json: configuredSession });
     });
+    await page.route("**" + chatURL + "/preview", async (route) => {
+      configuredSession = {
+        ...configuredSession,
+        context_preview: {
+          state: "ready",
+          request_id: "browser-preview",
+          prompt_tokens: 32,
+          history_tokens: 0,
+          reserved_reply_tokens: 3,
+          remaining_tokens: 2013,
+          context_length: 2048,
+        },
+      };
+      await route.fulfill({ json: configuredSession });
+    });
     try {
       await panel
         .getByRole("button", { name: "Refresh checkpoints", exact: true })
-        .click();
-      await panel
-        .getByText("Tools & constrained decoding", { exact: true })
         .click();
       const toolsEditor = panel.getByRole("textbox", {
         name: "Tool catalog JSON",
         exact: false,
       });
       const apply = panel.getByRole("button", {
-        name: "Apply tool settings",
+        name: "Apply settings",
         exact: true,
       });
       await toolsEditor.fill("not JSON");
@@ -266,10 +303,10 @@ shutil.copytree(source,destination)
         .getByRole("combobox", { name: "Decoder", exact: false })
         .selectOption("xml-tool-grammar");
       await expect(panel).toContainText("7 tools in draft");
-      await expect(panel).toContainText("Unapplied changes");
+      await expect(panel).toContainText("Settings have unapplied changes");
       await expect(apply).toBeEnabled();
       await apply.click();
-      await expect(panel).toContainText("Tool settings applied.");
+      await expect(panel).toContainText("Settings saved for this project.");
       await expect(panel.getByLabel("Active tool settings")).toContainText(
         "XML tool grammar",
       );
@@ -282,6 +319,9 @@ shutil.copytree(source,destination)
       expect(applied[0]).toEqual({
         tools: toolCatalog,
         decoder: "xml-tool-grammar",
+        system: "",
+        chat_template: "",
+        mode: "completion",
       });
 
       // Reload restores the applied draft from session state, including tools.
@@ -289,9 +329,7 @@ shutil.copytree(source,destination)
       await page
         .getByRole("button", { name: "Chat & text completion", exact: true })
         .click();
-      await panel
-        .getByText("Tools & constrained decoding", { exact: true })
-        .click();
+
       await expect(toolsEditor).toHaveValue(
         JSON.stringify(toolCatalog, null, 2),
       );
@@ -337,6 +375,7 @@ shutil.copytree(source,destination)
       await page.unroute("**" + chatURL);
       await page.unroute("**" + chatURL + "/session");
       await page.unroute("**" + chatURL + "/settings");
+      await page.unroute("**" + chatURL + "/preview");
     }
     await page.screenshot({
       path: "data/checkpoint-chat-desktop.png",
@@ -380,7 +419,9 @@ shutil.copytree(source,destination)
     await panel
       .getByRole("textbox", { name: "Message or prompt", exact: true })
       .fill("hello");
-    await panel.getByRole("button", { name: "Send", exact: true }).click();
+    await panel
+      .getByRole("button", { name: /^(Send|Apply & send)$/, exact: true })
+      .click();
     await expect(panel).toContainText("end-of-sequence token");
   } finally {
     await context.request.delete(`/api/training/runs/${fixture.run}/chat`);

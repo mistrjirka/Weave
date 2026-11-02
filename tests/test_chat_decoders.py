@@ -267,7 +267,7 @@ def test_module_loading_uses_only_registered_targets_and_valid_local_paths(tmp_p
     "tools",
     [
         [{"type": "function"}],
-        [{"type": "function", "function": {"name": "bad/name"}}],
+        [{"type": "function", "function": {"name": "bad\nname"}}],
         [{"type": "function", "function": {"name": "x", "parameters": []}}],
         [seven_tools()[0], seven_tools()[0]],
         [{"type": "function", "function": {"name": "x", "description": "x" * 262144}}],
@@ -362,6 +362,7 @@ def build(tools, tokenizer, request):
         assert not state["error"], state
         assert state["messages"][-1]["content"] == "hello hello hello"
         assert state["decoder"] == "xml-tool-grammar" and len(state["tools"]) == 7
+        chat.clear(directory.name)
         chat.configure(directory.name, ChatOptions(tools=None, decoder=None))
         chat.send(
             directory.name, ChatMessage(text="hello", temperature=0, max_new_tokens=2)
@@ -383,7 +384,12 @@ def build(tools, tokenizer, request):
     with TestClient(app) as client:
         catalog = client.get(endpoint).json()
         assert catalog["decoders"] == [
-            {"id": "xml-tool-grammar", "label": "XML tool grammar", "available": True}
+            {
+                "id": "xml-tool-grammar",
+                "label": "XML tool grammar",
+                "available": True,
+                "schema_profile": "generic",
+            }
         ]
         assert (
             client.post(

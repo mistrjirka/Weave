@@ -968,7 +968,259 @@
   display: grid;
   gap: 0.75rem;
 }
+.chat-model-toolbar {
+  display: grid;
+  grid-template-columns: minmax(240px, 1fr) minmax(190px, 260px) auto;
+  align-items: end;
+  gap: 0.75rem;
+}
+.chat-model-toolbar .checkpoint-chat-actions {
+  gap: 0.4rem;
+}
+.chat-model-notes {
+  color: var(--theme-muted);
+  font-size: 13px;
+}
+.chat-status-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 1rem;
+}
+.chat-status-strip .checkpoint-chat-tool-status {
+  margin: 0;
+}
+.chat-workbench {
+  display: grid;
+  grid-template-columns: minmax(260px, 310px) minmax(0, 1fr);
+  align-items: start;
+  gap: 1.25rem;
+}
+.chat-settings-panel {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--theme-base);
+}
+.chat-settings-panel > summary {
+  padding: 0.7rem 0.85rem;
+  font-weight: 600;
+}
+.chat-settings-body {
+  display: grid;
+  gap: 1rem;
+  padding: 0.85rem;
+  max-height: calc(100dvh - 19rem);
+  overflow: auto;
+  scrollbar-gutter: stable;
+}
+.chat-settings-body details > summary {
+  margin-bottom: 0.65rem;
+}
+.chat-settings-body .checkpoint-chat-tool-settings {
+  display: block;
+}
+.chat-settings-body .checkpoint-chat-tool-settings > label {
+  margin-top: 0.7rem;
+}
+.chat-settings-body .checkpoint-chat-actions {
+  gap: 0.5rem;
+}
+.chat-generation-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.7rem;
+}
+.chat-field-wide {
+  grid-column: 1 / -1;
+}
+.chat-conversation {
+  min-width: 0;
+  display: grid;
+  gap: 0.75rem;
+}
+.chat-conversation-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+.chat-conversation-heading h3 {
+  margin: 0;
+}
+.chat-conversation-heading .checkpoint-chat-actions {
+  gap: 0.45rem;
+}
+.training-workspace .chat-execution-note {
+  margin: 0;
+  font-size: 13px;
+  color: var(--theme-muted);
+}
+.chat-conversation .checkpoint-chat-transcript {
+  min-height: 19rem;
+  max-height: max(22rem, calc(100dvh - 30rem));
+  gap: 0.75rem;
+  padding: 0.85rem;
+  background: var(--theme-raised);
+}
+.chat-conversation .checkpoint-chat-message {
+  margin: 0;
+  padding: 0.8rem;
+}
+.chat-conversation .checkpoint-chat-message.is-user {
+  margin-left: 5%;
+}
+.chat-conversation .checkpoint-chat-message.is-assistant {
+  margin-right: 5%;
+}
+.checkpoint-chat-message.is-tool {
+  background: var(--theme-blue-surface);
+  border-style: dashed;
+}
+.chat-turn-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+.chat-turn-heading span {
+  font-size: 12px;
+}
+.chat-context-included {
+  color: var(--theme-muted);
+}
+.chat-context-excluded {
+  color: var(--theme-coral-text, #8c3d2a);
+  font-weight: 600;
+}
+.chat-call-inspection {
+  border-top: 1px solid var(--line);
+  padding-top: 0.6rem;
+  margin-top: 0.75rem;
+}
+.chat-table-scroll {
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+}
+.chat-table-scroll table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.chat-table-scroll th,
+.chat-table-scroll td {
+  padding: 0.5rem;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
+}
+.chat-table-scroll pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-width: 25rem;
+  margin: 0;
+}
+.chat-table-scroll button {
+  margin: 0.15rem;
+}
+.chat-output-footer {
+  margin-top: 0.65rem;
+  display: grid;
+  gap: 0.4rem;
+}
+.chat-output-footer > div {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.chat-generation-meta {
+  display: block;
+  margin-top: 0.65rem;
+  color: var(--theme-muted);
+}
+.chat-warning,
+.chat-blocking-banner {
+  padding: 0.65rem 0.75rem;
+  border: 1px solid var(--theme-amber-border, #b9a06a);
+  border-radius: 6px;
+  background: var(--theme-amber-surface, #fff6df);
+  color: var(--theme-amber-text, #644c21);
+}
+.training-workspace .chat-blocking-banner p {
+  margin: 0.35rem 0 0.6rem;
+}
+.chat-budget {
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  color: var(--theme-muted);
+}
+.chat-composer {
+  border-top: 1px solid var(--line);
+  padding-top: 0.7rem;
+}
+.chat-finish-reason {
+  color: var(--theme-muted);
+}
+.chat-empty {
+  align-self: center;
+  color: var(--theme-muted);
+  padding: 1.25rem;
+}
+.training-workspace .chat-empty p {
+  max-width: 50ch;
+  margin-bottom: 0;
+}
+.chat-tests {
+  border-top: 1px solid var(--line);
+  padding-top: 0.75rem;
+}
+.chat-tests > label,
+.chat-tests > .checkpoint-chat-actions {
+  margin-block: 0.75rem;
+}
+.chat-mock-result {
+  border: 1px dashed var(--line);
+  border-radius: 6px;
+  padding: 0.85rem;
+  display: grid;
+  gap: 0.6rem;
+}
+@media (max-width: 1250px) {
+  .chat-model-toolbar {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+  .chat-model-toolbar > .checkpoint-chat-actions {
+    grid-column: 1 / -1;
+  }
+}
+@media (max-width: 999px) {
+  .chat-workbench {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .chat-settings-body {
+    max-height: none;
+  }
+  .chat-conversation .checkpoint-chat-transcript {
+    min-height: 16rem;
+    max-height: 55dvh;
+  }
+}
 @media (max-width: 600px) {
+  .chat-model-toolbar {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .chat-conversation-heading .checkpoint-chat-actions {
+    width: 100%;
+  }
+  .chat-conversation-heading .checkpoint-chat-actions button {
+    flex: 1;
+  }
+  .chat-conversation .checkpoint-chat-message {
+    margin: 0;
+  }
   .checkpoint-chat-message.is-user,
   .checkpoint-chat-message.is-assistant {
     margin: 0;

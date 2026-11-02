@@ -44,13 +44,19 @@ from .reporting import ReportStore, ReportBatch
 from .layout import PACKAGE, normalize_script
 from .recipe import is_code_first, starter_script
 from .chat import (
-    ChatService,
+    ChatSessions,
+    ChatPreview,
+    ChatTestSuite,
+    ChatToolResult,
     ChatLoad,
     ChatMessage,
     ChatOptions,
     checkpoint_catalog,
     decoder_catalog,
+    option_diagnostics,
+    configured_decoders,
 )
+from .chat_protocol import presets
 from .gpu_tuning import GPUTuning, TuningRequest, matching_profile
 from .run_controls import ValidationSettings, validation_state
 from ..paths import projects_directory
@@ -87,7 +93,7 @@ def directory_size(directory):
 
 def router(data):
     service = TrainingService(Path(data) / "training", Path(data) / "tokenizers")
-    chat = ChatService()
+    chats = ChatSessions()
     tuning = GPUTuning(Path(data) / "training")
 
     @asynccontextmanager
@@ -96,7 +102,7 @@ def router(data):
             yield
         finally:
             tuning.close()
-            chat.close()
+            chats.close()
 
     api = APIRouter(prefix="/api/training", lifespan=lifespan)
     reports = ReportStore()
@@ -123,6 +129,14 @@ def router(data):
             raise HTTPException(404, str(exc))
         except ValueError as exc:
             raise HTTPException(422, str(exc))
+
+    def chat_session(run_id):
+        directory = run_directory(run_id)
+        project_id = json.loads((directory / "run.json").read_text())["project_id"]
+        preferences_path = (
+            service.workspaces.project_directory(project_id) / "chat-settings.json"
+        )
+        return chats.for_run(run_id, preferences_path)
 
     def safe_id(value):
         try:
@@ -572,17 +586,69 @@ actual training code when your model/data/optimizer are ready.
     @api.get("/runs/{run_id}/chat", dependencies=[Depends(authenticated)])
     def get_chat(run_id: str):
         directory = run_directory(run_id)
+        chat = chat_session(run_id)
+        environment_path = directory / "environment.json"
+        environment = (
+            json.loads(environment_path.read_text())
+            if environment_path.is_file()
+            else {}
+        )
         return {
             **checkpoint_catalog(directory),
             "session": chat.status(run_id),
             "decoders": decoder_catalog(),
+            "presets": presets(),
+            "preferences": chat.preferences(),
+            "supports_cuda": bool(environment.get("cuda_available")),
         }
+
+    @api.post(
+        "/runs/{run_id}/chat/validate-options", dependencies=[Depends(authenticated)]
+    )
+    def validate_chat_options(run_id: str, body: ChatOptions):
+        run_directory(run_id)
+        try:
+            return option_diagnostics(body.model_dump(), configured_decoders())
+        except ValueError as exc:
+            raise HTTPException(422, str(exc))
+
+    @api.post("/runs/{run_id}/chat/preview", dependencies=[Depends(authenticated)])
+    def preview_chat(run_id: str, body: ChatPreview):
+        try:
+            return chat_session(run_id).preview(run_id, body)
+        except ValueError as exc:
+            raise HTTPException(409, str(exc))
+
+    @api.post("/runs/{run_id}/chat/tests", dependencies=[Depends(authenticated)])
+    def test_chat(run_id: str, body: ChatTestSuite):
+        try:
+            return chat_session(run_id).run_tests(run_id, body)
+        except ValueError as exc:
+            raise HTTPException(409, str(exc))
+
+    @api.post("/runs/{run_id}/chat/tool-result", dependencies=[Depends(authenticated)])
+    def tool_result_chat(run_id: str, body: ChatToolResult):
+        try:
+            return chat_session(run_id).inject_result(run_id, body)
+        except ValueError as exc:
+            raise HTTPException(409, str(exc))
+
+    @api.get("/runs/{run_id}/chat/export", dependencies=[Depends(authenticated)])
+    def export_chat(run_id: str):
+        session = chat_session(run_id).status(run_id)
+        return Response(
+            content=json.dumps({"version": 1, "run_id": run_id, **session}) + "\n",
+            media_type="application/x-ndjson",
+            headers={
+                "Content-Disposition": 'attachment; filename="chat-transcript.jsonl"'
+            },
+        )
 
     @api.put("/runs/{run_id}/chat/settings", dependencies=[Depends(authenticated)])
     def configure_chat(run_id: str, body: ChatOptions):
         run_directory(run_id)
         try:
-            return chat.configure(run_id, body)
+            return chat_session(run_id).configure(run_id, body)
         except ValueError as exc:
             raise HTTPException(409, str(exc))
 
@@ -593,39 +659,40 @@ actual training code when your model/data/optimizer are ready.
                 403, "Enable local execution to load checkpoint chat on this server."
             )
         try:
-            return chat.load(run_directory(run_id), body)
+            return chat_session(run_id).load(run_directory(run_id), body)
         except ValueError as exc:
             raise HTTPException(422, str(exc))
 
     @api.get("/runs/{run_id}/chat/session", dependencies=[Depends(authenticated)])
     def get_chat_session(run_id: str):
         run_directory(run_id)
-        return chat.status(run_id)
+        return chat_session(run_id).status(run_id)
 
     @api.post("/runs/{run_id}/chat/messages", dependencies=[Depends(authenticated)])
     def send_chat(run_id: str, body: ChatMessage):
         run_directory(run_id)
         try:
-            return chat.send(run_id, body)
+            return chat_session(run_id).send(run_id, body)
         except ValueError as exc:
             raise HTTPException(409, str(exc))
 
     @api.post("/runs/{run_id}/chat/stop", dependencies=[Depends(authenticated)])
     def stop_chat(run_id: str):
         run_directory(run_id)
-        return chat.stop(run_id)
+        return chat_session(run_id).stop(run_id)
 
     @api.post("/runs/{run_id}/chat/clear", dependencies=[Depends(authenticated)])
     def clear_chat(run_id: str):
         run_directory(run_id)
         try:
-            return chat.clear(run_id)
+            return chat_session(run_id).clear(run_id)
         except ValueError as exc:
             raise HTTPException(409, str(exc))
 
     @api.delete("/runs/{run_id}/chat", dependencies=[Depends(authenticated)])
     def unload_chat(run_id: str):
-        chat.close(run_id)
+        chat = chat_session(run_id)
+        chat.close(run_id, preserve=True)
         return chat.status(run_id)
 
     @api.get("/runs/{run_id}/events", dependencies=[Depends(authenticated)])

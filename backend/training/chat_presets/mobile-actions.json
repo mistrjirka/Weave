@@ -1,0 +1,138 @@
+[
+  {
+    "type": "function",
+    "function": {
+      "name": "turn_off_flashlight",
+      "description": "Turns the flashlight off.",
+      "parameters": {
+        "type": "object",
+        "properties": {}
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "open_wifi_settings",
+      "description": "Opens the Wi-Fi settings.",
+      "parameters": {
+        "type": "object",
+        "properties": {}
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "create_calendar_event",
+      "description": "Creates a new calendar event.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "description": "The title of the event."
+          },
+          "datetime": {
+            "type": "string",
+            "description": "The date and time of the event in the format YYYY-MM-DDTHH:MM:SS."
+          }
+        },
+        "required": [
+          "title",
+          "datetime"
+        ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "show_map",
+      "description": "Shows a location on the map.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "The location to search for. May be the name of a place, a business, or an address."
+          }
+        },
+        "required": [
+          "query"
+        ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "send_email",
+      "description": "Sends an email.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "subject": {
+            "type": "string",
+            "description": "The subject of the email."
+          },
+          "body": {
+            "type": "string",
+            "description": "The body of the email."
+          },
+          "to": {
+            "type": "string",
+            "description": "The email address of the recipient."
+          }
+        },
+        "required": [
+          "to",
+          "subject"
+        ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "turn_on_flashlight",
+      "description": "Turns the flashlight on.",
+      "parameters": {
+        "type": "object",
+        "properties": {}
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "create_contact",
+      "description": "Creates a contact in the phone's contact list.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "first_name": {
+            "type": "string",
+            "description": "The first name of the contact."
+          },
+          "last_name": {
+            "type": "string",
+            "description": "The last name of the contact."
+          },
+          "phone_number": {
+            "type": "string",
+            "description": "The phone number of the contact."
+          },
+          "email": {
+            "type": "string",
+            "description": "The email address of the contact."
+          }
+        },
+        "required": [
+          "first_name",
+          "last_name"
+        ]
+      }
+    }
+  }
+]

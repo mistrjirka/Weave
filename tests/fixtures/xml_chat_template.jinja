@@ -1,0 +1,74 @@
+{%- macro xa(v) -%}{{- v|string|replace('&','&amp;')|replace('<','&lt;')|replace('>','&gt;')|replace('"','&quot;') -}}{%- endmacro -%}
+{%- macro xt(v) -%}{{- v|string|replace('&','&amp;')|replace('<','&lt;')|replace('>','&gt;') -}}{%- endmacro -%}
+{%- macro scalar(v) -%}
+{%- if v is string -%}{{- xt(v) -}}
+{%- elif v is boolean -%}{{- 'true' if v else 'false' -}}
+{%- elif v is none -%}null
+{%- elif v is number -%}{{- v|string -}}
+{%- else -%}{{- xt(v|tojson) -}}
+{%- endif -%}
+{%- endmacro -%}
+{%- macro render_call(c) -%}
+{%- set fn = c['function'] if c['function'] is defined else c -%}
+{%- set raw = fn['arguments'] if fn['arguments'] is defined else {} -%}
+{%- set args = raw if raw is mapping else {} -%}
+{%- if args -%}
+{{ '<call name="' }}{{ xa(fn['name']) }}{{ '">\n' -}}
+{%- for k, v in args.items() -%}
+{{ '<arg name="' }}{{ xa(k) }}{{ '">' }}{{ scalar(v) }}{{ '</arg>\n' -}}
+{%- endfor -%}
+{{ '</call>\n' -}}
+{%- else -%}
+{{ '<call name="' }}{{ xa(fn['name']) }}{{ '"/>\n' -}}
+{%- endif -%}
+{%- endmacro -%}
+{%- macro render_tool(t) -%}
+{%- set fn = t['function'] if t['function'] is defined else t -%}
+{%- set params = fn['parameters'] if fn['parameters'] is defined else {} -%}
+{%- set props = params['properties'] if params['properties'] is defined else {} -%}
+{%- set req = params['required'] if params['required'] is defined else [] -%}
+{{ '<tool name="' }}{{ xa(fn['name']) }}{{ '"' -}}
+{%- if fn['description'] is defined and fn['description'] %} description="{{ xa(fn['description']) }}"{% endif -%}
+{%- if not props -%}{{ '/>\n' -}}
+{%- else -%}
+{{ '>\n' -}}
+{%- for pn, p in props.items() -%}
+{{ '<arg name="' }}{{ xa(pn) }}{{ '" type="' }}{{ xa(p['type'] if p['type'] is defined else 'string') }}{{ '" required="' }}{{ 'true' if pn in req else 'false' }}{{ '"' -}}
+{%- if p['description'] is defined and p['description'] %} description="{{ xa(p['description']) }}"{% endif -%}
+{{ '/>\n' -}}
+{%- endfor -%}
+{{ '</tool>\n' -}}
+{%- endif -%}
+{%- endmacro -%}
+{%- set has_system = messages and messages[0]['role'] == 'system' -%}
+{%- set start = 1 if has_system else 0 -%}
+{{ '<|system|>\n' -}}
+{%- if has_system -%}{{ messages[0]['content'] }}{%- else -%}You are a helpful assistant with access to tools.{%- endif -%}
+{%- if tools is defined and tools -%}
+{{ '\n<tools>\n' -}}
+{%- for t in tools -%}{{ render_tool(t) }}{%- endfor -%}
+{{ '</tools>\n' -}}
+When you need a tool, emit a <call> block with the tool name and one <arg> per argument. If no tool is needed, reply with <no_call/> or plain text.
+{%- endif -%}
+{{ '\n<|end|>\n' -}}
+{%- for message in messages[start:] -%}
+{%- if message['role'] == 'assistant' -%}
+{{ '<|assistant|>\n' -}}
+{%- generation -%}
+{%- if message['content'] is defined and message['content'] -%}{{ message['content'] }}{{ '\n' }}{%- endif -%}
+{%- if message['tool_calls'] is defined and message['tool_calls'] -%}
+{%- for c in message['tool_calls'] -%}{{ render_call(c) }}{%- endfor -%}
+{%- endif -%}
+{{ '<|end|>\n' -}}
+{%- endgeneration -%}
+{%- elif message['role'] == 'tool' -%}
+{{ '<result>\n' -}}
+{%- if message['content'] is string -%}{{ message['content'] }}{%- else -%}{{ message['content']|tojson }}{%- endif -%}
+{{ '\n</result>\n' -}}
+{%- elif message['role'] == 'system' -%}
+{{ '<|system|>\n' }}{{ message['content'] }}{{ '\n<|end|>\n' -}}
+{%- else -%}
+{{ '<|user|>\n' }}{{ message['content'] }}{{ '\n<|end|>\n' -}}
+{%- endif -%}
+{%- endfor -%}
+{%- if add_generation_prompt -%}{{ '<|assistant|>\n' }}{%- endif -%}

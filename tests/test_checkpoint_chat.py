@@ -292,10 +292,12 @@ def test_chat_requires_local_published_weights_and_verifies_checkpoint_hash(tmp_
             ),
         )
         assert not wait_ready(chat, directory.name)["error"]
+        chat.clear(directory.name)
         chat.send(
             directory.name,
             ChatMessage(
                 text="hello",
+                mode="chat",
                 chat_template="{{ messages[-1]['content'] }}",
                 temperature=0,
                 max_new_tokens=1,

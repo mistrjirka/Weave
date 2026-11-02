@@ -9,6 +9,9 @@ import sys
 import time
 import traceback
 
+sys.path.insert(0, str(Path(__file__).parent))
+from chat_protocol import clean_assistant, inspect_calls
+
 
 def emit(kind, **payload):
     sys.__stdout__.write(json.dumps({"kind": kind, **payload}, allow_nan=False) + "\n")
@@ -42,17 +45,32 @@ def decoder_builder(identifier, registrations, builders):
     return builders[identifier]
 
 
-def generate(model, tokenizer, request, device, cancel, build=None):
-    import torch
-
+def prompt_ids(tokenizer, request, history=None):
     if request["mode"] == "chat":
+        template = (
+            request.get("chat_template")
+            or getattr(tokenizer, "chat_template", "")
+            or ""
+        )
+        prior = []
+        for original in (request.get("history", []) if history is None else history):
+            message = dict(original)
+            if message["role"] == "assistant":
+                message["content"] = clean_assistant(message.get("content", ""))
+                if message.get("tool_calls") and "tool_calls" in template:
+                    message["content"] = inspect_calls(
+                        message["content"], request.get("tools")
+                    )["text"]
+                elif "tool_calls" not in template:
+                    message.pop("tool_calls", None)
+            prior.append(message)
         messages = (
             (
                 [{"role": "system", "content": request["system"]}]
                 if request["system"]
                 else []
             )
-            + request["history"]
+            + prior
             + [{"role": "user", "content": request["text"]}]
         )
         ids = tokenizer.apply_chat_template(
@@ -70,6 +88,28 @@ def generate(model, tokenizer, request, device, cancel, build=None):
                 "The prompt produced no token IDs. Enter a nonempty prompt."
             )
         ids = [tokenizer.bos_token_id]
+    return ids
+
+
+def preview(tokenizer, request):
+    ids = prompt_ids(tokenizer, request)
+    without_history = prompt_ids(tokenizer, request, [])
+    return {
+        "prompt_tokens": len(ids),
+        "history_tokens": max(0, len(ids) - len(without_history)),
+        "reserved_reply_tokens": request["max_new_tokens"],
+        "remaining_tokens": request["context_length"]
+        - len(ids)
+        - request["max_new_tokens"],
+        "context_length": request["context_length"],
+    }
+
+
+def generate(model, tokenizer, request, device, cancel, build=None, publish=None):
+    import torch
+
+    publish = publish or emit
+    ids = prompt_ids(tokenizer, request)
     if len(ids) + request["max_new_tokens"] > request["context_length"]:
         raise ValueError(
             f"Prompt uses {len(ids)} tokens; with {request['max_new_tokens']} new tokens it exceeds the {request['context_length']}-token budget. Increase the context budget within the model's limits, shorten the prompt or start a new conversation."
@@ -83,9 +123,19 @@ def generate(model, tokenizer, request, device, cancel, build=None):
         if not callable(processor):
             raise ValueError("Decoder build() must return a callable logits mask.")
     result = []
+    preserve_xml = processor is not None or request.get("tools") is not None
     generator = torch.Generator(device=device).manual_seed(request["seed"])
     last_emitted = 0
     reason = "length"
+    endings = (
+        {
+            tokenizer.convert_tokens_to_ids(marker)
+            for marker in ("<|end|>", "<|im_end|>", "<|eot_id|>")
+            if marker in getattr(tokenizer, "all_special_tokens", [])
+        }
+        if request["mode"] == "chat"
+        else set()
+    )
     with torch.inference_mode():
         for _ in range(request["max_new_tokens"]):
             if cancel.is_file():
@@ -147,19 +197,98 @@ def generate(model, tokenizer, request, device, cancel, build=None):
             if identifier == tokenizer.eos_token_id:
                 reason = "eos"
                 break
+            if identifier in endings:
+                reason = "turn_end"
+                break
             if time.monotonic() - last_emitted >= 0.1:
-                emit(
+                publish(
                     "text",
-                    text=tokenizer.decode(
-                        result, skip_special_tokens=processor is None
-                    ),
+                    text=tokenizer.decode(result, skip_special_tokens=not preserve_xml),
                 )
                 last_emitted = time.monotonic()
-    displayed = result[:-1] if processor is not None and reason == "eos" else result
-    emit(
-        "text", text=tokenizer.decode(displayed, skip_special_tokens=processor is None)
+    displayed = (
+        result[:-1] if preserve_xml and reason in ("eos", "turn_end") else result
     )
-    emit("done", finish_reason=reason)
+    publish(
+        "text", text=tokenizer.decode(displayed, skip_special_tokens=not preserve_xml)
+    )
+    publish("done", finish_reason=reason)
+
+
+def run_suite(model, tokenizer, request, device, cancel, registrations, builders):
+    for index, case in enumerate(request["cases"]):
+        if cancel.is_file():
+            break
+        output, reason = "", None
+
+        def capture(kind, **payload):
+            nonlocal output, reason
+            if kind == "text":
+                output = payload["text"]
+            if kind == "done":
+                reason = payload["finish_reason"]
+
+        try:
+            factory = (
+                decoder_builder(case["decoder"], registrations, builders)
+                if case.get("decoder")
+                else None
+            )
+            generate(model, tokenizer, case, device, cancel, factory, capture)
+            parsed = inspect_calls(output, case.get("tools"))
+            actual = [
+                {"name": call["name"], "arguments": call["arguments"]}
+                for call in parsed["calls"]
+            ]
+            expected = case.get("expected")
+            if isinstance(expected, str):
+                expected_parsed = inspect_calls(expected, case.get("tools"))
+                if expected_parsed["errors"]:
+                    raise ValueError(
+                        "Invalid expected XML: " + "; ".join(expected_parsed["errors"])
+                    )
+                expected = [
+                    {"name": call["name"], "arguments": call["arguments"]}
+                    for call in expected_parsed["calls"]
+                ]
+            valid = parsed["kind"] in ("calls", "no_call") and not parsed["errors"]
+            tool_match = (
+                [call["name"] for call in actual] == [call["name"] for call in expected]
+                if expected is not None
+                else None
+            )
+            exact = valid and actual == expected if expected is not None else None
+            emit(
+                "suite_case",
+                result={
+                    "index": index,
+                    "name": case.get("name") or f"Case {index + 1}",
+                    "output": output,
+                    "parsed": parsed,
+                    "finish_reason": reason,
+                    "parse_valid": valid,
+                    "tool_match": tool_match,
+                    "arguments_match": (
+                        exact if tool_match else False if expected is not None else None
+                    ),
+                    "exact_match": exact,
+                    "settings": case,
+                },
+            )
+        except Exception as exc:
+            emit(
+                "suite_case",
+                result={
+                    "index": index,
+                    "name": case.get("name") or f"Case {index + 1}",
+                    "output": output,
+                    "error": str(exc),
+                    "parse_valid": False,
+                    "exact_match": False,
+                    "settings": case,
+                },
+            )
+    emit("suite_done", stopped=cancel.is_file())
 
 
 def main():
@@ -210,6 +339,24 @@ def main():
     for line in sys.stdin:
         try:
             request = json.loads(line)
+            if request.get("operation") == "preview":
+                emit(
+                    "preview",
+                    request_id=request["request_id"],
+                    **preview(tokenizer, request),
+                )
+                continue
+            if request.get("operation") == "suite":
+                run_suite(
+                    model,
+                    tokenizer,
+                    request,
+                    device,
+                    Path(spec["cancel_path"]),
+                    registrations,
+                    builders,
+                )
+                continue
             build = (
                 decoder_builder(request["decoder"], registrations, builders)
                 if request.get("decoder")
@@ -220,7 +367,12 @@ def main():
             )
         except Exception as exc:
             traceback.print_exc(file=sys.stderr)
-            emit("error", message=str(exc))
+            emit(
+                "error",
+                message=str(exc),
+                operation=request.get("operation"),
+                request_id=request.get("request_id"),
+            )
 
 
 if __name__ == "__main__":
