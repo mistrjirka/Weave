@@ -8,26 +8,108 @@ import json
 import math
 import os
 from pathlib import Path
+import re
 import subprocess
 import threading
 import time
 from typing import Literal
 import uuid
 
-from pydantic import BaseModel, Field, FiniteFloat
+from pydantic import BaseModel, Field, FiniteFloat, JsonValue, field_validator
 
 from .layout import PACKAGE
 from .service import events, inside
 from .weave_training import atomic_json
 from ..core import validate_project
+from ..installation import read_settings
 
 
-class ChatLoad(BaseModel):
+class ChatOptions(BaseModel):
+    tools: list[dict[str, JsonValue]] | None = Field(default=None, max_length=128)
+    decoder: str | None = Field(default=None, pattern=r"^[a-z][a-z0-9_-]{0,63}$")
+
+    @field_validator("tools")
+    @classmethod
+    def validate_tools(cls, tools):
+        if tools is None:
+            return tools
+        if len(json.dumps(tools, allow_nan=False).encode()) > 262144:
+            raise ValueError("Tool catalog must be at most 256 KiB of JSON.")
+        names = set()
+        for tool in tools:
+            function = tool.get("function")
+            if tool.get("type") != "function" or not isinstance(function, dict):
+                raise ValueError(
+                    "Each tool needs type 'function' and a function object."
+                )
+            name = function.get("name")
+            if not isinstance(name, str) or not re.fullmatch(
+                r"[A-Za-z0-9_-]{1,64}", name
+            ):
+                raise ValueError(
+                    "Tool names need 1–64 letters, digits, underscores or hyphens."
+                )
+            if name in names:
+                raise ValueError(f"Duplicate tool name: {name}")
+            names.add(name)
+            if "parameters" in function and not isinstance(
+                function["parameters"], dict
+            ):
+                raise ValueError(
+                    f"Tool {name}: parameters must be a JSON Schema object."
+                )
+        return tools
+
+
+class DecoderRegistration(BaseModel):
+    label: str = Field(min_length=1, max_length=100)
+    target: str = Field(pattern=r"^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*:[A-Za-z_]\w*$")
+    python_path: str | None = None
+
+    @field_validator("python_path")
+    @classmethod
+    def local_directory(cls, value):
+        if value is not None:
+            path = Path(value).expanduser()
+            if not path.is_absolute() or not path.is_dir():
+                raise ValueError(
+                    "Decoder python_path must be an existing absolute local directory."
+                )
+            return str(path.resolve())
+        return value
+
+
+def configured_decoders():
+    """Only the server owner can register code; chat requests select an ID."""
+    configured = read_settings().get("chat_decoders", {})
+    if not isinstance(configured, dict):
+        raise ValueError("chat_decoders in .weave-config.json must be an object.")
+    result = {}
+    for identifier, value in configured.items():
+        if not re.fullmatch(r"[a-z][a-z0-9_-]{0,63}", identifier):
+            raise ValueError(f"Invalid configured decoder ID: {identifier}")
+        result[identifier] = DecoderRegistration.model_validate(value).model_dump()
+    return result
+
+
+def decoder_catalog():
+    choices = [
+        {"id": identifier, "label": info["label"], "available": True}
+        for identifier, info in configured_decoders().items()
+    ]
+    if not any(item["id"] == "xml-tool-grammar" for item in choices):
+        choices.append(
+            {"id": "xml-tool-grammar", "label": "XML tool grammar", "available": False}
+        )
+    return choices
+
+
+class ChatLoad(ChatOptions):
     checkpoint: str | None = None
     device: str = Field(default="cpu", pattern=r"^(cpu|cuda:[0-9]+)$")
 
 
-class ChatMessage(BaseModel):
+class ChatMessage(ChatOptions):
     text: str = Field(min_length=1, max_length=32000)
     mode: Literal["chat", "completion"] = "chat"
     system: str = Field(default="", max_length=16000)
@@ -151,6 +233,9 @@ class ChatService:
             "finish_reason": None,
             "loading_stage": None,
             "loading_started": None,
+            "tools": None,
+            "decoder": None,
+            "decoder_label": None,
         }
 
     def status(self, run_id):
@@ -195,6 +280,11 @@ class ChatService:
             self.state = self.empty()
 
     def load(self, directory, request):
+        decoders = configured_decoders()
+        if request.decoder is not None and request.decoder not in decoders:
+            raise ValueError(
+                "Choose a decoder registered in the server's .weave-config.json."
+            )
         catalog = checkpoint_catalog(directory)
         if catalog["problem"]:
             raise ValueError(catalog["problem"])
@@ -214,6 +304,7 @@ class ChatService:
         with self.lock:
             self.close()
             self.run_id = directory.name
+            self.decoders = decoders
             self.state = {
                 **self.empty(),
                 "state": "loading",
@@ -221,6 +312,11 @@ class ChatService:
                 "device": request.device,
                 "loading_stage": "Starting inference worker",
                 "loading_started": time.time(),
+                "tools": request.tools,
+                "decoder": request.decoder,
+                "decoder_label": (
+                    decoders[request.decoder]["label"] if request.decoder else None
+                ),
             }
             self.generation_options = None
             self.session = directory / "chat" / uuid.uuid4().hex
@@ -232,6 +328,8 @@ class ChatService:
                 "device": request.device,
                 "cancel_path": str(self.session / "cancel"),
                 "chat_template": config.get("chat_template", ""),
+                "decoders": decoders,
+                "decoder": request.decoder,
             }
             atomic_json(self.session / "worker.json", spec)
             environment = {
@@ -393,6 +491,36 @@ class ChatService:
                     self.loading_timer = None
             process.stdout.close()
 
+    def _options(self, request):
+        options = {
+            name: (
+                getattr(request, name)
+                if name in request.model_fields_set
+                else self.state[name]
+            )
+            for name in ("tools", "decoder")
+        }
+        decoder = options["decoder"]
+        if decoder is not None and decoder not in self.decoders:
+            raise ValueError(
+                "Decoder is not registered for this session. Configure it on the server and reload the checkpoint."
+            )
+        return {
+            **options,
+            "decoder_label": self.decoders[decoder]["label"] if decoder else None,
+        }
+
+    def configure(self, run_id, request):
+        with self.lock:
+            if run_id != self.run_id or self.state["state"] != "ready":
+                raise ValueError(
+                    "Load a checkpoint and finish the response before applying tool settings."
+                )
+            self.state.update(self._options(request))
+            atomic_json(self.session / "transcript.json", self.state)
+            self._idle_timer()
+            return self.status(run_id)
+
     def send(self, run_id, request):
         with self.lock:
             if (
@@ -412,8 +540,17 @@ class ChatService:
                 raise ValueError(
                     "The saved tokenizer has no chat template. Use text completion, or train with a tokenizer containing the matching chat template."
                 )
-            self.state.update(state="generating", error=None, finish_reason=None)
-            self.generation_options = request.model_dump(exclude={"text"})
+            options = self._options(request)
+            self.state.update(
+                state="generating", error=None, finish_reason=None, **options
+            )
+            payload = {
+                **request.model_dump(),
+                **{key: options[key] for key in ("tools", "decoder")},
+            }
+            self.generation_options = {
+                key: value for key, value in payload.items() if key != "text"
+            }
             (self.session / "cancel").unlink(missing_ok=True)
             # A failed/empty generation must not leave an unmatched user turn in
             # the next template invocation. Preserve the displayed attempt, but
@@ -431,7 +568,7 @@ class ChatService:
             )
             try:
                 self.process.stdin.write(
-                    json.dumps({**request.model_dump(), "history": prior}) + "\n"
+                    json.dumps({**payload, "history": prior}) + "\n"
                 )
                 self.process.stdin.flush()
             except (OSError, ValueError) as exc:

@@ -913,6 +913,28 @@
 .checkpoint-chat-actions small {
   color: var(--theme-muted, #64746b);
 }
+.checkpoint-chat-tool-status {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-inline-start: 0.75rem;
+}
+.checkpoint-chat-tool-status > span {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0.2rem 0.5rem;
+  color: var(--theme-text, #263b30);
+}
+.checkpoint-chat-tool-settings .training-form-grid {
+  margin-block: 0.75rem;
+}
+.checkpoint-chat-tools-editor {
+  grid-column: 1 / -1;
+}
+.checkpoint-chat-tools-editor textarea {
+  font-family: monospace;
+  font-size: 14px;
+}
 .checkpoint-chat-transcript {
   display: grid;
   align-content: start;

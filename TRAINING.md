@@ -12,6 +12,8 @@ Dashboard loading does not wait for Python/PyTorch inspection. Environment check
 
 Generated examples follow the newest evaluated checkpoint by default, ordered by optimizer-update number even if evaluations arrive out of order. You can select an older checkpoint or all checkpoints. Automatic built-in examples use greedy decoding and label that choice; custom sample hooks can use their own decoder and metadata. An asynchronous evaluator can lag behind the training step, which the UI labels explicitly.
 
+Checkpoint chat accepts tool catalogs and optional local token decoders through **Tools & constrained decoding**. See [decoder installation, controls and API](CHECKPOINT_CHAT_DECODERS.md). This does not change model architecture or frozen training files.
+
 ## Enable local execution
 
 The default `bash scripts/install.sh` installs CPU PyTorch in a separate environment and saves training settings. For an existing GPU environment, run:

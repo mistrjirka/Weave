@@ -189,6 +189,155 @@ shutil.copytree(source,destination)
     await expect(
       panel.getByRole("log", { name: "Chat conversation" }).locator("article"),
     ).toHaveCount(2);
+
+    // Exercise the tool editor against explicit session responses. Actual
+    // worker/module isolation and masking are covered by test_chat_decoders.py.
+    const toolCatalog = Array.from({ length: 7 }, (_, index) => ({
+      type: "function",
+      function: {
+        name: `tool_${index}`,
+        parameters: {
+          type: "object",
+          properties: { value: { type: "string" } },
+          required: ["value"],
+          additionalProperties: false,
+        },
+      },
+    }));
+    const realCatalog = await (await context.request.get(chatURL)).json();
+    let configuredSession = await (
+      await context.request.get(chatURL + "/session")
+    ).json();
+    const applied: unknown[] = [];
+    await page.route("**" + chatURL, (route) =>
+      route.fulfill({
+        json: {
+          ...realCatalog,
+          session: configuredSession,
+          decoders: [
+            {
+              id: "xml-tool-grammar",
+              label: "XML tool grammar",
+              available: true,
+            },
+          ],
+        },
+      }),
+    );
+    await page.route("**" + chatURL + "/session", (route) =>
+      route.fulfill({ json: configuredSession }),
+    );
+    await page.route("**" + chatURL + "/settings", async (route) => {
+      const body = route.request().postDataJSON();
+      applied.push(body);
+      configuredSession = {
+        ...configuredSession,
+        ...body,
+        decoder_label: body.decoder ? "XML tool grammar" : null,
+      };
+      await route.fulfill({ json: configuredSession });
+    });
+    try {
+      await panel
+        .getByRole("button", { name: "Refresh checkpoints", exact: true })
+        .click();
+      await panel
+        .getByText("Tools & constrained decoding", { exact: true })
+        .click();
+      const toolsEditor = panel.getByRole("textbox", {
+        name: "Tool catalog JSON",
+        exact: false,
+      });
+      const apply = panel.getByRole("button", {
+        name: "Apply tool settings",
+        exact: true,
+      });
+      await toolsEditor.fill("not JSON");
+      await expect(panel.getByRole("alert")).toContainText("Invalid JSON");
+      await expect(apply).toBeDisabled();
+      await panel
+        .getByLabel("Upload tool catalog", { exact: false })
+        .setInputFiles({
+          name: "seven-tools.json",
+          mimeType: "application/json",
+          buffer: Buffer.from(JSON.stringify(toolCatalog)),
+        });
+      await panel
+        .getByRole("combobox", { name: "Decoder", exact: false })
+        .selectOption("xml-tool-grammar");
+      await expect(panel).toContainText("7 tools in draft");
+      await expect(panel).toContainText("Unapplied changes");
+      await expect(apply).toBeEnabled();
+      await apply.click();
+      await expect(panel).toContainText("Tool settings applied.");
+      await expect(panel.getByLabel("Active tool settings")).toContainText(
+        "XML tool grammar",
+      );
+      await expect(panel.getByLabel("Active tool settings")).toContainText(
+        "7 tools loaded",
+      );
+      await expect(
+        panel.getByRole("button", { name: "Checkpoint loaded", exact: true }),
+      ).toBeDisabled();
+      expect(applied[0]).toEqual({
+        tools: toolCatalog,
+        decoder: "xml-tool-grammar",
+      });
+
+      // Reload restores the applied draft from session state, including tools.
+      await page.reload();
+      await page
+        .getByRole("button", { name: "Chat & text completion", exact: true })
+        .click();
+      await panel
+        .getByText("Tools & constrained decoding", { exact: true })
+        .click();
+      await expect(toolsEditor).toHaveValue(
+        JSON.stringify(toolCatalog, null, 2),
+      );
+      await expect(
+        panel.getByRole("combobox", { name: "Decoder", exact: false }),
+      ).toHaveValue("xml-tool-grammar");
+      await expect(apply).toBeDisabled();
+      await page.setViewportSize({ width: 390, height: 844 });
+      await panel.scrollIntoViewIfNeeded();
+      expect(
+        await panel.evaluate(
+          (element) => element.scrollWidth <= element.clientWidth + 1,
+        ),
+      ).toBeTruthy();
+      const toolAudit = await new AxeBuilder({ page })
+        .include(".checkpoint-chat")
+        .withTags(["wcag2a", "wcag2aa", "wcag21aa"])
+        .analyze();
+      expect(
+        toolAudit.violations.map((v) => ({
+          id: v.id,
+          nodes: v.nodes.map((n) => n.failureSummary),
+        })),
+      ).toEqual([]);
+      await page.screenshot({
+        path: "data/checkpoint-chat-tools-phone.png",
+        fullPage: true,
+      });
+      await page.setViewportSize({ width: 1600, height: 1000 });
+      await page.screenshot({
+        path: "data/checkpoint-chat-tools-desktop.png",
+        fullPage: true,
+      });
+      await toolsEditor.fill("");
+      await panel
+        .getByRole("combobox", { name: "Decoder", exact: false })
+        .selectOption("");
+      await apply.click();
+      await expect(panel.getByLabel("Active tool settings")).toContainText(
+        "0 tools loaded",
+      );
+    } finally {
+      await page.unroute("**" + chatURL);
+      await page.unroute("**" + chatURL + "/session");
+      await page.unroute("**" + chatURL + "/settings");
+    }
     await page.screenshot({
       path: "data/checkpoint-chat-desktop.png",
       fullPage: true,

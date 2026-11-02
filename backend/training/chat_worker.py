@@ -15,7 +15,34 @@ def emit(kind, **payload):
     sys.__stdout__.flush()
 
 
-def generate(model, tokenizer, request, device, cancel):
+def decoder_builder(identifier, registrations, builders):
+    """Import only a target registered by the server owner, inside this worker."""
+    if identifier not in registrations:
+        raise ValueError("The selected decoder is not registered for this session.")
+    if identifier not in builders:
+        registration = registrations[identifier]
+        module, separator, attribute = registration["target"].partition(":")
+        if (
+            not separator
+            or not all(part.isidentifier() for part in module.split("."))
+            or not attribute.isidentifier()
+        ):
+            raise ValueError("Decoder target must be a local module:factory.")
+        if registration.get("python_path"):
+            directory = Path(registration["python_path"])
+            if not directory.is_absolute() or not directory.is_dir():
+                raise ValueError(
+                    "Decoder python_path must be an existing absolute local directory."
+                )
+            sys.path.insert(0, str(directory))
+        factory = getattr(importlib.import_module(module), attribute)
+        if not callable(factory):
+            raise ValueError("The registered decoder factory must be callable.")
+        builders[identifier] = factory
+    return builders[identifier]
+
+
+def generate(model, tokenizer, request, device, cancel, build=None):
     import torch
 
     if request["mode"] == "chat":
@@ -33,6 +60,7 @@ def generate(model, tokenizer, request, device, cancel):
             tokenize=True,
             add_generation_prompt=True,
             chat_template=request.get("chat_template") or None,
+            **({"tools": request["tools"]} if request.get("tools") is not None else {}),
         )
     else:
         ids = tokenizer.encode(request["text"], add_special_tokens=False)
@@ -47,6 +75,13 @@ def generate(model, tokenizer, request, device, cancel):
             f"Prompt uses {len(ids)} tokens; with {request['max_new_tokens']} new tokens it exceeds the {request['context_length']}-token budget. Increase the context budget within the model's limits, shorten the prompt or start a new conversation."
         )
     generated = torch.tensor([ids], device=device, dtype=torch.long)
+    processor = None
+    if request.get("decoder") is not None:
+        if build is None:
+            raise ValueError("The selected decoder is unavailable.")
+        processor = build(request.get("tools"), tokenizer, request)
+        if not callable(processor):
+            raise ValueError("Decoder build() must return a callable logits mask.")
     result = []
     generator = torch.Generator(device=device).manual_seed(request["seed"])
     last_emitted = 0
@@ -75,6 +110,25 @@ def generate(model, tokenizer, request, device, cancel):
                 scores[seen] = torch.where(
                     values < 0, values * penalty, values / penalty
                 )
+            if processor is not None:
+                masked = processor(generated[0, len(ids) :], scores, request)
+                if (
+                    not isinstance(masked, torch.Tensor)
+                    or masked.shape != scores.shape
+                    or masked.device != scores.device
+                    or not masked.is_floating_point()
+                ):
+                    raise ValueError(
+                        "Decoder must return float logits with the same shape and device."
+                    )
+                if (
+                    not (torch.isfinite(masked) | torch.isneginf(masked)).all()
+                    or not torch.isfinite(masked).any()
+                ):
+                    raise ValueError(
+                        "Decoder returned invalid scores or blocked every token; generation stopped."
+                    )
+                scores = masked
             if request["temperature"] == 0:
                 token = scores.argmax().reshape(1)
             else:
@@ -94,9 +148,17 @@ def generate(model, tokenizer, request, device, cancel):
                 reason = "eos"
                 break
             if time.monotonic() - last_emitted >= 0.1:
-                emit("text", text=tokenizer.decode(result, skip_special_tokens=True))
+                emit(
+                    "text",
+                    text=tokenizer.decode(
+                        result, skip_special_tokens=processor is None
+                    ),
+                )
                 last_emitted = time.monotonic()
-    emit("text", text=tokenizer.decode(result, skip_special_tokens=True))
+    displayed = result[:-1] if processor is not None and reason == "eos" else result
+    emit(
+        "text", text=tokenizer.decode(displayed, skip_special_tokens=processor is None)
+    )
     emit("done", finish_reason=reason)
 
 
@@ -139,11 +201,22 @@ def main():
     tokenizer = importlib.import_module(prefix + "load_tokenizer").load_tokenizer()
     if spec.get("chat_template"):
         tokenizer.chat_template = spec["chat_template"]
+    builders = {}
+    registrations = spec.get("decoders", {})
+    if spec.get("decoder"):
+        emit("loading", stage="Loading the selected decoder")
+        decoder_builder(spec["decoder"], registrations, builders)
     emit("ready", has_chat_template=bool(tokenizer.chat_template))
     for line in sys.stdin:
         try:
+            request = json.loads(line)
+            build = (
+                decoder_builder(request["decoder"], registrations, builders)
+                if request.get("decoder")
+                else None
+            )
             generate(
-                model, tokenizer, json.loads(line), device, Path(spec["cancel_path"])
+                model, tokenizer, request, device, Path(spec["cancel_path"]), build
             )
         except Exception as exc:
             traceback.print_exc(file=sys.stderr)

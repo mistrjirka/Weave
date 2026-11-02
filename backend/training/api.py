@@ -43,7 +43,14 @@ from .environment import inspect_python
 from .reporting import ReportStore, ReportBatch
 from .layout import PACKAGE, normalize_script
 from .recipe import is_code_first, starter_script
-from .chat import ChatService, ChatLoad, ChatMessage, checkpoint_catalog
+from .chat import (
+    ChatService,
+    ChatLoad,
+    ChatMessage,
+    ChatOptions,
+    checkpoint_catalog,
+    decoder_catalog,
+)
 from .gpu_tuning import GPUTuning, TuningRequest, matching_profile
 from .run_controls import ValidationSettings, validation_state
 from ..paths import projects_directory
@@ -565,7 +572,19 @@ actual training code when your model/data/optimizer are ready.
     @api.get("/runs/{run_id}/chat", dependencies=[Depends(authenticated)])
     def get_chat(run_id: str):
         directory = run_directory(run_id)
-        return {**checkpoint_catalog(directory), "session": chat.status(run_id)}
+        return {
+            **checkpoint_catalog(directory),
+            "session": chat.status(run_id),
+            "decoders": decoder_catalog(),
+        }
+
+    @api.put("/runs/{run_id}/chat/settings", dependencies=[Depends(authenticated)])
+    def configure_chat(run_id: str, body: ChatOptions):
+        run_directory(run_id)
+        try:
+            return chat.configure(run_id, body)
+        except ValueError as exc:
+            raise HTTPException(409, str(exc))
 
     @api.post("/runs/{run_id}/chat/load", dependencies=[Depends(authenticated)])
     def load_chat(run_id: str, body: ChatLoad):

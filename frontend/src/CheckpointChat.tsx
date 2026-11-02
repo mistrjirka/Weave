@@ -1,6 +1,27 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { z } from "zod";
 import { trainingRequest, type TrainingGPU } from "./trainingApi";
+
+const toolsSchema = z
+  .array(
+    z
+      .object({
+        type: z.literal("function"),
+        function: z
+          .object({
+            name: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/),
+            parameters: z.record(z.string(), z.json()).optional(),
+          })
+          .passthrough(),
+      })
+      .passthrough(),
+  )
+  .max(128)
+  .refine(
+    (tools) =>
+      new Set(tools.map((tool) => tool.function.name)).size === tools.length,
+    "Tool names must be unique.",
+  );
 
 const sessionSchema = z.object({
   state: z.enum(["unloaded", "loading", "ready", "generating", "error"]),
@@ -14,6 +35,9 @@ const sessionSchema = z.object({
   finish_reason: z.string().nullable(),
   loading_stage: z.string().nullable().default(null),
   loading_started: z.number().nullable().default(null),
+  tools: toolsSchema.nullable().default(null),
+  decoder: z.string().nullable().default(null),
+  decoder_label: z.string().nullable().default(null),
 });
 const catalogSchema = z.object({
   checkpoints: z.array(
@@ -28,6 +52,15 @@ const catalogSchema = z.object({
   recommendation: z.string(),
   problem: z.string().nullable(),
   session: sessionSchema,
+  decoders: z
+    .array(
+      z.object({
+        id: z.string(),
+        label: z.string(),
+        available: z.boolean(),
+      }),
+    )
+    .default([]),
 });
 
 export function CheckpointChat({
@@ -51,6 +84,10 @@ export function CheckpointChat({
   const [prompt, setPrompt] = useState("");
   const [system, setSystem] = useState("");
   const [chatTemplate, setChatTemplate] = useState("");
+  const [toolsText, setToolsText] = useState("");
+  const [decoder, setDecoder] = useState("");
+  const [toolsNotice, setToolsNotice] = useState("");
+  const [toolsFileError, setToolsFileError] = useState("");
   const [maxTokens, setMaxTokens] = useState(128);
   const [contextLength, setContextLength] = useState(2048);
   const [temperature, setTemperature] = useState(0.7);
@@ -93,8 +130,15 @@ export function CheckpointChat({
             result.recommended_checkpoint ||
             "",
         );
-        if (!initialized.current && result.session.checkpoint)
+        if (!initialized.current && result.session.checkpoint) {
           setDevice(result.session.device);
+          setToolsText(
+            result.session.tools === null
+              ? ""
+              : JSON.stringify(result.session.tools, null, 2),
+          );
+          setDecoder(result.session.decoder ?? "");
+        }
         initialized.current = true;
       })
       .catch((failure) => {
@@ -191,6 +235,7 @@ export function CheckpointChat({
       );
       setSession(result);
       if (kind === "/messages") setPrompt("");
+      if (kind === "/settings") setToolsNotice("Tool settings applied.");
     } catch (failure) {
       loadTimedOut.current = kind === "/load" && controller.signal.aborted;
       setError(
@@ -210,6 +255,33 @@ export function CheckpointChat({
   const loaded = session?.state === "ready" || generating;
   const selectedLoaded =
     loaded && checkpoint === session.checkpoint && device === session.device;
+  const parsedTools = useMemo(() => {
+    if (!toolsText.trim()) return { tools: null, error: "" };
+    try {
+      if (new TextEncoder().encode(toolsText).length > 262144)
+        return { tools: null, error: "Tool catalog must be at most 256 KiB." };
+      const parsed = toolsSchema.safeParse(JSON.parse(toolsText));
+      return parsed.success
+        ? { tools: parsed.data, error: "" }
+        : {
+            tools: null,
+            error:
+              "Use a JSON list of function tools with unique names and JSON Schema parameters.",
+          };
+    } catch {
+      return {
+        tools: null,
+        error:
+          "Invalid JSON. Paste a JSON list of OpenAI-style function tools.",
+      };
+    }
+  }, [toolsText]);
+  const toolOptions = { tools: parsedTools.tools, decoder: decoder || null };
+  const toolsDirty =
+    loaded &&
+    (JSON.stringify(parsedTools.tools) !== JSON.stringify(session.tools) ||
+      (decoder || null) !== session.decoder);
+  const toolsInvalid = !!parsedTools.error || !!toolsFileError;
   const missingTemplate =
     mode === "chat" &&
     loaded &&
@@ -219,6 +291,8 @@ export function CheckpointChat({
     selectedLoaded &&
     !generating &&
     !busy &&
+    !toolsDirty &&
+    !toolsInvalid &&
     !missingTemplate &&
     !!prompt.trim();
   const send = () =>
@@ -233,6 +307,7 @@ export function CheckpointChat({
       top_p: topP,
       repetition_penalty: repetitionPenalty,
       seed,
+      ...toolOptions,
     });
   return (
     <section className="checkpoint-chat" aria-label="Checkpoint chat">
@@ -310,9 +385,12 @@ export function CheckpointChat({
         <button
           type="button"
           className="primary"
-          onClick={() => void action("/load", { checkpoint, device })}
+          onClick={() =>
+            void action("/load", { checkpoint, device, ...toolOptions })
+          }
           disabled={
             busy ||
+            toolsInvalid ||
             !enabled ||
             !checkpoint ||
             !!catalog?.problem ||
@@ -358,6 +436,16 @@ export function CheckpointChat({
         {session?.checkpoint
           ? ` · ${session.device === "cpu" ? "CPU" : session.device.replace("cuda:", "GPU ")}`
           : ""}
+        {loaded && (
+          <span
+            role="group"
+            className="checkpoint-chat-tool-status"
+            aria-label="Active tool settings"
+          >
+            <span>Decoder: {session.decoder_label ?? "None"}</span>
+            <span>{session.tools?.length ?? 0} tools loaded</span>
+          </span>
+        )}
       </p>
       {loaded && !selectedLoaded && (
         <p role="status">
@@ -410,6 +498,116 @@ export function CheckpointChat({
           />
         </label>
       </div>
+      <details className="checkpoint-chat-tool-settings">
+        <summary>Tools &amp; constrained decoding</summary>
+        <div className="training-form-grid">
+          <label>
+            Decoder
+            <select
+              value={decoder}
+              disabled={busy || generating || session?.state === "loading"}
+              onChange={(event) => {
+                setDecoder(event.target.value);
+                setToolsNotice("");
+              }}
+            >
+              <option value="">None · current behavior</option>
+              {catalog?.decoders.map((item) => (
+                <option
+                  key={item.id}
+                  value={item.id}
+                  disabled={!item.available}
+                >
+                  {item.label}
+                  {item.available ? "" : " · not installed"}
+                </option>
+              ))}
+            </select>
+            <small>
+              Constrains the next token using a decoder installed by the server
+              owner. XML tool grammar must be registered in .weave-config.json
+              before selection. Tool calls are displayed and never executed.
+            </small>
+          </label>
+          <label>
+            Upload tool catalog
+            <input
+              type="file"
+              accept=".json,application/json"
+              disabled={busy || generating || session?.state === "loading"}
+              onChange={async (event) => {
+                const file = event.currentTarget.files?.[0];
+                event.currentTarget.value = "";
+                if (!file) return;
+                setToolsNotice("");
+                if (file.size > 262144) {
+                  setToolsFileError("Tool catalog must be at most 256 KiB.");
+                  return;
+                }
+                try {
+                  setToolsText(await file.text());
+                  setToolsFileError("");
+                } catch {
+                  setToolsFileError(
+                    "Could not read the tool catalog. Try the file again or paste its JSON below.",
+                  );
+                }
+              }}
+            />
+            <small>
+              OpenAI-style function tools as a JSON list. Uploading fills the
+              editor; apply to activate.
+            </small>
+          </label>
+          <label className="checkpoint-chat-tools-editor">
+            Tool catalog JSON
+            <textarea
+              rows={6}
+              value={toolsText}
+              spellCheck={false}
+              disabled={busy || generating || session?.state === "loading"}
+              aria-invalid={toolsInvalid}
+              onChange={(event) => {
+                setToolsText(event.target.value);
+                setToolsNotice("");
+                setToolsFileError("");
+              }}
+              placeholder={
+                '[{"type":"function","function":{"name":"get_weather","parameters":{"type":"object","properties":{"city":{"type":"string"}},"required":["city"]}}}]'
+              }
+            />
+            <small>
+              {parsedTools.tools?.length ?? 0} tools in draft. Passed to the
+              saved chat template in conversation mode. Leave empty to remove
+              the catalog.
+            </small>
+          </label>
+        </div>
+        {toolsInvalid && (
+          <p role="alert" className="training-alert">
+            {toolsFileError || parsedTools.error}
+          </p>
+        )}
+        <div className="checkpoint-chat-actions">
+          <button
+            type="button"
+            disabled={
+              busy || session?.state !== "ready" || toolsInvalid || !toolsDirty
+            }
+            onClick={() => void action("/settings", toolOptions, "PUT")}
+          >
+            Apply tool settings
+          </button>
+          <small role="status">
+            {toolsDirty
+              ? "Unapplied changes. Apply before sending a message."
+              : toolsNotice ||
+                (loaded
+                  ? "Tool settings match the loaded session."
+                  : "These settings will apply when you load a checkpoint.")}
+          </small>
+        </div>
+      </details>
       <details>
         <summary>Generation settings</summary>
         <div className="training-form-grid">
@@ -550,7 +748,9 @@ export function CheckpointChat({
         <p className="training-muted">
           Response ended:{" "}
           {session.finish_reason === "length"
-            ? "new-token limit reached"
+            ? session.decoder
+              ? "new-token limit reached; constrained output may be incomplete"
+              : "new-token limit reached"
             : session.finish_reason === "eos"
               ? "end-of-sequence token"
               : "stopped"}
