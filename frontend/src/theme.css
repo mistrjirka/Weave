@@ -153,7 +153,8 @@ html:is([data-theme="dark"], [data-theme="black"]) .project-browser-search {
   color: var(--theme-text, #263b30);
   font-size: 13px;
 }
-@media (max-width: 760px) {
+@media (max-width: 760px),
+  (max-width: 1000px) and (max-height: 500px) and (pointer: coarse) {
   .theme-picker select {
     width: 44px;
     min-height: 44px;

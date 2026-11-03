@@ -2065,7 +2065,8 @@ small {
     display: none;
   }
 }
-@media (max-width: 760px) {
+@media (max-width: 760px),
+  (max-width: 1000px) and (max-height: 500px) and (pointer: coarse) {
   .sidebar {
     width: 57px;
   }
@@ -2324,9 +2325,15 @@ textarea:focus-visible {
   font-size: 15px;
   min-width: 0;
   max-width: 450px;
+  justify-content: flex-start;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.project-title > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .project-heading > div {
   min-width: 0;
@@ -2712,7 +2719,8 @@ textarea:focus-visible {
     gap: 12px;
   }
 }
-@media (max-width: 760px) {
+@media (max-width: 760px),
+  (max-width: 1000px) and (max-height: 500px) and (pointer: coarse) {
   .main-workspace {
     padding-bottom: calc(56px + env(safe-area-inset-bottom));
   }
@@ -3057,7 +3065,8 @@ textarea:focus-visible {
 .library-item:hover .add-hint {
   display: block;
 }
-@media (max-width: 760px) {
+@media (max-width: 760px),
+  (max-width: 1000px) and (max-height: 500px) and (pointer: coarse) {
   .graph-actions button:nth-child(-n + 2) {
     display: inline-flex;
   }
@@ -3465,7 +3474,8 @@ textarea:focus-visible {
 .mobile-node-nav {
   display: none;
 }
-@media (max-width: 760px) {
+@media (max-width: 760px),
+  (max-width: 1000px) and (max-height: 500px) and (pointer: coarse) {
   .mobile-node-nav {
     display: flex;
     align-items: center;
@@ -3524,7 +3534,8 @@ textarea:focus-visible {
   }
 }
 
-@media (max-width: 760px) {
+@media (max-width: 760px),
+  (max-width: 1000px) and (max-height: 500px) and (pointer: coarse) {
   .flow-wrap .react-flow__controls,
   .flow-wrap .react-flow__minimap {
     bottom: 68px;
@@ -3547,7 +3558,8 @@ textarea:focus-visible {
   background: var(--theme-base, #e6eef5);
   color: var(--theme-blue-text, #345c7c);
 }
-@media (max-width: 760px) {
+@media (max-width: 760px),
+  (max-width: 1000px) and (max-height: 500px) and (pointer: coarse) {
   .canvas-toolbar {
     flex-wrap: wrap;
     height: auto;
@@ -3970,7 +3982,8 @@ textarea:focus-visible {
     padding: 5px 7px;
   }
 }
-@media (max-width: 760px) {
+@media (max-width: 760px),
+  (max-width: 1000px) and (max-height: 500px) and (pointer: coarse) {
   .view-actions .tokenizer-chip {
     max-width: 145px;
   }
@@ -4439,11 +4452,18 @@ textarea:focus-visible {
   padding: 10px 12px;
   height: auto;
   white-space: normal;
+  gap: 8px;
+  font-size: 14px;
 }
 .input-tokenizer-settings .tokenizer-chip > span {
+  display: block;
+  font-size: inherit;
   min-width: 0;
   overflow-wrap: anywhere;
   flex: 1;
+}
+.input-tokenizer-settings .tokenizer-chip > svg {
+  flex-shrink: 0;
 }
 .input-tokenizer-summary {
   display: flex;
@@ -4730,7 +4750,8 @@ textarea:focus-visible {
 .graph-variables.compact .variable-add button {
   grid-column: 1 / -1;
 }
-@media (max-width: 760px) {
+@media (max-width: 760px),
+  (max-width: 1000px) and (max-height: 500px) and (pointer: coarse) {
   .graph-variable-card {
     width: 224px;
   }
@@ -4740,7 +4761,8 @@ textarea:focus-visible {
 }
 
 /* Keep phone navigation tools outside the focused node's reading area. */
-@media (max-width: 760px) {
+@media (max-width: 760px),
+  (max-width: 1000px) and (max-height: 500px) and (pointer: coarse) {
   .flow-wrap .react-flow__minimap {
     display: none;
   }
@@ -4953,7 +4975,8 @@ textarea:focus-visible {
 }
 
 /* Phone settings prioritize readable explanations and deliberate touch input. */
-@media (max-width: 760px) {
+@media (max-width: 760px),
+  (max-width: 1000px) and (max-height: 500px) and (pointer: coarse) {
   .inspector-heading,
   .inspector-description,
   .inspector .property-field > span,
@@ -5060,7 +5083,8 @@ textarea:focus-visible {
 .brand {
   height: 56px;
 }
-@media (max-width: 760px) {
+@media (max-width: 760px),
+  (max-width: 1000px) and (max-height: 500px) and (pointer: coarse) {
   .view-actions button[aria-label="Weave settings"] > span {
     display: none;
   }
@@ -5075,7 +5099,21 @@ textarea:focus-visible {
 .mobile-sidebar-menu {
   display: none;
 }
-@media (max-width: 760px) {
+@media (max-width: 1000px) and (max-height: 500px) and (pointer: coarse) {
+  .canvas-toolbar {
+    flex-wrap: nowrap;
+    min-height: 48px;
+  }
+  .canvas-toolbar .breadcrumbs,
+  .canvas-toolbar .graph-actions {
+    width: auto;
+  }
+  .canvas-toolbar .breadcrumbs {
+    max-width: 50%;
+  }
+}
+@media (max-width: 760px),
+  (max-width: 1000px) and (max-height: 500px) and (pointer: coarse) {
   .topbar .mobile-sidebar-menu {
     display: inline-flex;
     align-items: center;

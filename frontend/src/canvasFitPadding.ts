@@ -1,12 +1,16 @@
+import {
+  isCompactViewport,
+  SHORT_TOUCH_VIEWPORT_QUERY,
+} from "./compactViewport";
 import type { FitViewOptions } from "@xyflow/react";
 
 /** Space for readable variables and canvas controls. */
 export function canvasFitInsets(canvas: HTMLElement | null) {
   const card = canvas?.querySelector<HTMLElement>(".graph-variable-card");
   return {
-    top:
-      Math.max(card?.offsetHeight ?? 280, window.innerWidth <= 760 ? 100 : 0) +
-      32,
+    top: window.matchMedia(SHORT_TOUCH_VIEWPORT_QUERY).matches
+      ? 16
+      : Math.max(card?.offsetHeight ?? 280, isCompactViewport() ? 100 : 0) + 32,
     left: 24,
     right: 32,
     bottom: 76,

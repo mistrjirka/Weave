@@ -1,3 +1,4 @@
+import { isCompactViewport } from "./compactViewport";
 import { tokenizerOwnsVocabulary } from "./tokenizerVocabulary";
 import { edgeContract } from "./lanePorts";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -254,7 +255,7 @@ function referenceFitPadding(
     top: withNotes ? `${Math.min(400, window.innerHeight * 0.42)}px` : "16px",
     bottom: "76px",
     left: "24px",
-    right: window.innerWidth <= 760 ? "68px" : "24px",
+    right: isCompactViewport() ? "68px" : "24px",
   };
 }
 function ReferenceZoom() {
@@ -414,7 +415,7 @@ function ReferenceCanvas({
     [graph, report, prefix, groups, selection],
   );
   const focus = useCallback(() => {
-    if (window.innerWidth > 760 && (host.current?.clientWidth ?? 0) >= 720) {
+    if (!isCompactViewport() && (host.current?.clientWidth ?? 0) >= 720) {
       const notes =
         showAnnotations &&
         graphScope(current.current, currentPath.current).nodes.some((node) =>

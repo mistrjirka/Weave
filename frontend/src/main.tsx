@@ -1,3 +1,4 @@
+import { isCompactViewport } from "./compactViewport";
 import {
   inputSettingOwnership,
   containerParameterShadowReason,
@@ -1536,7 +1537,7 @@ function Workbench({
   }
   function fitCanvas() {
     if (
-      window.innerWidth > 760 &&
+      !isCompactViewport() &&
       (!splitView || (canvasRef.current?.clientWidth ?? 0) >= 720)
     ) {
       fitGraph({ duration: motion(250) });
@@ -1987,7 +1988,7 @@ function Workbench({
     });
     setSelection(id);
     setSelectedEdge(null);
-    setMobilePanel(window.innerWidth <= 760 ? "properties" : null);
+    setMobilePanel(isCompactViewport() ? "properties" : null);
     notify(
       data.label +
         (source ? " added and connected" : " added · connect its ports"),
@@ -2878,7 +2879,7 @@ function Workbench({
                   aria-label={`Project settings: ${project.name}`}
                   onClick={() => setModal("settings")}
                 >
-                  {project.name}
+                  <span>{project.name}</span>
                   <Pencil size={12} aria-hidden="true" />
                 </button>
               </h1>
@@ -3291,8 +3292,7 @@ function Workbench({
                               : (nodes.at(-1)?.id ?? null),
                           );
                           setSelectedEdge(null);
-                          if (window.innerWidth <= 760)
-                            setMobilePanel("properties");
+                          if (isCompactViewport()) setMobilePanel("properties");
                         }}
                         onNodeDoubleClick={(_, n) => {
                           if (n.data.body) open(n.id);
@@ -3301,8 +3301,7 @@ function Workbench({
                           if (edge.id.startsWith("weights:")) return;
                           setSelection(null);
                           setSelectedEdge(edge.id);
-                          if (window.innerWidth <= 760)
-                            setMobilePanel("properties");
+                          if (isCompactViewport()) setMobilePanel("properties");
                         }}
                         onPaneClick={() => {
                           setSelection(null);
@@ -3330,7 +3329,7 @@ function Workbench({
                           setSelectedEdge(null);
                           return false;
                         }}
-                        fitView={window.innerWidth > 760 && !splitView}
+                        fitView={!isCompactViewport() && !splitView}
                         fitViewOptions={{
                           padding: canvasFitPadding(canvasRef.current),
                         }}
@@ -3378,7 +3377,7 @@ function Workbench({
                           visible={showAnnotations}
                           onEdit={(id) => {
                             setSelection(id);
-                            if (window.innerWidth <= 760)
+                            if (isCompactViewport())
                               setMobilePanel("properties");
                           }}
                         />
@@ -3610,8 +3609,7 @@ function Workbench({
                     onNavigate={navigateReference}
                     onInspect={setReferenceInspection}
                     onActivate={() => {
-                      if (window.innerWidth <= 760)
-                        setMobilePanel("properties");
+                      if (isCompactViewport()) setMobilePanel("properties");
                     }}
                     onUseExample={(p) => startNewProject(p.id)}
                     nodeTypes={nodeTypes}

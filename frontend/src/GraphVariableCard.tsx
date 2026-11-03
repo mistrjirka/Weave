@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Braces, GripVertical, Maximize2, Minus, Plus } from "lucide-react";
 import { GraphVariables } from "./GraphVariables";
+import { SHORT_TOUCH_VIEWPORT_QUERY } from "./compactViewport";
 
 /** An unconnected, movable canvas card; its values remain readable at any zoom. */
 export function GraphVariableCard({
@@ -21,8 +22,18 @@ export function GraphVariableCard({
   onOpen: () => void;
 }) {
   const [offset, setOffset] = useState({ x: 0, y: 0 });
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed, setCollapsed] = useState(
+    () => window.matchMedia(SHORT_TOUCH_VIEWPORT_QUERY).matches,
+  );
   const cardRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    const screen = window.matchMedia(SHORT_TOUCH_VIEWPORT_QUERY);
+    const collapseOnRotate = () => {
+      if (screen.matches) setCollapsed(true);
+    };
+    screen.addEventListener("change", collapseOnRotate);
+    return () => screen.removeEventListener("change", collapseOnRotate);
+  }, []);
   useEffect(() => {
     const card = cardRef.current;
     const canvas = card?.closest(".flow-wrap");
