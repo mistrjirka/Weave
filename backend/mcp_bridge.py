@@ -3,27 +3,58 @@
 from __future__ import annotations
 
 import json
+import asyncio
 import os
 import socket
 from pathlib import Path
 from urllib.parse import quote, urlsplit
+from typing import Literal
 
 import httpx
 import psutil
 from mcp.server import MCPServer
 from mcp.server.mcpserver.context import Context
 from mcp.server.transport_security import TransportSecuritySettings
-from mcp.types import ToolAnnotations
+from mcp.types import ToolAnnotations, CallToolResult, TextContent
 from .documentation import GUIDE_PATHS, guide_path
+from .mcp_files import UploadFileContent, upload_files, download_file
 
 ROOT = Path(__file__).resolve().parent.parent
 GUIDES = GUIDE_PATHS
 MAX_RESPONSE = 1_000_000
 MAX_GUIDE = 250_000
+READ_ONLY_POSTS = {
+    "/api/validate",
+    "/api/code",
+    "/api/connections/compatible",
+    "/api/attention/expand",
+    "/api/graph/unroll",
+    "/api/training/model",
+}
+EXECUTABLE_GETS = {"/api/training/environment"}
+
+
+def tool_result(payload, extra_content=None):
+    """Keep JSON compatibility while exposing protocol-level execution failures."""
+    failed = "error" in payload or payload.get("status", 200) >= 400
+    return CallToolResult(
+        content=[
+            TextContent(type="text", text=json.dumps(payload)),
+            *(extra_content or []),
+        ],
+        structuredContent=payload,
+        isError=failed,
+    )
+
+
 EXCLUDED_PATHS = {
-    "/api/export", "/api/training/session", "/api/training/reports/{run_id}",
-    "/api/training/runs/{run_id}/artifact", "/api/training/runs/{run_id}/package",
-    "/api/training/runs/{run_id}/events", "/api/training/runs/{run_id}/reporting",
+    "/api/export",
+    "/api/training/session",
+    "/api/training/reports/{run_id}",
+    "/api/training/runs/{run_id}/artifact",
+    "/api/training/runs/{run_id}/package",
+    "/api/training/runs/{run_id}/events",
+    "/api/training/runs/{run_id}/reporting",
 }
 
 
@@ -46,9 +77,14 @@ def mcp_transport_security() -> TransportSecuritySettings:
             continue
         origin = urlsplit(value)
         if (
-            origin.scheme not in {"http", "https"} or not origin.hostname
-            or origin.username or origin.password or origin.path
-            or origin.query or origin.fragment or "*" in value
+            origin.scheme not in {"http", "https"}
+            or not origin.hostname
+            or origin.username
+            or origin.password
+            or origin.path
+            or origin.query
+            or origin.fragment
+            or "*" in value
         ):
             raise ValueError(
                 "WEAVE_MCP_PUBLIC_ORIGINS must contain comma-separated "
@@ -67,14 +103,29 @@ def mcp_transport_security() -> TransportSecuritySettings:
 class WeaveBridge:
     def __init__(self, base_url: str = "http://127.0.0.1:8173", app=None):
         parts = urlsplit(base_url)
-        if parts.scheme not in {"http", "https"} or not parts.hostname or parts.username or parts.password or parts.path not in {"", "/"} or parts.query or parts.fragment:
-            raise ValueError("WEAVE_MCP_URL must be an HTTP(S) origin without credentials, path, or query")
+        if (
+            parts.scheme not in {"http", "https"}
+            or not parts.hostname
+            or parts.username
+            or parts.password
+            or parts.path not in {"", "/"}
+            or parts.query
+            or parts.fragment
+        ):
+            raise ValueError(
+                "WEAVE_MCP_URL must be an HTTP(S) origin without credentials, path, or query"
+            )
         self.base_url = base_url.rstrip("/")
         self.app = app
 
     def client(self) -> httpx.AsyncClient:
         transport = httpx.ASGITransport(app=self.app) if self.app is not None else None
-        return httpx.AsyncClient(base_url=self.base_url, transport=transport, timeout=30.0, follow_redirects=False)
+        return httpx.AsyncClient(
+            base_url=self.base_url,
+            transport=transport,
+            timeout=30.0,
+            follow_redirects=False,
+        )
 
     async def openapi(self) -> dict:
         async with self.client() as client:
@@ -97,10 +148,27 @@ class WeaveBridge:
                     continue
                 responses = operation.get("responses", {})
                 successful = [v for k, v in responses.items() if str(k).startswith("2")]
-                if any(any(t in v.get("content", {}) for t in ("application/zip", "application/octet-stream", "text/event-stream")) for v in successful):
+                if any(
+                    any(
+                        t in v.get("content", {})
+                        for t in (
+                            "application/zip",
+                            "application/octet-stream",
+                            "text/event-stream",
+                        )
+                    )
+                    for v in successful
+                ):
                     continue
                 name = operation.get("operationId") or f"{method}_{path}"
-                result[name] = {"method": method.upper(), "path": path, "operation": operation}
+                result[name] = {
+                    "method": method.upper(),
+                    "path": path,
+                    "operation": operation,
+                }
+                result[name]["read_only"] = (
+                    method.upper() == "GET" and path not in EXECUTABLE_GETS
+                ) or (method.upper() == "POST" and path in READ_ONLY_POSTS)
         return result
 
     def credentials(self, ctx: Context | None) -> dict[str, str]:
@@ -114,22 +182,43 @@ class WeaveBridge:
         cookie = headers.get("cookie", "")
         # Pass through only Weave's training cookie, never unrelated browser cookies.
         from http.cookies import SimpleCookie
+
         parsed = SimpleCookie()
         try:
             parsed.load(cookie)
         except Exception:
             pass
         if "weave_training" in parsed:
-            forwarded["cookie"] = f"weave_training={parsed['weave_training'].coded_value}"
+            forwarded["cookie"] = (
+                f"weave_training={parsed['weave_training'].coded_value}"
+            )
         return forwarded
 
-    async def execute(self, operation_id: str, path_params: dict | None, query: dict | None, body: object | None, ctx: Context | None, *, read_only: bool) -> dict:
+    async def execute(
+        self,
+        operation_id: str,
+        path_params: dict | None,
+        query: dict | None,
+        body: object | None,
+        ctx: Context | None,
+        *,
+        read_only: bool,
+    ) -> dict:
         operations = await self.operations()
         if operation_id not in operations:
-            return {"error": "Unknown or unsupported operation", "operation_id": operation_id}
+            return {
+                "error": "Unknown or unsupported operation",
+                "operation_id": operation_id,
+            }
         entry = operations[operation_id]
-        if (entry["method"] == "GET") != read_only:
-            return {"error": "Use read_weave_operation for GET and execute_weave_operation for changes"}
+        if read_only and not entry["read_only"]:
+            return {
+                "error": "This operation changes state or executes an interpreter; use execute_weave_operation"
+            }
+        if not read_only and entry["method"] == "GET" and entry["read_only"]:
+            return {
+                "error": "Use read_weave_operation for this read-only GET operation"
+            }
         path = entry["path"]
         params = path_params or {}
         for parameter in entry["operation"].get("parameters", []):
@@ -155,17 +244,89 @@ class WeaveBridge:
                     async for chunk in response.aiter_bytes():
                         payload.extend(chunk)
                         if len(payload) > MAX_RESPONSE:
-                            return {"status": response.status_code, "error": "Response exceeds 1 MB; use the Weave UI or HTTP API for large results"}
+                            return {
+                                "status": response.status_code,
+                                "error": "Response exceeds 1 MB; use the Weave UI or HTTP API for large results",
+                            }
                     content_type = response.headers.get("content-type", "")
+                    if "ndjson" in content_type:
+                        return {
+                            "status": response.status_code,
+                            "data": {
+                                "records": [
+                                    json.loads(line)
+                                    for line in payload.splitlines()
+                                    if line.strip()
+                                ]
+                            },
+                        }
                     if "json" not in content_type:
-                        return {"status": response.status_code, "error": "Operation returned non-JSON content"}
+                        return {
+                            "status": response.status_code,
+                            "error": "Operation returned non-JSON content",
+                        }
                     return {"status": response.status_code, "data": json.loads(payload)}
         except (httpx.HTTPError, ValueError) as exc:
             return {"error": str(exc)}
 
 
 def create_mcp_server(bridge: WeaveBridge) -> MCPServer:
-    server = MCPServer(name="Weave Neural Graph Studio", instructions="Discover operations, inspect their OpenAPI contract, then call JSON endpoints. Training operations require the caller's training credential.")
+    server = MCPServer(
+        name="Weave Neural Graph Studio",
+        instructions="Discover operations, inspect their OpenAPI contract, then call JSON endpoints. Training operations require the caller's training credential.",
+    )
+
+    @server.resource("weave://docs/index", mime_type="text/markdown")
+    async def documentation_index() -> str:
+        """Weave documentation index and current guide locations."""
+        return await asyncio.to_thread(
+            (ROOT / "docs/README.md").read_text, encoding="utf-8"
+        )
+
+    @server.resource("weave://guides/{guide}", mime_type="text/markdown")
+    async def documentation_guide(guide: str) -> str:
+        """Read a guide by stable ID, such as TRAINING_GUIDE.md."""
+        location = guide_path(guide)
+        if location is None:
+            raise ValueError(
+                "Unknown guide; read weave://docs/index or search_weave_docs"
+            )
+        return await asyncio.to_thread((ROOT / location).read_text, encoding="utf-8")
+
+    @server.prompt()
+    def design_weave_model(task: str) -> str:
+        """A guided graph-design workflow using examples, validation and explicit saving."""
+        return (
+            f"Design this Weave model: {task}\n"
+            "Read the documentation index, discover templates/projects operations, and inspect a suitable example. "
+            "Edit the graph document, then call validation and code generation with read_weave_operation. "
+            "Explain shape errors and unresolved design choices. Save only when requested; do not launch training unless requested."
+        )
+
+    @server.tool(
+        annotations=ToolAnnotations(
+            readOnlyHint=False, destructiveHint=False, openWorldHint=False
+        )
+    )
+    async def upload_weave_files(
+        kind: Literal["tokenizer", "dataset", "snapshot"],
+        files: list[UploadFileContent],
+        ctx: Context | None = None,
+    ) -> CallToolResult:
+        """Upload caller-supplied base64 bytes through Weave's normal multipart APIs (4 MiB total). Tokenizers support companion files. No server filesystem paths."""
+        return tool_result(await upload_files(bridge, kind, files, ctx))
+
+    @server.tool(annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=False))
+    async def download_weave_file(
+        kind: Literal["model", "training_package", "artifact", "transcript"],
+        project: dict | None = None,
+        run_id: str | None = None,
+        path: str | None = None,
+        ctx: Context | None = None,
+    ) -> CallToolResult:
+        """Export a model/training ZIP, transcript or named run text artifact as an embedded MCP resource (4 MiB max). Packaging may cache a ZIP; checkpoint weights use HTTP/UI."""
+        payload, content = await download_file(bridge, kind, project, run_id, path, ctx)
+        return tool_result(payload, content)
 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=False))
     async def list_weave_operations(search: str = "") -> list[dict]:
@@ -173,9 +334,16 @@ def create_mcp_server(bridge: WeaveBridge) -> MCPServer:
         operations = await bridge.operations()
         term = search.casefold()
         return [
-            {"operation_id": key, "method": item["method"], "path": item["path"], "summary": item["operation"].get("summary", "")}
+            {
+                "operation_id": key,
+                "method": item["method"],
+                "path": item["path"],
+                "read_only": item["read_only"],
+                "summary": item["operation"].get("summary", ""),
+            }
             for key, item in operations.items()
-            if term in f"{key} {item['path']} {item['operation'].get('summary', '')}".casefold()
+            if term
+            in f"{key} {item['path']} {item['operation'].get('summary', '')}".casefold()
         ]
 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=False))
@@ -195,7 +363,7 @@ def create_mcp_server(bridge: WeaveBridge) -> MCPServer:
                 ref = current.get("$ref", "")
                 prefix = "#/components/schemas/"
                 if ref.startswith(prefix):
-                    name = ref[len(prefix):]
+                    name = ref[len(prefix) :]
                     if name in schemas and name not in needed:
                         needed[name] = schemas[name]
                         pending.append(schemas[name])
@@ -205,14 +373,38 @@ def create_mcp_server(bridge: WeaveBridge) -> MCPServer:
         return {"operation_id": operation_id, **item, "schemas": needed}
 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=False))
-    async def read_weave_operation(operation_id: str, path_params: dict | None = None, query: dict | None = None, ctx: Context | None = None) -> dict:
-        """Call a GET Weave JSON API operation. Supply path_params and query as needed."""
-        return await bridge.execute(operation_id, path_params, query, None, ctx, read_only=True)
+    async def read_weave_operation(
+        operation_id: str,
+        path_params: dict | None = None,
+        query: dict | None = None,
+        body: object | None = None,
+        ctx: Context | None = None,
+    ) -> CallToolResult:
+        """Read JSON or perform a listed read-only graph calculation. Supply a body for pure POST operations. Environment probes require the execution tool."""
+        return tool_result(
+            await bridge.execute(
+                operation_id, path_params, query, body, ctx, read_only=True
+            )
+        )
 
-    @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, openWorldHint=False))
-    async def execute_weave_operation(operation_id: str, path_params: dict | None = None, query: dict | None = None, body: object | None = None, ctx: Context | None = None) -> dict:
-        """Call a POST, PUT, PATCH, or DELETE Weave JSON API operation."""
-        return await bridge.execute(operation_id, path_params, query, body, ctx, read_only=False)
+    @server.tool(
+        annotations=ToolAnnotations(
+            readOnlyHint=False, destructiveHint=True, openWorldHint=False
+        )
+    )
+    async def execute_weave_operation(
+        operation_id: str,
+        path_params: dict | None = None,
+        query: dict | None = None,
+        body: object | None = None,
+        ctx: Context | None = None,
+    ) -> CallToolResult:
+        """Execute a state-changing API operation or interpreter probe. Launches, stop, delete and edits all use this tool."""
+        return tool_result(
+            await bridge.execute(
+                operation_id, path_params, query, body, ctx, read_only=False
+            )
+        )
 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=False))
     async def search_weave_docs(query: str) -> list[dict]:
@@ -231,24 +423,32 @@ def create_mcp_server(bridge: WeaveBridge) -> MCPServer:
         return matches
 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=False))
-    async def read_weave_doc(guide: str, start_line: int = 1, max_lines: int = 160) -> dict:
+    async def read_weave_doc(
+        guide: str, start_line: int = 1, max_lines: int = 160
+    ) -> dict:
         """Read an allowlisted Weave guide, optionally by line range."""
         location = guide_path(guide)
         if location is None:
             return {"error": "Unknown guide", "available": list(GUIDES)}
         if start_line < 1 or not 1 <= max_lines <= 300:
-            return {"error": "start_line must be positive and max_lines must be 1 to 300"}
+            return {
+                "error": "start_line must be positive and max_lines must be 1 to 300"
+            }
         source = ROOT / location
         if source.stat().st_size > MAX_GUIDE:
             return {"error": "Guide exceeds size limit"}
         lines = source.read_text(encoding="utf-8").splitlines()
-        return {"guide": guide, "start_line": start_line, "total_lines": len(lines), "text": "\n".join(lines[start_line - 1:start_line - 1 + max_lines])}
+        return {
+            "guide": guide,
+            "start_line": start_line,
+            "total_lines": len(lines),
+            "text": "\n".join(lines[start_line - 1 : start_line - 1 + max_lines]),
+        }
 
     return server
 
 
 def main() -> None:
-    import asyncio
     bridge = WeaveBridge(os.environ.get("WEAVE_MCP_URL", "http://127.0.0.1:8173"))
     asyncio.run(create_mcp_server(bridge).run_stdio_async())
 

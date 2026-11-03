@@ -21,6 +21,7 @@ from fastapi import (
     Response,
     UploadFile,
     File,
+    Query,
 )
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
@@ -452,6 +453,47 @@ actual training code when your model/data/optimizer are ready.
             raise HTTPException(401, str(exc))
         except ValueError as exc:
             raise HTTPException(422, str(exc))
+
+    @api.get("/runs/{run_id}/event-records", dependencies=[Depends(authenticated)])
+    def event_records(
+        run_id: str,
+        after: str = Query(default="", max_length=128),
+        kind: str | None = Query(default=None, max_length=64),
+        limit: int = Query(default=100, ge=1, le=500),
+    ):
+        """Read chronological event pages; pass next_after until a page is empty."""
+        try:
+            records = events(
+                run_directory(run_id),
+                after=after,
+                kind=kind,
+                limit=limit,
+                max_bytes=512_000,
+            )
+        except ValueError as exc:
+            raise HTTPException(422, str(exc))
+        return {
+            "events": records,
+            "next_after": records[-1]["id"] if records else after,
+        }
+
+    @api.get("/runs/{run_id}/status", dependencies=[Depends(authenticated)])
+    def run_status(run_id: str):
+        """Lightweight progress without loading full logs, samples or snapshots."""
+        directory = run_directory(run_id)
+        latest = events(directory, limit=1)
+        try:
+            metrics = events(directory, kind="metrics", limit=1, max_bytes=256_000)
+            progress = events(directory, kind="progress", limit=1, max_bytes=256_000)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc))
+        return {
+            "run_id": run_id,
+            "status": service.status(directory),
+            "latest_metrics": metrics[-1] if metrics else None,
+            "progress": progress[-1] if progress else None,
+            "last_event_id": latest[-1]["id"] if latest else "",
+        }
 
     @api.get("/runs/{run_id}", dependencies=[Depends(authenticated)])
     def get_run(run_id: str):

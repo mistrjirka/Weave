@@ -25,6 +25,6 @@
 These record decisions and observations at a particular time; use the guides above for current instructions.
 
 - Research: [graph layout](research/layout.md), [UI component libraries](research/ui-components.md).
-- Reviews: [project workflow](reviews/project-workflow.md), [UI/UX](reviews/ux-2026-10-27.md), [training performance](reviews/performance-2026-11-01.md), [installation](reviews/installation-2026-11-03.md), [code and dead-file review](reviews/code-2026-11-03.md).
+- Reviews: [project workflow](reviews/project-workflow.md), [UI/UX](reviews/ux-2026-10-27.md), [training performance](reviews/performance-2026-11-01.md), [installation](reviews/installation-2026-11-03.md), [code and dead-file review](reviews/code-2026-11-03.md), [MCP capability review](reviews/mcp-2026-11-03.md).
 
 [License](../LICENSE) · [Third-party notices](../THIRD_PARTY_NOTICES.md)

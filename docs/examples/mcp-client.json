@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "weave": {
+      "command": "/absolute/path/to/Weave/.venv/bin/python",
+      "args": ["-m", "backend.mcp_bridge"],
+      "env": {
+        "PYTHONPATH": "/absolute/path/to/Weave",
+        "WEAVE_MCP_URL": "http://127.0.0.1:8173"
+      }
+    }
+  }
+}

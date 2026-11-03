@@ -139,7 +139,7 @@ def inside(directory, relative):
     return path
 
 
-def events(directory, *, limit=None, kind=None, after=None):
+def events(directory, *, limit=None, kind=None, after=None, max_bytes=None):
     """Incremental SQLite index over durable script-owned JSONL event streams."""
     import sqlite3
 
@@ -242,7 +242,20 @@ def events(directory, *, limit=None, kind=None, after=None):
         if limit is not None:
             query += " LIMIT ?"
             values.append(limit)
-        rows = connection.execute(query, values).fetchall()
+        cursor = connection.execute(query, values)
+        if max_bytes is None:
+            rows = cursor.fetchall()
+        else:
+            rows, size = [], 0
+            for row in cursor:
+                size += len(row[0].encode())
+                if size > max_bytes:
+                    if not rows:
+                        raise ValueError(
+                            "One event exceeds the response budget; read its run artifact instead"
+                        )
+                    break
+                rows.append(row)
         return [
             json.loads(row[0])
             for row in (rows if after is not None else reversed(rows))

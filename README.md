@@ -43,6 +43,16 @@ Examples include decoder and looped transformers, text diffusion, MoE, embedding
 
 Training requires your own data loader and data. Exporting a graph does not produce a pretrained model.
 
+## Connect an agent
+
+With Weave running, connect Codex over MCP:
+
+```bash
+codex mcp add weave --url http://localhost:8173/mcp/
+```
+
+Agents can edit graphs, validate shapes, manage training and test checkpoints. See [MCP setup](docs/mcp.md) for JSON client configuration, Codex TOML examples and remote-server settings.
+
 ## Documentation
 
 [All guides](docs/README.md) · [Repository map](docs/structure.md)
