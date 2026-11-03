@@ -10,6 +10,7 @@
 
 - [Training operations](training.md): stages, devices, monitoring, validation, resume and snapshots.
 - [Writing train.py](training-guide.md): loaders, caching, augmentations and trainer hooks.
+- [Custom training loops and RL](custom-training.md): script-owned loops, checkpoints, trajectories, evaluation, and DDP.
 - [Checkpoint chat and decoders](checkpoint-chat-decoders.md): catalogs, constrained decoding and regression cases.
 - [MCP](mcp.md): control the workbench and search its documentation.
 

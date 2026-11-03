@@ -4,7 +4,7 @@ import ast
 from functools import lru_cache
 from pathlib import Path
 
-from .recipe import is_code_first
+from .recipe import is_code_first, custom_supported_settings
 
 COMPUTE_FIELDS = ("devices", "strategy", "precision", "placement")
 PERFORMANCE_FIELDS = ("compile_mode", "fused_optimizer", "profile_steps")
@@ -66,7 +66,16 @@ def preview_stage_settings(stage):
         config["evaluation_mode"] = (
             "async" if config["strategy"] == "train_eval" else "inline"
         )
-        return {"config": config, "unresolved": [], "error": None}
+        return {
+            "config": config,
+            "unresolved": [],
+            "error": None,
+            "supported": (
+                custom_supported_settings(stage.script)
+                if stage.config.recipe == "custom"
+                else None
+            ),
+        }
     constructors = {
         alias.asname or alias.name
         for node in tree.body

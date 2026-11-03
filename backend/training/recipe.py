@@ -17,6 +17,31 @@ def is_code_first(source):
     )
 
 
+def custom_supported_settings(source):
+    """Explicit author declaration, never inferred from imports or calls."""
+    from .custom_training import LAUNCH_FIELDS
+
+    try:
+        tree = ast.parse(source)
+        for node in tree.body:
+            if isinstance(node, (ast.Assign, ast.AnnAssign)):
+                targets = (
+                    node.targets if isinstance(node, ast.Assign) else [node.target]
+                )
+                if any(
+                    isinstance(item, ast.Name) and item.id == "WEAVE_SUPPORTED_SETTINGS"
+                    for item in targets
+                ):
+                    value = ast.literal_eval(node.value)
+                    if isinstance(value, (list, tuple)) and all(
+                        isinstance(key, str) and key in LAUNCH_FIELDS for key in value
+                    ):
+                        return sorted(set(value))
+    except (ValueError, TypeError, SyntaxError):
+        pass
+    return []
+
+
 SCRIPT_FIELDS = {
     "devices": "devices",
     "strategy": "strategy",

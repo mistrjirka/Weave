@@ -9,7 +9,7 @@ import os
 import secrets
 import time
 from threading import RLock
-from typing import Literal
+from typing import Literal, Annotated
 
 from pydantic import BaseModel, Field, FiniteFloat
 
@@ -24,6 +24,12 @@ class ReportEvent(BaseModel):
     step: int = Field(ge=0)
     tokens: int = Field(ge=0)
     payload: dict
+    counters: dict[
+        Annotated[str, Field(min_length=1, max_length=80)],
+        Annotated[int, Field(ge=0, strict=True)],
+    ] = Field(default_factory=dict, max_length=32)
+    checkpoint: str | None = Field(default=None, max_length=2048)
+    policy_version: str | None = Field(default=None, max_length=128)
     channel: Literal["training", "evaluation", "system"] = "training"
 
 
@@ -64,7 +70,7 @@ class ReportStore:
         for item in batch.events:
             event = item.model_dump()
             payload = event["payload"]
-            if event["kind"] == "checkpoint":
+            if event["kind"] in ("checkpoint", "artifact", "table"):
                 payload["remote"] = True
             if event["kind"] == "capabilities":
                 # This API does not transfer checkpoint bytes back to the host.
@@ -77,9 +83,12 @@ class ReportStore:
         with self.lock:
             # The durable event index deduplicates retries by event ID.
             events(directory, limit=0)
-            with closing(
-                sqlite3.connect(directory / "event-index.sqlite", timeout=30)
-            ) as connection, connection:
+            with (
+                closing(
+                    sqlite3.connect(directory / "event-index.sqlite", timeout=30)
+                ) as connection,
+                connection,
+            ):
                 ids = [event.id for event in batch.events]
                 existing = (
                     {

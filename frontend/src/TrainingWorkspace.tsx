@@ -1,3 +1,12 @@
+import { TrainingArtifacts } from "./TrainingArtifacts";
+import {
+  runContract,
+  namedCounters,
+  counterLabel,
+  isTrainingAxis,
+  type TrainingAxis,
+} from "./trainingContract";
+import { CustomRunControls } from "./CustomRunControls";
 import "./training.css";
 import "./trainingSetup.css";
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
@@ -183,9 +192,15 @@ export function TrainingWorkspace({ project }: { project: Project }) {
   );
   const [historyOpen, setHistoryOpen] = useState(false);
   const [dashboard, setDashboard] = useState<
-    "metrics" | "samples" | "hardware" | "logs" | "checkpoints" | "chat"
+    | "metrics"
+    | "samples"
+    | "hardware"
+    | "logs"
+    | "checkpoints"
+    | "chat"
+    | "artifacts"
   >("metrics");
-  const [axis, setAxis] = useState<"step" | "tokens" | "time">("step");
+  const [axis, setAxis] = useState<TrainingAxis>("step");
   const [smooth, setSmooth] = useState(false);
   const [comparisonId, setComparisonId] = useState("");
   const [comparison, setComparison] = useState<RunDetail | null>(null);
@@ -916,9 +931,24 @@ export function TrainingWorkspace({ project }: { project: Project }) {
   }
   const checkpoints =
     detail?.events.filter((e) => e.kind === "checkpoint") ?? [];
+  const contract = runContract(detail?.events ?? []);
+  const counters = namedCounters(detail?.events ?? []);
+  const scriptCapabilities =
+    detail?.events
+      .filter(
+        (event) =>
+          event.kind === "capabilities" &&
+          (event.channel ?? "training") === "training",
+      )
+      .at(-1)?.payload ??
+    detail?.script_capabilities ??
+    {};
+  const customRun = detail?.run.recipe === "custom" && !detail.run.code_first;
   const metrics = metricsForDisplay(
     detail?.events ?? [],
     Boolean(detail?.run.code_first),
+    contract,
+    detail?.run.recipe === "custom",
   );
   const active = detail && running.has(detail.status.state);
   const otherActiveRun =
@@ -1658,6 +1688,7 @@ export function TrainingWorkspace({ project }: { project: Project }) {
                         model={model}
                         codeFirst={codeFirst}
                         unresolved={effective.unresolved}
+                        supported={effective.supported}
                         error={effective.error}
                         onChange={patchSettings}
                       />
@@ -1847,7 +1878,7 @@ export function TrainingWorkspace({ project }: { project: Project }) {
                           </div>
                         )}
                       </details>
-                      {!codeFirst && (
+                      {!codeFirst && config.recipe !== "custom" && (
                         <>
                           <h3>Data</h3>
                           <p className="training-muted">
@@ -1980,7 +2011,7 @@ export function TrainingWorkspace({ project }: { project: Project }) {
                           )}
                         </>
                       )}
-                      {!codeFirst && (
+                      {!codeFirst && config.recipe !== "custom" && (
                         <>
                           <details>
                             <summary>
@@ -2147,9 +2178,11 @@ export function TrainingWorkspace({ project }: { project: Project }) {
                   )}
                   <footer className="training-launch">
                     <span>
-                      {effective.config
-                        ? computeSummary(effective.config)
-                        : "Reading training settings…"}
+                      {config.recipe === "custom" && !codeFirst
+                        ? "Custom Python · compute applied by script"
+                        : effective.config
+                          ? computeSummary(effective.config)
+                          : "Reading training settings…"}
                       <small role="status">
                         {stageDirty
                           ? "Unsaved changes. Start saves the stage first."
@@ -2319,17 +2352,44 @@ export function TrainingWorkspace({ project }: { project: Project }) {
                       }}
                     />
                   )}
+                  {customRun &&
+                    (scriptCapabilities.resume === true ||
+                      detail.restart_context?.exact_resume) && (
+                      <CustomRunControls
+                        detail={detail}
+                        enabled={capabilities.enabled}
+                        onRestart={(run) => {
+                          setRuns((current) => [
+                            run,
+                            ...current.filter((item) => item.id !== run.id),
+                          ]);
+                          setDetail(null);
+                          setRunId(run.id);
+                          setSetupOpen(false);
+                        }}
+                      />
+                    )}
                   {active && (
                     <>
                       <button
-                        disabled={busy || pauseRequested === detail.run.id}
-                        title="Save a checkpoint and stop workers. Resume restores training state."
+                        disabled={
+                          busy ||
+                          pauseRequested === detail.run.id ||
+                          (customRun && scriptCapabilities.commands !== true)
+                        }
+                        title={
+                          customRun && scriptCapabilities.commands !== true
+                            ? "The custom script has not declared cooperative stop support."
+                            : "Stop at the next safe training boundary. A checkpoint requires script support."
+                        }
                         onClick={() => void task(() => command("stop"))}
                       >
                         <Pause aria-hidden="true" size={14} />
                         {pauseRequested === detail.run.id
                           ? "Pausing…"
-                          : "Pause training"}
+                          : customRun && scriptCapabilities.resume !== true
+                            ? "Stop safely"
+                            : "Pause training"}
                       </button>
                       <button
                         disabled={busy || detail.run.execution === "monitor"}
@@ -2469,6 +2529,7 @@ export function TrainingWorkspace({ project }: { project: Project }) {
                   );
                 })}
               <RunOverview detail={detail} />
+              {customRun && <TrainingCounters events={detail.events} compact />}
               <ValidationStatus events={detail.events} />
               <nav className="training-tabs" aria-label="Run views">
                 {(
@@ -2479,6 +2540,7 @@ export function TrainingWorkspace({ project }: { project: Project }) {
                     "logs",
                     "checkpoints",
                     "chat",
+                    "artifacts",
                   ] as const
                 ).map((tab) => (
                   <button
@@ -2494,6 +2556,7 @@ export function TrainingWorkspace({ project }: { project: Project }) {
                         logs: "Logs",
                         checkpoints: "Checkpoints & snapshots",
                         chat: "Chat & text completion",
+                        artifacts: "Tables & artifacts",
                       }[tab]
                     }
                   </button>
@@ -2639,17 +2702,19 @@ export function TrainingWorkspace({ project }: { project: Project }) {
                         Horizontal axis
                         <select
                           value={axis}
-                          onChange={(e) =>
-                            setAxis(
-                              z
-                                .enum(["step", "tokens", "time"])
-                                .parse(e.target.value),
-                            )
-                          }
+                          onChange={(e) => {
+                            if (isTrainingAxis(e.target.value))
+                              setAxis(e.target.value);
+                          }}
                         >
-                          <option value="step">Optimizer steps</option>
+                          <option value="step">{contract.step_unit}</option>
                           <option value="tokens">Tokens processed</option>
                           <option value="time">Elapsed seconds</option>
+                          {Object.keys(counters).map((name) => (
+                            <option key={name} value={`counter:${name}`}>
+                              {counterLabel(name)}
+                            </option>
+                          ))}
                         </select>
                       </label>
                       <label>
@@ -2728,6 +2793,12 @@ export function TrainingWorkspace({ project }: { project: Project }) {
                   <TrainingMessages key={detail.run.id} detail={detail} />
                   <FP16Status events={detail.events} />
                 </>
+              )}
+              {dashboard === "artifacts" && (
+                <TrainingArtifacts
+                  events={detail.events}
+                  artifactURL={artifactURL}
+                />
               )}
               {dashboard === "samples" && (
                 <GeneratedExamples key={detail.run.id} events={detail.events} />
@@ -2878,7 +2949,22 @@ export function TrainingWorkspace({ project }: { project: Project }) {
                     </div>
                     <button
                       className="primary"
-                      disabled={busy}
+                      disabled={
+                        busy ||
+                        Boolean(
+                          active &&
+                          customRun &&
+                          (scriptCapabilities.commands !== true ||
+                            scriptCapabilities.checkpoint !== true),
+                        )
+                      }
+                      title={
+                        active &&
+                        customRun &&
+                        scriptCapabilities.checkpoint !== true
+                          ? "The custom script has not declared checkpoint support."
+                          : undefined
+                      }
                       onClick={() => void task(() => command("snapshot"))}
                     >
                       Create snapshot
@@ -2989,7 +3075,7 @@ export function TrainingWorkspace({ project }: { project: Project }) {
                   file does not change this run.
                 </p>
                 <p>{bytes(detail.disk_bytes)} on disk</p>
-                <TrainingCounters events={detail.events} />
+                {!customRun && <TrainingCounters events={detail.events} />}
               </details>
               <button
                 onClick={() => {

@@ -1804,3 +1804,54 @@ html:is([data-theme="dark"], [data-theme="black"]) {
   line-height: 1.6;
   white-space: pre;
 }
+
+.training-table-scroll {
+  max-width: 100%;
+  max-height: 440px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  margin: 12px 0;
+}
+.training-table-scroll table {
+  border-collapse: collapse;
+  font-size: 13px;
+  min-width: 100%;
+}
+.training-table-scroll th,
+.training-table-scroll td {
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
+  min-width: 110px;
+  max-width: 360px;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.training-table-scroll th {
+  position: sticky;
+  top: 0;
+  background: var(--theme-raised);
+}
+.training-artifacts article > small {
+  display: block;
+  margin-top: 8px;
+}
+.training-named-counters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+  font-size: 13px;
+  margin: 12px 0;
+}
+.training-named-counters > div {
+  display: flex;
+  gap: 6px;
+}
+.training-named-counters dt {
+  color: var(--theme-muted);
+}
+.training-named-counters dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}

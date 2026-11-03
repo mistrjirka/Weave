@@ -5,6 +5,7 @@ GUIDE_PATHS = {
     "INSTALL.md": "docs/install.md",
     "TRAINING.md": "docs/training.md",
     "TRAINING_GUIDE.md": "docs/training-guide.md",
+    "CUSTOM_TRAINING.md": "docs/custom-training.md",
     "MCP.md": "docs/mcp.md",
     "DESIGN_ADVICE.md": "docs/design-advice.md",
     "ARCHITECTURE_AUDIT.md": "docs/reference-models.md",

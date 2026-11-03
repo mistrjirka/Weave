@@ -2,6 +2,8 @@
 
 This guide describes the optional helpers shipped beside every generated model. Your recipe is ordinary Python/PyTorch. You can use the hook-based Trainer, use only reporting, or write the entire loop yourself. No pip-installed Weave package is needed.
 
+Use **Trainer** for a hook-based forward/loss loop with managed optimization and validation. Choose **Custom Python** when you own the updates, such as RL or several optimizers. The [custom-loop guide](custom-training.md) covers reporting, checkpoints, task metrics, trajectory tables, background evaluation and DDP without adopting Trainer.
+
 ## What lives where
 
 | Location | Purpose | Who edits it |
@@ -15,13 +17,19 @@ This guide describes the optional helpers shipped beside every generated model. 
 | `weave_support/cache_identity.py` | Stable identities for your own cache implementation | Weave |
 | `weave_support/data_stream.py` | Optional packed stream with a restorable cursor | Weave |
 | `weave_support/weave_training.py` | Reporting for a custom loop | Weave |
+| `weave_support/custom_training.py` | Optional checkpoint/resume, launch settings and DDP helpers | Weave |
+| `weave_support/custom_evaluation.py` | Optional persistent evaluator for a user-owned callback | Weave |
+| `weave_support/AGENTS.md` | MCP documentation pointer for coding agents | Weave |
 | `weave_support/launch.json` | Generated launch/checkpoint context and explicit GUI compute/validation overrides | Weave |
+| `config.json` in a frozen run | Launch metadata; custom scripts can read it with `launch_settings()` | Weave |
 
 Save your stage to refresh its support files. Generated support can be inspected, but keep custom helpers outside that folder. Starting a run freezes another copy of the script, local helpers, graph, model and tokenizer. Editing the stage does not change that running copy. Cache files should live in a persistent location shared by stages/runs, rather than inside each frozen run directory.
 
 The browser shows the real server paths and selected Python/PyTorch versions. Use that interpreter or your own compatible environment. Install the frozen package's `weave_support/requirements.txt`. The cache helper uses NumPy and fast tokenizers; it does not depend on PyTorch or HTTP. Building caches uses POSIX file locks (Linux/macOS); coordinate shared-filesystem locking with your cluster administrator for multiple hosts. Reading a completed cache is independent of the builder lock.
 
 ## The execution flow
+
+With Trainer:
 
 ```text
 load generated Model → load tokenizer → get_dataloaders(tokenizer, config)
@@ -89,9 +97,11 @@ An unsized stream can end an epoch at StopIteration. The starter's WSD scheduler
 
 New scripts use warmup–stable–decay (WSD): linear warmup over the first 2% of optimizer updates, a constant `learning_rate` plateau, then linear decay to `min_learning_rate` over the final 20%. Edit `WARMUP_FRACTION`, `WSD_DECAY_FRACTION`, or `configure_scheduler` directly in `train.py`. Very short budgets may not have enough updates for every phase. WSD comes from the [MiniCPM training work](https://arxiv.org/abs/2404.06395); this default is a starting recipe, not an optimal schedule for every architecture. Existing scripts are not rewritten when the template changes.
 
-Open **Setup** to see and edit the effective devices, strategy, precision, validation and performance settings. The form reads literals and simple top-level constants from `TrainingConfig` without running Python; dynamic expressions and later mutations are marked as runtime-dependent. Changing a value stores the stage's launch preference. There is no script/default mode selector. Preferences are applied before worker startup and data hooks and recorded in the run's `weave_support/launch.json`; your Python source stays unchanged. Batch sizes and schedules remain owned by the script/data loader. **Monitor** shows the actual configuration reported by the worker.
+For Trainer scripts, open **Setup** to see and edit the effective devices, strategy, precision, validation and performance settings. The form reads literals and simple top-level constants from `TrainingConfig` without running Python; dynamic expressions and later mutations are marked as runtime-dependent. Changing a value stores the stage's launch preference. There is no script/default mode selector. Preferences are applied before worker startup and data hooks and recorded in the run's `weave_support/launch.json`; your Python source stays unchanged. Batch sizes and schedules remain owned by the script/data loader. **Monitor** shows the actual configuration reported by the worker.
 
-Split training currently requires FP32 and either complete manual placement or a matching tuning profile. Validation is independent: select **Background · keep training** and **CPU** to keep it off the training GPUs. Your data hook still needs to return a validation loader. Setup changes affect new launches; **Validation settings** in Monitor controls a running job. Exact resume still requires a compatible configuration; use a new stage from weights when changing the training topology.
+Custom Python scripts enable only the controls they explicitly declare with `WEAVE_SUPPORTED_SETTINGS` and consume with `launch_settings()`. Weave does not apply AMP, compilation or validation to an arbitrary loop. `run.configure()` reports what your script actually applied. See [GUI launch settings](custom-training.md#gui-launch-settings).
+
+Trainer split training currently requires FP32 and either complete manual placement or a matching tuning profile. Validation is independent: select **Background · keep training** and **CPU** to keep it off the training GPUs. Your data hook still needs to return a validation loader. Setup changes affect new launches; **Validation settings** in Monitor controls a running Trainer job. Exact resume still requires a compatible configuration; use a new stage from weights when changing the training topology.
 
 ### Data hook
 
@@ -255,7 +265,7 @@ Snapshots capture graph, code, checkpoint state, tokenizer and traces. They reco
 
 ## Evaluation and inference
 
-A background evaluator starts a fresh process, loads immutable checkpoint weights and invokes your hooks. Use `config.evaluation_only` to avoid constructing the training loader. Shared completed caches are reused; separate preparation streams prevent evaluator startup from replacing training progress. CPU evaluation uses FP32; sharing a training GPU competes for memory/compute. The run waits for final evaluation before marking itself complete. See [training operations](training.md) for placement and launch details.
+Trainer's background evaluator starts a process, loads immutable checkpoint weights and invokes your hooks. With worker reuse enabled, the process remains alive between evaluations. Use `config.evaluation_only` to avoid constructing the training loader. Shared completed caches are reused; separate preparation streams prevent evaluator startup from replacing training progress. CPU evaluation uses FP32; sharing a training GPU competes for memory/compute. The run waits for final evaluation before marking itself complete. See [training operations](training.md) for placement and launch details. A user-owned loop can instead use [AsyncEvaluator](custom-training.md#background-evaluation) with its own callback and metrics.
 
 Checkpoint chat/text completion uses the frozen model and tokenizer without importing train.py. A custom tokenizer mutation in your script may need to be represented in saved tokenizer settings or a chat-template override for inference. A base pretrained model is not automatically a chat model. Chat tool-call text is displayed, not executed.
 
@@ -274,6 +284,8 @@ with Run(optimizer=optimizer, total_steps=total_updates) as run:
 ```
 
 Optimizer updates and learning rates are tracked automatically. Add `run.sample(...)`, `run.checkpoint(path, metadata=...)` or `run.poll_commands()` where your custom loop supports those features. This reporting helper does not train, save weights or handle cooperative stop on your behalf. HTTP sends/polling use a background thread; records are also written locally. A missing browser/server does not hold up optimizer requests, although serialization, local disk writes, tensor-to-host metrics and checkpoints have costs.
+
+For richer custom runs, `run.configure()` defines task labels and a primary metric for checkpoint ranking; `run.log(..., counters={...})` adds chart axes such as episodes. `run.table()` and `run.artifact()` publish inspectable outputs. Optional `Checkpointer` saves registered components and RNG state, while `run.handle_commands()` calls your checkpoint callback at a safe boundary. Declare capabilities only after implementing the corresponding actions. See [Custom training loops](custom-training.md) for examples and resume requirements.
 
 ## Troubleshooting
 

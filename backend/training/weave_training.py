@@ -111,6 +111,8 @@ class Run:
         self._write_lock = threading.RLock()
         self._reporter = None
         self._hooks = []
+        self.counters = {}
+        self._capabilities = {}
 
     def __enter__(self):
         if self.rank == 0:
@@ -197,20 +199,41 @@ class Run:
                 self._stream = None
         return False
 
-    def emit(self, kind, payload):
+    def emit(
+        self,
+        kind,
+        payload,
+        *,
+        step=None,
+        tokens=None,
+        counters=None,
+        channel=None,
+        checkpoint=None,
+        policy_version=None,
+    ):
         if self.rank != 0:
             return
+        if step is not None and (type(step) is not int or step < 0):
+            raise ValueError("Event steps must be nonnegative integers")
+        if channel not in (None, "training", "evaluation", "system"):
+            raise ValueError("Unknown reporting channel")
         record = {
             "version": PROTOCOL_VERSION,
             "id": uuid.uuid4().hex,
             "time": time.time(),
             "kind": kind,
-            "step": self.step,
-            "tokens": self.tokens,
+            "step": self.step if step is None else step,
+            "tokens": self.tokens if tokens is None else tokens,
             "payload": payload,
         }
-        if self.channel is not None:
-            record["channel"] = self.channel
+        if channel is not None or self.channel is not None:
+            record["channel"] = channel if channel is not None else self.channel
+        if counters is not None or self.counters:
+            record["counters"] = dict(self.counters if counters is None else counters)
+        if checkpoint is not None:
+            record["checkpoint"] = str(checkpoint)
+        if policy_version is not None:
+            record["policy_version"] = str(policy_version)
         line = json.dumps(record, allow_nan=False)
         if len(line.encode()) > 1024 * 1024:
             raise ValueError(
@@ -222,8 +245,12 @@ class Run:
             self._stream.write(line + "\n")
             self._stream.flush()
 
-    def log(self, metrics, *, step, tokens=None):
+    def log(self, metrics, *, step, tokens=None, counters=None):
+        if type(step) is not int or step < 0:
+            raise ValueError("step must be a nonnegative integer")
         self.step = int(step)
+        if counters is not None:
+            self.set_counters(**counters)
         if tokens is not None:
             self.tokens = int(tokens)
         clean = {}
@@ -287,7 +314,7 @@ class Run:
 
         def report(current, args, kwargs):
             nonlocal updates
-            updates += 1
+            updates = self.step + 1
             self._optimizer_updates += 1
             self.step = updates
             if (
@@ -367,7 +394,84 @@ class Run:
         return commands
 
     def capabilities(self, **capabilities):
-        self.emit("capabilities", capabilities)
+        if any(type(value) is not bool for value in capabilities.values()):
+            raise ValueError("Capabilities must be explicit booleans")
+        self._capabilities.update(capabilities)
+        self.emit("capabilities", dict(self._capabilities))
+
+    def configure(
+        self,
+        values,
+        *,
+        metrics=None,
+        primary_metric=None,
+        step_unit="optimizer updates",
+        headline_metrics=None,
+    ):
+        """Report applied settings and presentation; never applies training settings."""
+        from .run_contract import reporting_contract
+
+        contract = reporting_contract(
+            metrics or {}, primary_metric, step_unit, headline_metrics
+        )
+        configuration = {**values, "reporting": contract}
+        json.dumps(configuration, allow_nan=False)
+        self.emit("configuration", configuration)
+
+    def set_counters(self, **counters):
+        """Named cumulative counters, independent of optimizer hook tracking."""
+        if len(self.counters.keys() | counters.keys()) > 32:
+            raise ValueError("Report at most 32 named counters")
+        for name, value in counters.items():
+            if not isinstance(name, str) or not name or len(name) > 80:
+                raise ValueError("Counter names need 1–80 characters")
+            if type(value) is not int or value < 0:
+                raise ValueError("Counters must be nonnegative integers")
+        self.counters.update(counters)
+
+    def artifact(self, path, *, name=None, metadata=None):
+        """Register a completed local file; remote reporting does not upload it."""
+        path = Path(path).resolve()
+        relative = path.relative_to(self.directory)
+        if not path.is_file():
+            raise ValueError("Publish a completed file inside the run directory")
+        payload = {
+            "path": str(relative),
+            "name": name or path.name,
+            "bytes": path.stat().st_size,
+            "sha256": file_hash(path),
+            "metadata": metadata or {},
+        }
+        self.emit("artifact", payload)
+        return path
+
+    def table(self, name, rows, *, columns=None, metadata=None):
+        """Stream JSON rows to an artifact; embed only a small preview in events."""
+        from .run_contract import write_table
+
+        if self.rank != 0:
+            return None
+        payload = write_table(self.directory, name, rows, columns, metadata)
+        self.emit("table", payload)
+        return self.directory / payload["path"]
+
+    def handle_commands(self, checkpoint_fn, *, commands=None):
+        """Save at a user-chosen safe boundary, acknowledge requests, return stop.
+
+        checkpoint_fn(snapshot_requests=[...]) must publish its completed file.
+        In DDP all ranks must call this with DistributedContext.poll_commands().
+        """
+        commands = self.poll_commands() if commands is None else commands
+        pending = [item for item in commands if item["kind"] in ("stop", "snapshot")]
+        if not pending:
+            return False
+        checkpoint_fn(snapshot_requests=[item["id"] for item in pending])
+        for item in pending:
+            self.emit("command_ack", {"id": item["id"], "kind": item["kind"]})
+        stopped = any(item["kind"] == "stop" for item in pending)
+        if stopped:
+            self.emit("stopped", {"reason": "Cooperative stop after checkpoint"})
+        return stopped
 
 
 def instrumentation_warnings(source):
@@ -419,6 +523,18 @@ def instrumentation_warnings(source):
         for node in ast.walk(tree)
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
     }
+    if "handle_commands" in methods:
+        methods.add("poll_commands")
+    if (
+        any(
+            isinstance(node, ast.ImportFrom)
+            and node.module in ("weave_support.custom_training", "custom_training")
+            and any(alias.name == "Checkpointer" for alias in node.names)
+            for node in ast.walk(tree)
+        )
+        and "save" in methods
+    ):
+        methods.add("checkpoint")
     expected = {
         "log": "No loss or metric reporting found. Use run.log_loss(loss) with Run(optimizer=...), or run.log().",
         "sample": "No generated-sample reporting found.",

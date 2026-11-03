@@ -1,3 +1,8 @@
+import {
+  runContract,
+  counterLabel,
+  type TrainingAxis,
+} from "./trainingContract";
 import { useState } from "react";
 import type { CSSProperties } from "react";
 import type { TrainingEvent } from "./trainingApi";
@@ -17,11 +22,17 @@ export function TrainingChart({
   events: TrainingEvent[];
   comparison?: TrainingEvent[];
   metric: string;
-  axis: "step" | "tokens" | "time";
+  axis: TrainingAxis;
   smooth: boolean;
 }) {
   const [hover, setHover] = useState<number | null>(null);
-  const presentation = metricPresentation(metric);
+  const contract = runContract(events);
+  const presentation = metricPresentation(metric, contract);
+  const axisLabel = axis.startsWith("counter:")
+    ? counterLabel(axis.slice(8))
+    : axis === "step"
+      ? contract.step_unit
+      : axis;
   const chartStyle: CSSProperties & { "--chart-color": string } = {
     "--chart-color": presentation.color,
   };
@@ -36,10 +47,18 @@ export function TrainingChart({
         !Number.isFinite(value)
       )
         return [];
+      const x = axis.startsWith("counter:")
+        ? event.counters?.[axis.slice(8)]
+        : axis === "time"
+          ? event.time - start
+          : axis === "tokens"
+            ? event.tokens
+            : event.step;
+      if (typeof x !== "number" || !Number.isFinite(x)) return [];
       average = average === undefined ? value : average * 0.8 + value * 0.2;
       return [
         {
-          x: axis === "time" ? event.time - start : event[axis],
+          x,
           y: smooth ? average : value,
           raw: value,
           step: event.step,
@@ -93,7 +112,7 @@ export function TrainingChart({
     x1 = Math.max(x0 + 1, ...all.map((p) => p.x));
   const minimum = Math.min(...all.map((p) => p.y));
   const maximum = Math.max(...all.map((p) => p.y));
-  const [y0, y1] = metricDomain(metric, minimum, maximum);
+  const [y0, y1] = metricDomain(metric, minimum, maximum, contract);
   const tickDigits = Math.min(
     8,
     Math.max(
@@ -128,14 +147,14 @@ export function TrainingChart({
         <strong title={metric}>{presentation.label}</strong>
         <span>
           {active
-            ? `${formatMetric(active.raw)} · update ${formatMetric(active.step)}`
+            ? `${formatMetric(active.raw)} · ${formatMetric(active.step)} ${contract.step_unit}`
             : "Comparison"}
         </span>
       </figcaption>
       <svg
         viewBox="0 0 550 180"
         role="img"
-        aria-label={`${metric} by ${axis}. ${current.length} reported points.`}
+        aria-label={`${metric} by ${axisLabel}. ${current.length} reported points.`}
         onPointerMove={(event) => {
           const r = event.currentTarget.getBoundingClientRect();
           setHover(
@@ -187,7 +206,7 @@ export function TrainingChart({
           <thead>
             <tr>
               <th>Step</th>
-              <th>{axis}</th>
+              <th>{axisLabel}</th>
               <th>Raw value</th>
             </tr>
           </thead>

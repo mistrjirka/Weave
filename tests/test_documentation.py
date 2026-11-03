@@ -43,6 +43,13 @@ def test_exported_authoring_guide_is_self_contained(tmp_path):
     assert "docs/training.md#host-wide-gpu-performance-tuning" in guide
     assert "(training.md" not in guide
     assert (tmp_path / "example_cached_jsonl.py").is_file()
+    assert (tmp_path / "custom-training.md").is_file()
+    assert (
+        'read_weave_doc(guide="CUSTOM_TRAINING.md")'
+        in (tmp_path / "AGENTS.md").read_text()
+    )
+    assert (tmp_path / "custom_training.py").is_file()
+    assert (tmp_path / "custom_evaluation.py").is_file()
 
 
 def test_local_documentation_links_resolve():

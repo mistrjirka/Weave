@@ -1,3 +1,4 @@
+import { runContract } from "./trainingContract";
 import type { RunDetail } from "./trainingApi";
 import { formatMetric, metricPresentation } from "./trainingMetrics";
 
@@ -9,11 +10,29 @@ const headlineMetrics = [
 ] as const;
 
 export function RunOverview({ detail }: { detail: RunDetail }) {
+  const contract = runContract(detail.events);
+  const reported = [
+    ...new Set(
+      detail.events
+        .filter((event) => event.kind === "metrics")
+        .flatMap((event) => Object.keys(event.payload)),
+    ),
+  ];
+  const headlines =
+    contract.headline_metrics ??
+    (detail.run.recipe === "custom"
+      ? [
+          ...new Set([
+            ...(contract.primary_metric ? [contract.primary_metric] : []),
+            ...reported,
+          ]),
+        ].slice(0, 4)
+      : headlineMetrics);
   const hasMetrics = detail.events.some((event) => event.kind === "metrics");
   if (!hasMetrics) return null;
   return (
     <dl className="training-overview" aria-label="Latest training metrics">
-      {headlineMetrics.map((metric) => {
+      {headlines.map((metric) => {
         const event = detail.events
           .filter(
             (item) =>
@@ -25,12 +44,12 @@ export function RunOverview({ detail }: { detail: RunDetail }) {
         return (
           typeof value === "number" && (
             <div key={metric}>
-              <dt>{metricPresentation(metric).label}</dt>
+              <dt>{metricPresentation(metric, contract).label}</dt>
               <dd title={typeof value === "number" ? String(value) : undefined}>
                 {typeof value === "number" ? formatMetric(value) : "Pending"}
                 <small>
                   {event
-                    ? `Update ${event.step.toLocaleString()}`
+                    ? `${event.step.toLocaleString()} ${contract.step_unit}`
                     : metric === "eval/loss"
                       ? "Waiting for evaluation"
                       : "Waiting for metrics"}

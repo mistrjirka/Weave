@@ -1,7 +1,12 @@
 import type { RunDetail } from "./trainingApi";
 
 export function ValidationStatus({ events }: { events: RunDetail["events"] }) {
-  const latest = events.filter((event) => event.kind === "evaluation").at(-1);
+  const latest = events
+    .filter(
+      (event) =>
+        event.kind === "evaluation" || event.kind === "evaluation_status",
+    )
+    .at(-1);
   const metric = events
     .filter(
       (event) =>
@@ -35,10 +40,10 @@ export function ValidationStatus({ events }: { events: RunDetail["events"] }) {
       {latest ? (
         <p>
           Background validation: {String(latest.payload.state)} · checkpoint
-          update {String(latest.payload.checkpoint_step)} ·{" "}
+          update {String(latest.payload.checkpoint_step ?? latest.step)} ·{" "}
           {latest.payload.device === "cpu"
             ? "CPU"
-            : `GPU ${String(latest.payload.device)}`}
+            : `GPU ${String(latest.payload.device).replace("cuda:", "")}`}
         </p>
       ) : typeof interval === "number" && !metric ? (
         <p>

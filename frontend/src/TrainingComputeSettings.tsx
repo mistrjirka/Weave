@@ -13,6 +13,7 @@ const previewSchema = z.object({
   config: trainingConfigSchema,
   unresolved: z.array(z.string()),
   error: z.string().nullable(),
+  supported: z.array(z.string()).nullable().optional(),
 });
 const computeKeys = ["strategy", "devices", "precision", "placement"] as const;
 const performanceKeys = [
@@ -74,7 +75,8 @@ export function useStageSettings(
     preview && preview.stageId === stage?.id && preview.script === stage?.script
       ? preview.value
       : null;
-  if (!stage || !current) return { config: null, unresolved: [], error };
+  if (!stage || !current)
+    return { config: null, unresolved: [], error, supported: null };
   // Reflect changes immediately, while the debounced preview request catches up.
   const config = {
     ...stage.config,
@@ -95,6 +97,7 @@ export function useStageSettings(
   return {
     config,
     unresolved: current.unresolved,
+    supported: current.supported ?? null,
     error: error || current.error || "",
   };
 }
@@ -125,17 +128,43 @@ export function TrainingComputeSettings({
   unresolved,
   error,
   onChange,
+  supported = null,
 }: {
   config: TrainingConfig | null;
   gpus: TrainingGPU[];
   model: ModelPlacement | null;
   codeFirst: boolean;
+  supported?: string[] | null;
   unresolved: string[];
   error: string;
   onChange: (patch: Partial<TrainingConfig>) => void;
 }) {
   if (!config)
     return <p role="status">{error || "Reading training settings…"}</p>;
+  const accepts = (field: string) =>
+    supported === null || supported.includes(field);
+  if (supported?.length === 0)
+    return (
+      <section aria-label="Custom runtime settings">
+        <h3>Script-managed training</h3>
+        <p className="training-field-note">
+          This custom script owns its devices, precision and evaluation. Weave
+          reports the applied settings when the script starts.
+        </p>
+        <p className="training-field-note">
+          To enable supported GUI controls, read launch_settings() in Python and
+          declare WEAVE_SUPPORTED_SETTINGS. See the{" "}
+          <a
+            href="https://github.com/mistrjirka/Weave/blob/main/docs/custom-training.md"
+            target="_blank"
+            rel="noreferrer"
+          >
+            custom training guide
+          </a>
+          .
+        </p>
+      </section>
+    );
   function compute(patch: Partial<TrainingConfig>) {
     if (!config) return;
     onChange({
@@ -191,7 +220,10 @@ export function TrainingComputeSettings({
             </h3>
             <p>Choose where the model trains.</p>
           </header>
-          <fieldset className="training-device-options">
+          <fieldset
+            className="training-device-options"
+            disabled={!accepts("devices")}
+          >
             <legend>Choose CPU or GPUs</legend>
             <label className="training-device-option">
               <input
@@ -266,6 +298,7 @@ export function TrainingComputeSettings({
               GPU strategy
               <select
                 aria-label="GPU strategy"
+                disabled={!accepts("strategy")}
                 value={unknown.has("strategy") ? "" : config.strategy}
                 onChange={(event) => {
                   const strategy = z
@@ -308,7 +341,8 @@ export function TrainingComputeSettings({
                 >
                   Split model
                 </option>
-                {(!codeFirst || config.strategy === "train_eval") && (
+                {((!codeFirst && supported === null) ||
+                  config.strategy === "train_eval") && (
                   <option value="train_eval">
                     Training GPU + evaluation GPU
                   </option>
@@ -319,6 +353,7 @@ export function TrainingComputeSettings({
               Precision
               <select
                 aria-label="Precision"
+                disabled={!accepts("precision")}
                 value={unknown.has("precision") ? "" : config.precision}
                 onChange={(event) =>
                   compute({
@@ -406,7 +441,10 @@ export function TrainingComputeSettings({
               Validation execution
               <select
                 aria-label="Validation execution"
-                disabled={!codeFirst}
+                disabled={
+                  !accepts("evaluation_mode") ||
+                  (!codeFirst && supported === null)
+                }
                 value={
                   unknown.has("async_evaluation") ? "" : config.evaluation_mode
                 }
@@ -439,8 +477,9 @@ export function TrainingComputeSettings({
                     : "training"
                 }
                 disabled={
-                  config.evaluation_mode !== "async" &&
-                  config.strategy !== "train_eval"
+                  !accepts("evaluation_device") ||
+                  (config.evaluation_mode !== "async" &&
+                    config.strategy !== "train_eval")
                 }
                 onChange={(event) =>
                   onChange({
@@ -459,14 +498,18 @@ export function TrainingComputeSettings({
                 {unknown.has("evaluation_device") && (
                   <option value="">Calculated at runtime</option>
                 )}
-                <option value="cpu" disabled={!codeFirst}>
+                <option value="cpu" disabled={!codeFirst && supported === null}>
                   CPU
                 </option>
                 {gpus.map((gpu) => (
                   <option
                     key={gpu.uuid}
                     value={gpu.index}
-                    disabled={!codeFirst && config.devices.includes(gpu.index)}
+                    disabled={
+                      !codeFirst &&
+                      supported === null &&
+                      config.devices.includes(gpu.index)
+                    }
                   >
                     GPU {gpu.index} · {gpu.name}
                   </option>
@@ -475,9 +518,11 @@ export function TrainingComputeSettings({
             </label>
           </div>
           <p className="training-field-note">
-            {config.evaluation_mode === "async"
-              ? "One background worker evaluates checkpoints. Newer pending checkpoints replace older ones."
-              : "Training waits for each validation pass, using the same device."}
+            {supported !== null
+              ? "Your Python script implements evaluation. The optional AsyncEvaluator runs one immutable snapshot at a time."
+              : config.evaluation_mode === "async"
+                ? "One background worker evaluates checkpoints. Newer pending checkpoints replace older ones."
+                : "Training waits for each validation pass, using the same device."}
           </p>
           {config.evaluation_mode === "async" &&
             typeof config.evaluation_device === "number" &&
@@ -488,9 +533,11 @@ export function TrainingComputeSettings({
               </p>
             )}
           <p className="training-field-note">
-            {codeFirst
-              ? "Validation frequency and batches are defined in the Python script. Live changes are available in Monitor."
-              : "This legacy recipe validates at checkpoint intervals. Select Training GPU + evaluation GPU for background validation."}
+            {supported !== null
+              ? "Only declared settings are passed to your evaluation code. Custom live controls must be implemented by the script."
+              : codeFirst
+                ? "Validation frequency and batches are defined in the Python script. Live changes are available in Monitor."
+                : "This legacy recipe validates at checkpoint intervals. Select Training GPU + evaluation GPU for background validation."}
           </p>
         </section>
       </div>
@@ -503,7 +550,9 @@ export function TrainingComputeSettings({
               <select
                 aria-label="Compilation"
                 value={unknown.has("compile_mode") ? "" : config.compile_mode}
-                disabled={config.strategy === "split"}
+                disabled={
+                  !accepts("compile_mode") || config.strategy === "split"
+                }
                 onChange={(event) =>
                   performance({
                     compile_mode: z
@@ -536,6 +585,7 @@ export function TrainingComputeSettings({
               Profile updates (0 disables capture)
               <input
                 aria-label="Profile updates (0 disables capture)"
+                disabled={!accepts("profile_steps")}
                 type="number"
                 min={0}
                 max={100}
@@ -555,7 +605,7 @@ export function TrainingComputeSettings({
             <input
               type="checkbox"
               checked={config.fused_optimizer}
-              disabled={!config.devices.length}
+              disabled={!accepts("fused_optimizer") || !config.devices.length}
               onChange={(event) =>
                 performance({ fused_optimizer: event.target.checked })
               }
@@ -569,6 +619,7 @@ export function TrainingComputeSettings({
         <label className="training-inline-check">
           <input
             type="checkbox"
+            disabled={supported !== null}
             checked={config.use_gpu_tuning}
             onChange={(event) =>
               onChange({ use_gpu_tuning: event.target.checked })

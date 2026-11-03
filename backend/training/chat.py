@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field, FiniteFloat, JsonValue, field_validator
 from .layout import PACKAGE
 from .service import events, inside
 from .weave_training import atomic_json
+from .run_contract import latest_contract
 from ..core import validate_project
 from ..installation import read_settings
 from .chat_protocol import (
@@ -208,20 +209,41 @@ def support_directory(directory):
 
 def checkpoint_catalog(directory):
     records = events(directory)
+    contract = latest_contract(records)
+    primary = contract["primary_metric"]
+    metric_names = list(
+        dict.fromkeys(
+            [
+                "eval/tool_exact_match",
+                "eval/exact_match",
+                "eval/tool_accuracy",
+                *contract["metrics"],
+            ]
+        )
+    )
     losses = {}
     task_metrics = {}
+    checkpoint_metrics = {}
     for record in records:
         value = (
             record["payload"].get("eval/loss") if record["kind"] == "metrics" else None
         )
-        if type(value) in (int, float) and math.isfinite(value):
+        reference = record.get("checkpoint")
+        if type(value) in (int, float) and math.isfinite(value) and not reference:
             losses[record["step"]] = float(value)
         if record["kind"] == "metrics":
-            for key in (
-                "eval/tool_exact_match",
-                "eval/exact_match",
-                "eval/tool_accuracy",
-            ):
+            if reference:
+                checkpoint_metrics.setdefault(
+                    (reference, record.get("policy_version")), {}
+                ).update(
+                    {
+                        key: float(score)
+                        for key, score in record["payload"].items()
+                        if type(score) in (int, float) and math.isfinite(score)
+                    }
+                )
+                continue
+            for key in metric_names:
                 score = record["payload"].get(key)
                 if type(score) in (int, float) and math.isfinite(score):
                     task_metrics.setdefault(record["step"], {})[key] = float(score)
@@ -239,13 +261,17 @@ def checkpoint_catalog(directory):
             )
         except ValueError:
             available = False
+        matched = checkpoint_metrics.get((path, payload.get("sha256")), {})
         checkpoints[path] = {
             "path": path,
             "step": record["step"],
             "sha256": payload.get("sha256", ""),
-            "validation_loss": losses.get(record["step"]),
+            "validation_loss": matched.get("eval/loss", losses.get(record["step"])),
             "available": available,
-            "task_metrics": task_metrics.get(record["step"], {}),
+            "task_metrics": {
+                **task_metrics.get(record["step"], {}),
+                **{key: value for key, value in matched.items() if key in metric_names},
+            },
         }
     choices = sorted(checkpoints.values(), key=lambda item: item["step"], reverse=True)
     local = [item for item in choices if item["available"]]
@@ -260,15 +286,28 @@ def checkpoint_catalog(directory):
         if scored
         else "Latest saved checkpoint; none has a matching validation-loss score."
     )
-    for metric in ("eval/tool_exact_match", "eval/exact_match", "eval/tool_accuracy"):
+    for metric in (
+        [primary]
+        if primary
+        else ["eval/tool_exact_match", "eval/exact_match", "eval/tool_accuracy"]
+    ):
         candidates = [item for item in local if metric in item["task_metrics"]]
         if candidates:
+            direction = contract["metrics"].get(metric, {}).get("direction", "max")
             best = max(
                 candidates,
-                key=lambda item: (item["task_metrics"][metric], item["step"]),
+                key=lambda item: (
+                    (1 if direction == "max" else -1) * item["task_metrics"][metric],
+                    item["step"],
+                ),
             )
-            reason = f"Highest {metric} measured at this checkpoint. Unscored checkpoints are not ranked by task quality."
+            reason = f"{'Highest' if direction == 'max' else 'Lowest'} {metric} measured at this checkpoint. Unscored checkpoints are not ranked by task quality."
             break
+        if primary:
+            best = next(iter(local), None)
+            reason = (
+                f"Latest saved checkpoint; none has a matching {primary} score yet."
+            )
     problem = None
     support = support_directory(directory)
     try:

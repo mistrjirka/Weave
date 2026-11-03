@@ -105,6 +105,9 @@ export const eventSchema = z.object({
   tokens: z.number(),
   payload: z.record(z.string(), z.unknown()),
   channel: z.string().optional(),
+  counters: z.record(z.string(), z.number().int().nonnegative()).optional(),
+  checkpoint: z.string().nullable().optional(),
+  policy_version: z.string().nullable().optional(),
 });
 export type TrainingEvent = z.infer<typeof eventSchema>;
 const gpuSchema = z.object({
@@ -197,6 +200,7 @@ export const detailSchema = z.object({
       applied_command_id: z.string().nullable(),
     })
     .optional(),
+  script_capabilities: z.record(z.string(), z.boolean()).optional(),
   run: runSchema,
   status: z.object({
     state: z.string(),

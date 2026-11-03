@@ -176,7 +176,11 @@ def main():
                                 request["id"],
                             )
                             completed_commands.add(request["id"])
-                if config["strategy"] == "train_eval" and not code_first:
+                if (
+                    config["strategy"] == "train_eval"
+                    and not code_first
+                    and config["recipe"] != "custom"
+                ):
                     if evaluation and evaluation.poll() is not None:
                         if evaluation.returncode:
                             reporter.warning(

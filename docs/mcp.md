@@ -115,6 +115,11 @@ Session-login endpoints, scoped training-report ingestion and live SSE transport
 
 The index is the resource `weave://docs/index`; individual guides use `weave://guides/TRAINING_GUIDE.md`. `read_weave_doc` accepts both historical guide IDs and exact installed paths such as `docs/training-guide.md`, with line ranges for long guides.
 
+For user-owned training and RL loops, read `CUSTOM_TRAINING.md` (or
+`docs/custom-training.md`). It covers launch settings, checkpoints/resume,
+task metrics, artifacts, evaluation and distributed helpers. Stage exports also
+include these guides offline and an `AGENTS.md` pointing agents to the MCP docs.
+
 - Connection refused: start Weave, check the published port, and use an address reachable from the MCP client.
 - Module not found: use absolute `.venv/bin/python` and checkout `PYTHONPATH`/`cwd` in a stdio configuration.
 - Training 401: provide the caller's training access code as shown above.

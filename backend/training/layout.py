@@ -28,6 +28,9 @@ MANAGED_MODULES = {
     "preparation",
     "performance",
     "evaluation_worker",
+    "run_contract",
+    "custom_training",
+    "custom_evaluation",
 }
 
 
@@ -150,7 +153,8 @@ def write_support(directory, bundle):
     generated.extend(write_helpers(package))
     requirements = package / "requirements.txt"
     requirements.write_text(
-        requirements.read_text() + "jsonschema>=4,<5\npyarrow>=18,<27\nnumpy>=1.26,<3\nsetuptools>=70\n"
+        requirements.read_text()
+        + "jsonschema>=4,<5\npyarrow>=18,<27\nnumpy>=1.26,<3\nsetuptools>=70\n"
     )
     return generated
 
@@ -173,6 +177,9 @@ def write_helpers(package):
         "preparation.py",
         "performance.py",
         "evaluation_worker.py",
+        "run_contract.py",
+        "custom_training.py",
+        "custom_evaluation.py",
     ):
         source = rewrite_imports((HERE / name).read_text(), ".")
         target = package / name
@@ -181,7 +188,9 @@ def write_helpers(package):
         generated.append(PACKAGE + "/" + name)
     # Ship the authoring guide and optional complete example with offline exports.
     for source_path, name in (
+        (HERE.parent.parent / "AGENTS.md", "AGENTS.md"),
         (HERE.parent.parent / GUIDE_PATHS["TRAINING_GUIDE.md"], "TRAINING_GUIDE.md"),
+        (HERE.parent.parent / GUIDE_PATHS["CUSTOM_TRAINING.md"], "custom-training.md"),
         (
             HERE.parent.parent / "examples" / "train_cached_jsonl.py",
             "example_cached_jsonl.py",

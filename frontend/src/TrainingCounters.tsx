@@ -1,7 +1,31 @@
+import { namedCounters, counterLabel } from "./trainingContract";
 import type { TrainingEvent } from "./trainingApi";
 import { formatMetric } from "./trainingMetrics";
 
-export function TrainingCounters({ events }: { events: TrainingEvent[] }) {
+export function TrainingCounters({
+  events,
+  compact = false,
+}: {
+  events: TrainingEvent[];
+  compact?: boolean;
+}) {
+  const named = namedCounters(events);
+  if (Object.keys(named).length)
+    return (
+      <dl
+        className={compact ? "training-named-counters" : "training-counters"}
+        aria-label="Training work counters"
+      >
+        {Object.entries(named)
+          .slice(0, compact ? 6 : 32)
+          .map(([name, value]) => (
+            <div key={name}>
+              <dt>{counterLabel(name)}</dt>
+              <dd>{formatMetric(value)}</dd>
+            </div>
+          ))}
+      </dl>
+    );
   const progress = events
     .filter((event) => event.kind === "progress")
     .at(-1)?.payload;

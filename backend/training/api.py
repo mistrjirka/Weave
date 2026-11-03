@@ -231,7 +231,7 @@ Steps, learning rates and progress are automatic. This helper has no HTTP
 code for you to maintain and needs no pip-installed Weave package.
 The executable demonstration below only reports events; replace it with
 actual training code when your model/data/optimizer are ready.
-"""\nfrom weave_training import Run\n\nwith Run() as run:\n    run.capabilities(metrics=True, samples=False, checkpoint=False, commands=True)\n    # Replace this demonstration with your own PyTorch training loop.\n    for step in range(10):\n        commands = run.poll_commands()\n        if any(command["kind"] == "stop" for command in commands):\n            break\n        run.log({"example/progress": step}, step=step)\n        run.progress(completed=step + 1, total=10)\n    run.warning("This starter reported events only. Add your model, loss, optimizer, and checkpoint save logic.")\n'''
+"""\nfrom weave_training import Run\n\nWEAVE_SUPPORTED_SETTINGS = ()  # Add fields only after your loop consumes launch_settings().\n\nwith Run() as run:\n    run.capabilities(metrics=True, samples=False, checkpoint=False, commands=True, resume=False)\n    run.configure({}, metrics={"example/progress": {"label": "Example progress"}}, step_unit="updates")\n    # Replace this demonstration with your own PyTorch training loop.\n    for step in range(10):\n        commands = run.poll_commands()\n        if any(command["kind"] == "stop" for command in commands):\n            break\n        run.log({"example/progress": step}, step=step)\n        run.progress(completed=step + 1, total=10)\n    run.warning("This starter reported events only. Add your model, loss, optimizer, and checkpoint save logic.")\n'''
         return {
             "config": TrainingConfig().model_dump(),
             "scripts": {
@@ -507,6 +507,14 @@ actual training code when your model/data/optimizer are ready.
         directory = run_directory(run_id)
         service.complete_snapshots(directory)
         records = events(directory, limit=10000)
+        retained_ids = {event["id"] for event in records}
+        metadata = [
+            event
+            for kind in ("configuration", "capabilities")
+            for event in events(directory, kind=kind, channel="training", limit=1)
+            if event["id"] not in retained_ids
+        ]
+        records = metadata + records
         metrics = [event for event in records if event["kind"] == "metrics"]
         capabilities = [
             event["payload"]
@@ -519,7 +527,9 @@ actual training code when your model/data/optimizer are ready.
             diagnostics.append(
                 "No training metrics received yet. The script may be preparing data or missing a logging hook."
             )
-        if not any(e["kind"] == "sample" for e in records):
+        if not any(e["kind"] == "sample" for e in records) and (
+            not capabilities or capabilities[-1].get("samples") is not False
+        ):
             configuration = next(
                 (
                     e["payload"]
@@ -580,6 +590,11 @@ actual training code when your model/data/optimizer are ready.
 
         return {
             "run": json.loads((directory / "run.json").read_text()),
+            "script_capabilities": {
+                key: value
+                for key, value in (capabilities[-1] if capabilities else {}).items()
+                if type(value) is bool
+            },
             "validation_control": validation_state(directory, records, status),
             "restart_context": service.restart_context(run_id),
             "revision": (
@@ -593,7 +608,7 @@ actual training code when your model/data/optimizer are ready.
                 else None
             ),
             "status": status,
-            "events": records[-10000:],
+            "events": records,
             "hardware": hw,
             "logs": tail(output)
             + "\n".join(
@@ -821,7 +836,10 @@ actual training code when your model/data/optimizer are ready.
                 422,
                 "Force-stop terminal jobs from their terminal. Weave does not own that process.",
             )
-        return service.command(run_id, body.kind, body.include_data)
+        try:
+            return service.command(run_id, body.kind, body.include_data)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc))
 
     @api.get("/runs/{run_id}/artifact", dependencies=[Depends(authenticated)])
     def artifact(run_id: str, path: str):

@@ -139,7 +139,9 @@ def inside(directory, relative):
     return path
 
 
-def events(directory, *, limit=None, kind=None, after=None, max_bytes=None):
+def events(
+    directory, *, limit=None, kind=None, after=None, max_bytes=None, channel=None
+):
     """Incremental SQLite index over durable script-owned JSONL event streams."""
     import sqlite3
 
@@ -233,6 +235,9 @@ def events(directory, *, limit=None, kind=None, after=None, max_bytes=None):
         if kind:
             filters.append("kind=?")
             values.append(kind)
+        if channel is not None:
+            filters.append("json_extract(document, '$.channel')=?")
+            values.append(channel)
         if after is not None:
             previous = connection.execute(
                 "SELECT seq FROM events WHERE id=?", (after,)
@@ -631,7 +636,8 @@ class TrainingService:
                     (HERE / "trainer.py").read_text(), "."
                 )
                 if (
-                    file_hash(previous_trainer) not in VALIDATION_UPGRADE_FROM
+                    code_first
+                    and file_hash(previous_trainer) not in VALIDATION_UPGRADE_FROM
                     and previous_trainer.read_text() != current_trainer
                 ):
                     raise ValueError(
@@ -646,14 +652,21 @@ class TrainingService:
                     shutil.copytree(frozen_source / PACKAGE, directory / PACKAGE)
                     # The upgraded trainer imports this new helper even when
                     # keeping the model/runtime from an older frozen run.
-                    for helper in ("performance.py", "evaluation_worker.py"):
+                    for helper in (
+                        (
+                            "performance.py",
+                            "evaluation_worker.py",
+                            "weave_training.py",
+                            "run_contract.py",
+                        )
+                        if code_first
+                        else ()
+                    ):
                         (directory / PACKAGE / helper).write_text(
                             rewrite_imports((HERE / helper).read_text(), ".")
                         )
-                    (directory / PACKAGE / "weave_training.py").write_text(
-                        (HERE / "weave_training.py").read_text()
-                    )
-                (directory / PACKAGE / "trainer.py").write_text(current_trainer)
+                if code_first:
+                    (directory / PACKAGE / "trainer.py").write_text(current_trainer)
                 if restart_record and restart_record["script_source"] == "edited":
                     extras = list(restart_record["user_files"])
                     for name in extras:
@@ -1059,9 +1072,28 @@ class TrainingService:
         with self.controls_lock:
             requested_source = self.run_dir(run_id)
             info = json.loads((requested_source / "run.json").read_text())
-            if info["execution"] != "local" or not info.get("code_first"):
+            context = self.restart_context(run_id)
+            capability_source = (
+                self.run_dir(context["source_run"]) if context else requested_source
+            )
+            script_caps = next(
+                (
+                    event["payload"]
+                    for event in reversed(
+                        events(capability_source, kind="capabilities")
+                    )
+                    if event.get("channel") == "training"
+                ),
+                {},
+            )
+            custom_resume = (
+                info.get("recipe") == "custom" and script_caps.get("resume") is True
+            )
+            if info["execution"] != "local" or not (
+                info.get("code_first") or custom_resume
+            ):
                 raise ValueError(
-                    "Checkpoint restart currently requires a local hook-Trainer run."
+                    "Checkpoint restart requires a local Trainer run or a custom script declaring resume support."
                 )
             if self.status(requested_source)["state"] not in (
                 "stopped",
@@ -1080,7 +1112,6 @@ class TrainingService:
                 # attempt must never prevent fixing the script and trying again.
                 if self.status(child)["state"] not in ("failed", "killed", "stopped"):
                     return json.loads((child / "run.json").read_text())
-            context = self.restart_context(run_id)
             if not context or not context["exact_resume"]:
                 raise ValueError(
                     "No checkpoint with restorable optimizer and data-loader state is available. Create a new stage from weights instead."
@@ -1101,7 +1132,7 @@ class TrainingService:
                     "parent_checkpoint": context["checkpoint"],
                 }
             )
-            if validation_settings is None:
+            if validation_settings is None and not custom_resume:
                 from .run_controls import validation_state
 
                 validation_settings = validation_state(
@@ -1194,6 +1225,35 @@ class TrainingService:
 
     def command(self, run_id, kind, include_data=False, *, settings=None):
         directory = self.run_dir(run_id)
+        remote = (directory / "reporting-status.json").exists() and json.loads(
+            (directory / "reporting-status.json").read_text()
+        ).get("remote")
+        active = self.status(directory)["state"] in (
+            "starting",
+            "running",
+            "preparing",
+            "evaluating",
+        )
+        capability = next(
+            iter(events(directory, kind="capabilities", channel="training", limit=1)),
+            {},
+        ).get("payload", {})
+        if active and kind == "stop" and capability.get("commands") is False:
+            raise ValueError(
+                "This script has not declared cooperative stop support. Use Force stop for a locally launched process."
+            )
+        if (
+            active
+            and kind == "snapshot"
+            and not remote
+            and (
+                capability.get("commands") is False
+                or capability.get("checkpoint") is False
+            )
+        ):
+            raise ValueError(
+                "This script has not declared checkpoint/snapshot handling. Stop the run before exporting its recorded files."
+            )
         identifier = uuid.uuid4().hex
         command = {
             "id": identifier,
@@ -1204,9 +1264,6 @@ class TrainingService:
         if settings is not None:
             command["settings"] = settings
         atomic_json(directory / "commands" / (identifier + ".json"), command)
-        remote = (directory / "reporting-status.json").exists() and json.loads(
-            (directory / "reporting-status.json").read_text()
-        ).get("remote")
         if kind == "snapshot" and (
             remote
             or self.status(directory).get("state")

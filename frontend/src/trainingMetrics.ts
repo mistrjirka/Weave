@@ -1,3 +1,4 @@
+import type { RunContract } from "./trainingContract";
 const compactUnits = [
   [1e12, "T"],
   [1e9, "B"],
@@ -52,7 +53,27 @@ const metricDefinitions: Record<string, MetricPresentation> = {
     color: "var(--metric-orange, #c2410c)",
   },
 };
-export function metricPresentation(metric: string): MetricPresentation {
+export function metricPresentation(
+  metric: string,
+  contract?: RunContract,
+): MetricPresentation {
+  const custom = contract?.metrics[metric];
+  if (custom)
+    return {
+      ...metricPresentation(metric),
+      ...custom,
+      color: [
+        "var(--metric-blue, #2563eb)",
+        "var(--metric-purple, #9333ea)",
+        "var(--metric-teal, #0d9488)",
+        "var(--metric-orange, #c2410c)",
+      ][
+        [...metric].reduce(
+          (hash, letter) => (hash * 31 + letter.charCodeAt(0)) >>> 0,
+          0,
+        ) % 4
+      ],
+    };
   const utilization = /^gpu\/(\d+)\/utilization$/.exec(metric);
   if (utilization)
     return {
@@ -82,8 +103,9 @@ export function metricDomain(
   metric: string,
   minimum: number,
   maximum: number,
+  contract?: RunContract,
 ): [number, number] {
-  const presentation = metricPresentation(metric);
+  const presentation = metricPresentation(metric, contract);
   const padding =
     maximum === minimum
       ? Math.max(Math.abs(minimum) * 0.03, 1e-6)
@@ -97,6 +119,8 @@ export function metricDomain(
 export function metricsForDisplay(
   events: readonly { kind: string; payload: Record<string, unknown> }[],
   codeFirst: boolean,
+  contract?: RunContract,
+  custom = false,
 ): string[] {
   const reported = events
     .filter((event) => event.kind === "metrics")
@@ -107,6 +131,14 @@ export function metricsForDisplay(
         )
         .map(([key]) => key),
     );
+  if (custom)
+    return [
+      ...new Set([
+        ...(contract?.primary_metric ? [contract.primary_metric] : []),
+        ...Object.keys(contract?.metrics ?? {}),
+        ...reported,
+      ]),
+    ];
   const learningRate =
     ["lr/group_0", "train/learning_rate"].find((key) =>
       reported.includes(key),

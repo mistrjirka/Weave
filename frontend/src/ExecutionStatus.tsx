@@ -6,6 +6,15 @@ export function ExecutionStatus({ detail }: { detail: RunDetail }) {
       (event) => event.kind === "configuration" && event.channel === "training",
     )
     .at(-1)?.payload;
+  if (
+    detail.run.recipe === "custom" &&
+    (!actual || !Array.isArray(actual.devices))
+  )
+    return (
+      <p className="training-muted" aria-label="Effective training devices">
+        The custom script has not reported its applied device settings.
+      </p>
+    );
   const devices = Array.isArray(actual?.devices)
     ? actual.devices.filter(
         (device): device is number => typeof device === "number",
