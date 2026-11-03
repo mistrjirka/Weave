@@ -1,4 +1,5 @@
 import "./training.css";
+import "./trainingSetup.css";
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { z } from "zod";
 import { createPortal } from "react-dom";
@@ -9,7 +10,6 @@ import {
   ArrowDown,
   ArrowUp,
   Copy,
-  Cpu,
   Download,
   Play,
   Pause,
@@ -37,6 +37,11 @@ import {
 import { TrainingCounters } from "./TrainingCounters";
 import { TrainingChart } from "./TrainingChart";
 import { TrainingETA } from "./TrainingETA";
+import {
+  TrainingComputeSettings,
+  useStageSettings,
+  computeSummary,
+} from "./TrainingComputeSettings";
 import { metricsForDisplay } from "./trainingMetrics";
 import { CheckpointChat } from "./chat/CheckpointChat";
 import { newId, copyText, Dialog } from "./ui";
@@ -47,6 +52,7 @@ const PythonEditor = lazy(() =>
 import {
   capabilitySchema,
   detailSchema,
+  eventSchema,
   hardwareSchema,
   inspectTrainingModel,
   planSchema,
@@ -59,6 +65,7 @@ import {
   trainingURL,
   type RunDetail,
   type TrainingConfig,
+  type TrainingEvent,
   type TrainingGPU,
   type TrainingPlan,
   type TrainingStage,
@@ -162,28 +169,19 @@ export function TrainingWorkspace({ project }: { project: Project }) {
     }
   }, [detail?.run.id]);
   const [loaded, setLoaded] = useState(false);
-  const [editor, setEditor] = useState<"settings" | "script">("script");
-  const [setupOpen, setSetupOpen] = useState(true);
+  const initialPanel = useRef(
+    new URLSearchParams(location.search).get("training_panel"),
+  );
+  const [editor, setEditor] = useState<"settings" | "script">(() =>
+    initialPanel.current === "script" ? "script" : "settings",
+  );
+  const [setupOpen, setSetupOpen] = useState(
+    () =>
+      initialPanel.current === "setup" ||
+      initialPanel.current === "script" ||
+      (!runId && initialPanel.current !== "monitor"),
+  );
   const [historyOpen, setHistoryOpen] = useState(false);
-  useEffect(() => {
-    if (runId) {
-      setSetupOpen(false);
-      setHistoryOpen(false);
-    }
-  }, [runId]);
-  useEffect(() => {
-    if (detail?.status.state === "stopped") {
-      setSetupOpen(true);
-      setEditor("settings");
-    }
-  }, [detail?.run.id, detail?.status.state]);
-  const [deviceRequest, setDeviceRequest] = useState(0);
-  const deviceHeadingRef = useRef<HTMLHeadingElement>(null);
-  useEffect(() => {
-    if (!deviceRequest) return;
-    deviceHeadingRef.current?.scrollIntoView({ block: "start" });
-    deviceHeadingRef.current?.focus({ preventScroll: true });
-  }, [deviceRequest]);
   const [dashboard, setDashboard] = useState<
     "metrics" | "samples" | "hardware" | "logs" | "checkpoints" | "chat"
   >("metrics");
@@ -210,9 +208,55 @@ export function TrainingWorkspace({ project }: { project: Project }) {
   const datasetRef = useRef<HTMLInputElement>(null);
   const stage = plan.stages.find((s) => s.id === selected) ?? plan.stages[0];
   const config = stage?.config;
+  const savedStage = stage ? savedStages[stage.id] : undefined;
+  const stageDirty =
+    !!stage &&
+    (!savedStage ||
+      stage.name !== savedStage.name ||
+      stage.script !== savedStage.script ||
+      JSON.stringify(stage.config) !== JSON.stringify(savedStage.config));
   const codeFirst = /^\s*from\s+weave_support\.trainer\s+import\b/m.test(
     stage?.script ?? "",
   );
+  const effective = useStageSettings(stage, codeFirst);
+  const [parentCheckpoints, setParentCheckpoints] = useState<TrainingEvent[]>(
+    [],
+  );
+  const [parentCheckpointError, setParentCheckpointError] = useState("");
+  useEffect(() => {
+    setParentCheckpoints([]);
+    setParentCheckpointError("");
+    if (
+      !capabilities?.authenticated ||
+      !config?.parent_run ||
+      config.start_mode === "random"
+    )
+      return;
+    const controller = new AbortController();
+    const parent = config.parent_run;
+    void (async () => {
+      let after = "";
+      let records: TrainingEvent[] = [];
+      while (!controller.signal.aborted) {
+        const page = await trainingRequest(
+          `/runs/${encodeURIComponent(parent)}/event-records?kind=checkpoint&limit=100&after=${encodeURIComponent(after)}`,
+          z.object({ events: z.array(eventSchema), next_after: z.string() }),
+          undefined,
+          undefined,
+          controller.signal,
+        );
+        if (!page.events.length) break;
+        records = [...records, ...page.events].slice(-500);
+        after = page.next_after;
+      }
+      if (!controller.signal.aborted) setParentCheckpoints(records);
+    })().catch((failure: unknown) => {
+      if (!controller.signal.aborted)
+        setParentCheckpointError(message(failure));
+    });
+    return () => controller.abort();
+  }, [capabilities?.authenticated, config?.parent_run, config?.start_mode]);
+
   useEffect(() => {
     if (detail?.reporting_url)
       setReportBaseURL(
@@ -220,10 +264,14 @@ export function TrainingWorkspace({ project }: { project: Project }) {
       );
   }, [detail?.run.id, detail?.reporting_url]);
   useEffect(() => {
-    if (!initialViewReady && loaded && (!runId || detail || monitorError)) {
+    if (
+      !initialViewReady &&
+      loaded &&
+      (setupOpen || !runId || detail || monitorError)
+    ) {
       setInitialViewReady(true);
     }
-  }, [initialViewReady, loaded, runId, detail, monitorError]);
+  }, [initialViewReady, loaded, setupOpen, runId, detail, monitorError]);
   const cacheKey = `weave:training:${project.id}`;
 
   useEffect(() => {
@@ -328,8 +376,10 @@ export function TrainingWorkspace({ project }: { project: Project }) {
           setMonitorError("");
           const replacement = preferredTrainingRun(r, selected);
           setRunId(replacement?.id ?? "");
-          if (replacement) setSelected(replacement.stage_id);
-          else setSetupOpen(true);
+          if (replacement) {
+            setSelected(replacement.stage_id);
+            if (!initialPanel.current) setSetupOpen(false);
+          } else setSetupOpen(true);
           if (runId) {
             setNotice(
               replacement
@@ -371,8 +421,16 @@ export function TrainingWorkspace({ project }: { project: Project }) {
     }
   }, [plan, cacheKey, loaded]);
   useEffect(() => {
-    trainingURL({ stage: stage?.id, run: runId || undefined });
-  }, [stage?.id, runId]);
+    trainingURL({
+      stage: stage?.id,
+      run: runId || undefined,
+      training_panel: setupOpen
+        ? editor === "script"
+          ? "script"
+          : "setup"
+        : "monitor",
+    });
+  }, [stage?.id, runId, setupOpen, editor]);
   useEffect(() => {
     setPreview(null);
   }, [
@@ -587,6 +645,7 @@ export function TrainingWorkspace({ project }: { project: Project }) {
   }
   function updateStage(patch: Partial<TrainingStage>) {
     if (!stage) return;
+    setNotice("");
     setPlan((current) => ({
       ...current,
       stages: current.stages.map((s) =>
@@ -594,11 +653,23 @@ export function TrainingWorkspace({ project }: { project: Project }) {
       ),
     }));
   }
+  function patchSettings(patch: Partial<TrainingConfig>) {
+    if (!stage) return;
+    setNotice("");
+    setPlan((current) => ({
+      ...current,
+      stages: current.stages.map((item) =>
+        item.id === stage.id
+          ? { ...item, config: { ...item.config, ...patch } }
+          : item,
+      ),
+    }));
+  }
   function setting<K extends keyof TrainingConfig>(
     key: K,
     value: TrainingConfig[K],
   ) {
-    if (config) updateStage({ config: { ...config, [key]: value } });
+    if (config) patchSettings({ [key]: value });
   }
   function applySavedStage(saved: TrainingStage, submitted: TrainingStage) {
     savedStagesRef.current = { ...savedStagesRef.current, [saved.id]: saved };
@@ -688,9 +759,11 @@ export function TrainingWorkspace({ project }: { project: Project }) {
     };
     setPlan((current) => ({ ...current, stages: [...current.stages, clean] }));
     setSelected(clean.id);
+    setRunId("");
+    setDetail(null);
     setSetupOpen(true);
     setHistoryOpen(false);
-    setEditor("script");
+    setEditor("settings");
     void task(() => saveStageFile(clean));
   }
   function addStage(duplicate = false) {
@@ -767,6 +840,7 @@ export function TrainingWorkspace({ project }: { project: Project }) {
         run,
         ...current.filter((item) => item.id !== run.id),
       ]);
+      setSelected(run.stage_id);
       setRunId(run.id);
       setSetupOpen(false);
       setNotice(
@@ -856,6 +930,19 @@ export function TrainingWorkspace({ project }: { project: Project }) {
             running.has(run.status?.state ?? ""),
         )
       : undefined;
+  function selectStage(id: string) {
+    setSelected(id);
+    const latest = preferredTrainingRun(
+      runs.filter((run) => run.stage_id === id),
+      id,
+    );
+    setRunId(latest?.id ?? "");
+    setDetail(null);
+    setSetupOpen(true);
+    setEditor("settings");
+    setNotice("");
+    setLaunchError("");
+  }
   function selectRun(run: TrainingRun) {
     setDetail(null);
     setRunId(run.id);
@@ -880,6 +967,7 @@ export function TrainingWorkspace({ project }: { project: Project }) {
     <button
       className="training-history-button"
       aria-label="Stages and run history"
+      disabled={launchPhase !== "idle"}
       aria-haspopup="dialog"
       onClick={() => setHistoryOpen(true)}
     >
@@ -965,7 +1053,65 @@ export function TrainingWorkspace({ project }: { project: Project }) {
 
   return (
     <section className="training-workspace" aria-label="Training workspace">
-      {otherActiveRun && launchPhase === "idle" && (
+      {stage && (
+        <div className="training-workflow-bar">
+          <label className="training-stage-picker">
+            <span>Stage</span>
+            <select
+              aria-label="Training stage"
+              disabled={launchPhase !== "idle"}
+              value={stage.id}
+              onChange={(event) => selectStage(event.target.value)}
+            >
+              {plan.stages.map((item, index) => (
+                <option key={item.id} value={item.id}>
+                  {index + 1}. {item.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <nav className="training-workflow-tabs" aria-label="Stage workspace">
+            <button
+              disabled={launchPhase !== "idle"}
+              aria-pressed={setupOpen && editor === "settings"}
+              onClick={() => {
+                setSetupOpen(true);
+                setEditor("settings");
+              }}
+            >
+              Setup
+            </button>
+            <button
+              disabled={launchPhase !== "idle"}
+              aria-pressed={setupOpen && editor === "script"}
+              onClick={() => {
+                setSetupOpen(true);
+                setEditor("script");
+              }}
+            >
+              Python script
+            </button>
+            <button
+              aria-label="Monitor"
+              aria-pressed={!setupOpen}
+              disabled={!runId || launchPhase !== "idle"}
+              onClick={() => setSetupOpen(false)}
+            >
+              Monitor
+              {detail && (
+                <span
+                  className="training-status-dot"
+                  data-state={detail.status.state}
+                  aria-hidden="true"
+                  title={detail.status.state}
+                />
+              )}
+            </button>
+          </nav>
+          {historyButton}
+        </div>
+      )}
+      {!setupOpen && otherActiveRun && launchPhase === "idle" && (
         <div
           className="training-notice training-current-run-notice"
           role="status"
@@ -993,7 +1139,8 @@ export function TrainingWorkspace({ project }: { project: Project }) {
           </a>
         </div>
       )}
-      {detail?.status.state === "stopped" &&
+      {!setupOpen &&
+        detail?.status.state === "stopped" &&
         !otherActiveRun &&
         launchPhase === "idle" && (
           <p
@@ -1028,7 +1175,7 @@ export function TrainingWorkspace({ project }: { project: Project }) {
           </details>
         </div>
       )}
-      {monitorError && (
+      {!setupOpen && monitorError && (
         <p className="training-alert" role="alert">
           Live updates interrupted; displayed run data may be stale. Training
           can continue independently. Retrying automatically. {monitorError}
@@ -1117,9 +1264,8 @@ export function TrainingWorkspace({ project }: { project: Project }) {
                     className={`training-stage ${stage?.id === item.id ? "is-active" : ""}`}
                     key={item.id}
                     onClick={() => {
-                      setSelected(item.id);
+                      selectStage(item.id);
                       setHistoryOpen(false);
-                      setSetupOpen(true);
                     }}
                   >
                     <span>{index + 1}</span>
@@ -1135,6 +1281,18 @@ export function TrainingWorkspace({ project }: { project: Project }) {
                     </div>
                   </button>
                 ))}
+                {stage && (
+                  <label className="training-stage-rename">
+                    Stage name
+                    <input
+                      aria-label="Stage name"
+                      value={stage.name}
+                      onChange={(event) =>
+                        updateStage({ name: event.target.value })
+                      }
+                    />
+                  </label>
+                )}
                 <div className="training-stage-tools">
                   <button
                     aria-label="Duplicate stage"
@@ -1168,7 +1326,10 @@ export function TrainingWorkspace({ project }: { project: Project }) {
                           (s) => s.id !== stage?.id,
                         ),
                       }));
-                      setSelected("");
+                      selectStage(
+                        plan.stages.find((item) => item.id !== stage?.id)?.id ??
+                          "",
+                      );
                     }}
                   >
                     <Trash2 aria-hidden="true" size={14} />
@@ -1181,13 +1342,19 @@ export function TrainingWorkspace({ project }: { project: Project }) {
                         ...current,
                         stages: [...current.stages, deletedStage],
                       }));
-                      setSelected(deletedStage.id);
+                      selectStage(deletedStage.id);
                       setDeletedStage(null);
                     }}
                   >
                     Undo stage deletion
                   </button>
                 )}
+                <button
+                  disabled={busy || !loaded}
+                  onClick={() => void task(savePlan)}
+                >
+                  <Save size={14} aria-hidden="true" /> Save stage order
+                </button>
                 <h3>Run history</h3>
                 {!runs.length && (
                   <p className="training-muted">
@@ -1199,10 +1366,7 @@ export function TrainingWorkspace({ project }: { project: Project }) {
                     key={run.id}
                     className={`training-run ${runId === run.id ? "is-active" : ""}`}
                     onClick={() => {
-                      setRunId(run.id);
-                      if (plan.stages.some((item) => item.id === run.stage_id))
-                        setSelected(run.stage_id);
-                      setHistoryOpen(false);
+                      selectRun(run);
                     }}
                   >
                     <strong>{run.name}</strong>
@@ -1227,1373 +1391,826 @@ export function TrainingWorkspace({ project }: { project: Project }) {
       <div className="training-layout">
         <div className="training-main">
           {stage && config ? (
-            <section className="training-card training-setup-card">
-              <button
-                className="training-setup-devices"
-                title="Configure devices for the next training launch. Use Validation settings on the run below for live changes."
-                onClick={() => {
-                  setSetupOpen(true);
-                  setEditor("settings");
-                  setDeviceRequest((value) => value + 1);
-                }}
+            setupOpen && (
+              <section
+                className="training-card training-setup-card"
+                aria-label="Stage setup"
               >
-                <Cpu aria-hidden="true" size={14} /> Training devices
-              </button>
-              <details
-                className="training-collapsible"
-                open={setupOpen}
-                onToggle={(event) => setSetupOpen(event.currentTarget.open)}
-              >
-                <summary>Stage setup · {stage.name}</summary>
-                <div className="training-section-heading">
-                  {!detail && historyButton}
-                  <input
-                    className="training-stage-name"
-                    aria-label="Stage name"
-                    value={stage.name}
-                    onChange={(e) => updateStage({ name: e.target.value })}
-                  />
-                  <div className="training-tabs">
-                    <button
-                      aria-pressed={editor === "settings"}
-                      onClick={() => setEditor("settings")}
-                    >
-                      {codeFirst ? "Launch settings" : "Preset settings"}
-                    </button>
-                    <button
-                      aria-pressed={editor === "script"}
-                      onClick={() => setEditor("script")}
-                    >
-                      Python script
-                    </button>
-                  </div>
-                </div>
-                {active && editor === "settings" && (
-                  <p className="training-muted">
-                    These launch settings apply to the next run. To change
-                    validation now, use <strong>Validation settings</strong>{" "}
-                    beside the running stage below.
+                {active && (
+                  <p className="training-next-run-note" role="status">
+                    These settings apply to the next run. Current training
+                    continues independently. Change live validation in Monitor.
                   </p>
                 )}
-                <details
-                  key={editor}
-                  open={editor === "script"}
-                  className="training-environment-details"
-                >
-                  <summary>
-                    Server files & Python environment
-                    {pythonEnvironment
-                      ? ` · Python ${pythonEnvironment.python_version}`
-                      : ""}
-                  </summary>
-                  <div className="training-server-files">
-                    <div>
-                      <strong>Editable files on the Weave server</strong>
-                      <small>
-                        These are server paths, not files on your browser’s
-                        computer. Open them in your SSH-connected VS Code. Edit
-                        train.py and your own helpers. Generated network code,
-                        tokenizer assets and trainer support are kept separately
-                        in weave_support/ and refreshed when you save.
-                      </small>
-                    </div>
-                    <div className="training-server-path">
-                      <span>Project folder</span>
-                      <code>
-                        {stage.project_path ??
-                          savedStages[stage.id]?.project_path ??
-                          "Creating project folder…"}
-                      </code>
-                    </div>
-                    <div className="training-server-path">
-                      <span>Generated model</span>
-                      <code>
-                        {stage.model_path ??
-                          savedStages[stage.id]?.model_path ??
-                          "Save the stage to generate weave_support/model.py"}
-                      </code>
-                    </div>
-                    <div className="training-server-path">
-                      <span>Python script</span>
-                      <code>
-                        {stage.script_path ??
-                          savedStages[stage.id]?.script_path ??
-                          "Creating server file…"}
-                      </code>
-                      <button
-                        aria-label="Copy Python script server path"
-                        disabled={
-                          !(
-                            stage.script_path ??
-                            savedStages[stage.id]?.script_path
-                          )
-                        }
-                        onClick={() =>
-                          void task(async () => {
-                            await copyText(
-                              stage.script_path ??
-                                savedStages[stage.id]?.script_path ??
-                                "",
-                            );
-                            setNotice("Server script path copied.");
-                          })
-                        }
-                      >
-                        Copy path
-                      </button>
-                    </div>
-                    {!codeFirst && (
-                      <div className="training-server-path">
-                        <span>Preset values</span>
-                        <code>
-                          {stage.config_path ??
-                            savedStages[stage.id]?.config_path ??
-                            "Creating config.json…"}
-                        </code>
-                        <button
-                          aria-label="Copy preset config server path"
-                          disabled={
-                            !(
-                              stage.config_path ??
-                              savedStages[stage.id]?.config_path
-                            )
-                          }
-                          onClick={() =>
-                            void task(async () => {
-                              await copyText(
-                                stage.config_path ??
-                                  savedStages[stage.id]?.config_path ??
-                                  "",
-                              );
-                              setNotice("Server config path copied.");
-                            })
-                          }
-                        >
-                          Copy path
-                        </button>
-                      </div>
-                    )}
-                    {savedStages[stage.id] && (
-                      <small>
-                        {stage.script === savedStages[stage.id].script &&
-                        JSON.stringify(config) ===
-                          JSON.stringify(savedStages[stage.id].config)
-                          ? "Browser matches the server files."
-                          : "Browser edits are not saved to the server yet."}
-                      </small>
-                    )}
-                    {savedStages[stage.id] &&
-                      ((stage.script_revision !==
-                        savedStages[stage.id].script_revision &&
-                        stage.script !== savedStages[stage.id].script) ||
-                        (stage.config_revision !==
-                          savedStages[stage.id].config_revision &&
-                          JSON.stringify(config) !==
-                            JSON.stringify(savedStages[stage.id].config))) && (
-                        <p className="training-alert" role="status">
-                          Files changed on the server while this browser has a
-                          draft. Reload the server files, or duplicate this
-                          stage to preserve your browser draft.
-                        </p>
-                      )}
-                    {stage.workspace_warning && (
-                      <p className="training-alert">
-                        {stage.workspace_warning}
-                      </p>
-                    )}
-                  </div>
-                  <div className="training-python-environment" role="status">
-                    {pythonEnvironment ? (
-                      <>
-                        <strong>
-                          Python {pythonEnvironment.python_version}
-                        </strong>
-                        <span>
-                          PyTorch{" "}
-                          {pythonEnvironment.torch_version ?? "not installed"} ·{" "}
-                          {pythonEnvironment.cuda_available
-                            ? `CUDA ${pythonEnvironment.cuda_version} · ${pythonEnvironment.device_count} GPU(s)`
-                            : "CPU environment"}
-                        </span>
-                        <code>{pythonEnvironment.executable}</code>
-                      </>
-                    ) : (
-                      <span>
-                        {environmentError ||
-                          "Detecting the selected server Python environment…"}
-                      </span>
-                    )}
-                  </div>
-                </details>
-                {editor === "script" ? (
-                  <>
-                    <p className="training-muted">
-                      {codeFirst
-                        ? "TrainingConfig, data loading, loss, optimizer and scheduler are defined in this Python file. Launch settings select the server environment and starting checkpoint."
-                        : "This Python file controls training. Legacy presets write config.json; your script decides which values to use."}{" "}
-                      Saving here writes the real server file. Clean files
-                      reload automatically after SSH edits.
-                    </p>
-                    <div className="training-script-toolbar">
-                      <button
-                        disabled={busy}
-                        onClick={() => void task(() => saveStageFile())}
-                      >
-                        <Save size={14} aria-hidden="true" />
-                        Save file
-                      </button>
-                      <button
-                        disabled={busy || !stage.script_path}
-                        onClick={() => void task(reloadStageFile)}
-                      >
-                        Reload server files
-                      </button>
-                      <CopyTrainingScript
-                        projectId={project.id}
-                        disabled={busy}
-                        onCopy={(script, source) => {
-                          updateStage({ script });
-                          setNotice(
-                            `Copied script from ${source} into the editor. Review it, then Save file.`,
-                          );
-                        }}
-                      />
-                      {!codeFirst && (
-                        <label>
-                          Insert reporting hook
-                          <select
-                            aria-label="Insert reporting hook"
-                            value=""
-                            onChange={(event) => {
-                              const snippet =
-                                reportingHooks[event.target.value];
-                              if (snippet)
-                                codeEditorRef.current?.insertSnippet(snippet);
-                            }}
-                          >
-                            <option value="">Choose a hook…</option>
-                            {Object.keys(reportingHooks).map((key) => (
-                              <option value={key} key={key}>
-                                {key}
-                              </option>
-                            ))}
-                          </select>
-                        </label>
-                      )}
-                      <small>Ctrl/Cmd+S save · Ctrl/Cmd+F find</small>
-                    </div>
-                    <Suspense
-                      fallback={<p role="status">Loading Python editor…</p>}
+                <div className="training-stage-body">
+                  {editor === "script" && (
+                    <details
+                      key={editor}
+                      className="training-environment-details"
                     >
-                      <PythonEditor
-                        key={stage.id}
-                        ref={codeEditorRef}
-                        value={stage.script}
-                        onChange={(script) => updateStage({ script })}
-                        onSave={() => void task(() => saveStageFile())}
-                      />
-                    </Suspense>
-                    <button
-                      onClick={() => {
-                        if (templates)
-                          createStage({
-                            id: newId(),
-                            name: `${stage.name} · fresh template`,
-                            config: structuredClone(config),
-                            script: templates.scripts[config.recipe],
-                          });
-                      }}
-                    >
-                      Open fresh template as another stage
-                    </button>
-                  </>
-                ) : (
-                  <>
-                    <p className="training-muted">
-                      {codeFirst
-                        ? "These settings apply to the next launch. Data, batches, loss, optimizer and learning-rate schedule stay in train.py."
-                        : "Optional starter values for legacy config.json recipes. Custom Python remains editable."}
-                    </p>
-                    <div className="training-form-grid">
-                      <label>
-                        Training recipe
-                        <select
-                          value={config.recipe}
-                          disabled={
-                            codeFirst &&
-                            !(
-                              templates &&
-                              Object.values(templates.scripts).includes(
-                                stage.script,
-                              )
-                            )
-                          }
-                          onChange={(e) => {
-                            const recipe = z
-                              .enum(["causal", "sft", "custom"])
-                              .parse(e.target.value);
-                            const pristine =
-                              templates &&
-                              Object.values(templates.scripts).includes(
-                                stage.script,
-                              );
-                            updateStage({
-                              config: { ...config, recipe },
-                              ...(pristine && templates
-                                ? { script: templates.scripts[recipe] }
-                                : {}),
-                            });
-                          }}
-                        >
-                          <option value="causal">
-                            Text pretraining · next-token prediction
-                          </option>
-                          <option value="sft">
-                            Chat / tool-call supervised fine-tuning
-                          </option>
-                          <option value="custom">Custom Python</option>
-                        </select>
-                        <small>
-                          {codeFirst &&
-                          !(
-                            templates &&
-                            Object.values(templates.scripts).includes(
-                              stage.script,
-                            )
-                          )
-                            ? "Your edited Python script defines the objective. Create a new stage to use another starter template."
-                            : "Select a starter template. Custom objectives are defined in Python."}
-                        </small>
-                      </label>
-                      <label>
-                        Starting state
-                        <select
-                          value={config.start_mode}
-                          onChange={(e) =>
-                            setting(
-                              "start_mode",
-                              z
-                                .enum(["random", "weights", "resume"])
-                                .parse(e.target.value),
-                            )
-                          }
-                        >
-                          <option value="random">Random initialization</option>
-                          <option value="weights">
-                            New stage from checkpoint weights
-                          </option>
-                          <option value="resume">
-                            Resume optimizer and training state
-                          </option>
-                        </select>
-                        <small>
-                          New stages reset the optimizer; resume continues its
-                          state.{" "}
-                          {codeFirst &&
-                            "Exact resume also requires a restorable data loader."}
-                        </small>
-                      </label>
-                    </div>
-                    {config.start_mode !== "random" && (
-                      <div className="training-form-grid">
-                        <label>
-                          Parent run
-                          <select
-                            value={config.parent_run ?? ""}
-                            onChange={(e) => {
-                              updateStage({
-                                config: {
-                                  ...config,
-                                  parent_run: e.target.value,
-                                  parent_checkpoint: null,
-                                },
-                              });
-                              setRunId(e.target.value);
-                            }}
-                          >
-                            <option value="">Select run…</option>
-                            {runs.map((run) => (
-                              <option value={run.id} key={run.id}>
-                                {run.name} ·{" "}
-                                {new Date(run.created).toLocaleString()}
-                              </option>
-                            ))}
-                          </select>
-                        </label>
-                        <label>
-                          Checkpoint path
-                          <input
-                            value={config.parent_checkpoint ?? ""}
-                            onChange={(e) =>
-                              setting("parent_checkpoint", e.target.value)
-                            }
-                            placeholder="Select a checkpoint below"
-                            list="training-checkpoint-paths"
-                          />
-                          <datalist id="training-checkpoint-paths">
-                            {checkpoints
-                              .filter((event) => !event.payload.remote)
-                              .map((event) => (
-                                <option
-                                  key={event.id}
-                                  value={String(event.payload.path)}
-                                />
-                              ))}
-                          </datalist>
+                      <summary>
+                        Server files & Python environment
+                        {pythonEnvironment
+                          ? ` · Python ${pythonEnvironment.python_version}`
+                          : ""}
+                      </summary>
+                      <div className="training-server-files">
+                        <div>
+                          <strong>Editable files on the Weave server</strong>
                           <small>
-                            Use “Continue from here” in checkpoint history to
-                            select it.
+                            These are server paths, not files on your browser’s
+                            computer. Open them in your SSH-connected VS Code.
+                            Edit train.py and your own helpers. Generated
+                            network code, tokenizer assets and trainer support
+                            are kept separately in weave_support/ and refreshed
+                            when you save.
                           </small>
-                        </label>
-                      </div>
-                    )}
-                    {!codeFirst && (
-                      <>
-                        <h3>Data</h3>
-                        <p className="training-muted">
-                          The tokenizer comes from your graph’s token input.{" "}
-                          <a
-                            href={`?model=${encodeURIComponent(project.id)}&node=${encodeURIComponent(project.graph.nodes.find((node) => node.data.kind === "input")?.id ?? "")}`}
-                          >
-                            Configure the input tokenizer in Architecture
-                          </a>
-                          .
-                        </p>
-                        <div className="training-form-grid">
-                          <label>
-                            Training dataset path on server
-                            <input
-                              value={config.dataset}
-                              placeholder="/path/to/train.jsonl"
-                              onChange={(e) =>
-                                setting("dataset", e.target.value)
-                              }
-                            />
-                            <small>
-                              Host path: TXT, JSONL, JSON, or Parquet.
-                              Pretokenized input_ids/labels also work.
-                            </small>
-                          </label>
-                          <label>
-                            Validation dataset path on server
-                            <input
-                              value={config.eval_dataset}
-                              placeholder="Optional held-out dataset"
-                              onChange={(e) =>
-                                setting("eval_dataset", e.target.value)
-                              }
-                            />
-                            <small>
-                              Use held-out data to track generalization.
-                            </small>
-                          </label>
                         </div>
-                        <input
-                          ref={datasetRef}
-                          hidden
-                          type="file"
-                          accept=".txt,.json,.jsonl,.parquet"
-                          onChange={(e) => {
-                            const file = e.target.files?.[0];
-                            if (!file) return;
-                            void task(async () => {
-                              const form = new FormData();
-                              form.append("file", file);
-                              const uploaded = await trainingRequest(
-                                "/datasets",
-                                z.object({
-                                  path: z.string(),
-                                  sha256: z.string(),
-                                  bytes: z.number(),
-                                }),
-                                form,
-                              );
-                              setting("dataset", uploaded.path);
-                              setNotice(
-                                `Dataset uploaded and fingerprinted: ${uploaded.sha256.slice(0, 12)}…`,
-                              );
-                            });
-                            e.target.value = "";
-                          }}
-                        />
-                        <button
-                          onClick={() => datasetRef.current?.click()}
-                          disabled={busy}
-                        >
-                          <Upload aria-hidden="true" size={14} />
-                          Upload training data
-                        </button>
-                        <button
-                          onClick={() =>
-                            void task(async () => {
-                              setPreview(
-                                await trainingRequest(
-                                  "/preview",
-                                  previewSchema,
-                                  {
-                                    project,
-                                    stage,
-                                  },
-                                ),
-                              );
-                            })
-                          }
-                          disabled={busy || !config.dataset}
-                        >
-                          Preview tokens & loss mask
-                        </button>
-                        {preview && (
-                          <div className="training-data-preview">
-                            <p>{preview.note}</p>
-                            {preview.records.map((row, index) => (
-                              <div key={index}>
-                                <small>
-                                  Record {index + 1}: {row.supervised_count}{" "}
-                                  supervised target tokens
-                                </small>
-                                <div>
-                                  {row.tokens.map((token, i) => (
-                                    <span
-                                      key={i}
-                                      className={
-                                        token.supervised ? "is-supervised" : ""
-                                      }
-                                      title={`Token ${token.id}: ${token.supervised ? "contributes to loss" : "ignored as target"}`}
-                                    >
-                                      {token.text}
-                                    </span>
-                                  ))}
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                        {config.recipe === "sft" && (
-                          <p className="training-muted">
-                            Use messages and optional tools schemas.
-                            Assistant-only training requires a chat template
-                            that supplies assistant token masks, or pretokenized
-                            labels with -100 on ignored tokens.
-                          </p>
-                        )}
-                      </>
-                    )}
-                    <h3
-                      ref={deviceHeadingRef}
-                      tabIndex={-1}
-                      className="training-device-heading"
-                    >
-                      Training devices and validation
-                    </h3>
-                    <div className="training-form-grid">
-                      <label>
-                        Run on
-                        <select
-                          value={config.execution}
-                          onChange={(e) =>
-                            setting(
-                              "execution",
-                              z
-                                .enum(["local", "monitor"])
-                                .parse(e.target.value),
-                            )
-                          }
-                        >
-                          <option value="local">
-                            Weave host · launch here
-                          </option>
-                          <option value="monitor">
-                            Terminal · prepare package and monitor
-                          </option>
-                        </select>
-                        <small>
-                          Launch yourself on this server or another computer;
-                          the reporting API sends progress back to Weave.
-                        </small>
-                      </label>
-                      <label>
-                        Python executable on server
-                        <input
-                          value={config.python}
-                          disabled={config.execution === "monitor"}
-                          onChange={(e) => setting("python", e.target.value)}
-                        />
-                        <small>
-                          {config.execution === "monitor"
-                            ? "Terminal launches use the Python environment you run the package with."
-                            : "Use a server environment with PyTorch and your training dependencies installed."}
-                        </small>
-                      </label>
-                      {codeFirst && (
-                        <label>
-                          Training device settings
-                          <select
-                            value={config.compute_mode}
-                            onChange={(e) =>
-                              setting(
-                                "compute_mode",
-                                z
-                                  .enum(["script", "override"])
-                                  .parse(e.target.value),
+                        <div className="training-server-path">
+                          <span>Project folder</span>
+                          <code>
+                            {stage.project_path ??
+                              savedStages[stage.id]?.project_path ??
+                              "Creating project folder…"}
+                          </code>
+                        </div>
+                        <div className="training-server-path">
+                          <span>Generated model</span>
+                          <code>
+                            {stage.model_path ??
+                              savedStages[stage.id]?.model_path ??
+                              "Save the stage to generate weave_support/model.py"}
+                          </code>
+                        </div>
+                        <div className="training-server-path">
+                          <span>Python script</span>
+                          <code>
+                            {stage.script_path ??
+                              savedStages[stage.id]?.script_path ??
+                              "Creating server file…"}
+                          </code>
+                          <button
+                            aria-label="Copy Python script server path"
+                            disabled={
+                              !(
+                                stage.script_path ??
+                                savedStages[stage.id]?.script_path
                               )
                             }
-                          >
-                            <option value="script">
-                              Use train.py settings
-                            </option>
-                            <option value="override">Use GUI overrides</option>
-                          </select>
-                          <small>
-                            Applies to the next launch. Your train.py stays
-                            unchanged, including its data loader and batch
-                            schedule.
-                          </small>
-                        </label>
-                      )}
-                      {(!codeFirst || config.compute_mode === "override") && (
-                        <>
-                          <label>
-                            GPU strategy
-                            <select
-                              value={config.strategy}
-                              onChange={(e) => {
-                                const strategy = z
-                                  .enum([
-                                    "single",
-                                    "ddp",
-                                    "split",
-                                    "train_eval",
-                                  ])
-                                  .parse(e.target.value);
-                                const devices =
-                                  strategy === "single" ||
-                                  strategy === "train_eval"
-                                    ? config.devices.slice(0, 1)
-                                    : config.devices.length >= 2
-                                      ? config.devices
-                                      : gpus
-                                          .slice(0, 2)
-                                          .map((gpu) => gpu.index);
-                                updateStage({
-                                  config: {
-                                    ...config,
-                                    strategy,
-                                    devices,
-                                    precision:
-                                      strategy === "split"
-                                        ? "fp32"
-                                        : config.precision,
-                                    evaluation_device:
-                                      strategy === "train_eval"
-                                        ? (gpus.find(
-                                            (gpu) =>
-                                              !devices.includes(gpu.index),
-                                          )?.index ?? null)
-                                        : config.evaluation_device,
-                                  },
-                                });
-                              }}
-                            >
-                              <option value="single">Single device</option>
-                              <option value="ddp" disabled={gpus.length < 2}>
-                                Data parallel · model copy on each GPU
-                              </option>
-                              <option
-                                value="split"
-                                disabled={
-                                  !model?.split_supported || gpus.length < 2
-                                }
-                              >
-                                Split model · top-level block placement
-                              </option>
-                              {!codeFirst && (
-                                <option
-                                  value="train_eval"
-                                  disabled={gpus.length < 2}
-                                >
-                                  Training GPU + evaluation GPU
-                                </option>
-                              )}
-                            </select>
-                            <small>
-                              {config.strategy === "ddp"
-                                ? "Improves throughput; each GPU must fit the full model and optimizer."
-                                : config.strategy === "split"
-                                  ? "Sequential model parallelism with gradient-preserving transfers. Keep shared weights on one GPU."
-                                  : "Choose CPU or an available GPU below."}
-                            </small>
-                          </label>
-                          <label>
-                            Precision
-                            <select
-                              value={config.precision}
-                              onChange={(e) =>
-                                setting(
-                                  "precision",
-                                  z
-                                    .enum(["fp32", "fp16", "bf16"])
-                                    .parse(e.target.value),
-                                )
-                              }
-                            >
-                              <option value="fp32">FP32</option>
-                              <option
-                                value="fp16"
-                                disabled={
-                                  !config.devices.length ||
-                                  config.strategy === "split"
-                                }
-                              >
-                                FP16 with gradient scaling
-                              </option>
-                              <option
-                                value="bf16"
-                                disabled={config.strategy === "split"}
-                              >
-                                BF16 · hardware checked at launch
-                              </option>
-                            </select>
-                          </label>
-                        </>
-                      )}
-                    </div>
-                    {codeFirst && config.compute_mode === "script" && (
-                      <details>
-                        <summary>
-                          Available GPUs · set devices in train.py
-                        </summary>
-                        {gpus.map((gpu) => (
-                          <p key={gpu.uuid}>
-                            GPU {gpu.index}: {gpu.name} ·{" "}
-                            {gpu.memory_total_mb === null
-                              ? "Memory unavailable"
-                              : `${(gpu.memory_total_mb / 1024).toFixed(1)} GB total`}
-                          </p>
-                        ))}
-                        {!gpus.length && (
-                          <p>No GPUs detected by the Weave host.</p>
-                        )}
-                      </details>
-                    )}
-                    {(!codeFirst || config.compute_mode === "override") && (
-                      <>
-                        <fieldset className="training-devices">
-                          <legend>Training devices</legend>
-                          <label>
-                            <input
-                              type="checkbox"
-                              checked={!config.devices.length}
-                              onChange={() =>
-                                updateStage({
-                                  config: {
-                                    ...config,
-                                    devices: [],
-                                    strategy: "single",
-                                    precision: "fp32",
-                                  },
-                                })
-                              }
-                            />
-                            CPU
-                          </label>
-                          {gpus.map((gpu) => (
-                            <label key={gpu.uuid}>
-                              <input
-                                type="checkbox"
-                                checked={config.devices.includes(gpu.index)}
-                                onChange={(e) => {
-                                  const devices = e.target.checked
-                                    ? config.strategy === "single" ||
-                                      config.strategy === "train_eval"
-                                      ? [gpu.index]
-                                      : [...config.devices, gpu.index]
-                                    : config.devices.filter(
-                                        (index) => index !== gpu.index,
-                                      );
-                                  updateStage({
-                                    config: {
-                                      ...config,
-                                      devices,
-                                      strategy:
-                                        devices.length < 2 &&
-                                        (config.strategy === "ddp" ||
-                                          config.strategy === "split")
-                                          ? "single"
-                                          : config.strategy,
-                                      precision: devices.length
-                                        ? config.precision
-                                        : "fp32",
-                                    },
-                                  });
-                                }}
-                              />
-                              <span>
-                                GPU {gpu.index} · {gpu.name}
-                                <small>
-                                  {gpu.memory_total_mb === null
-                                    ? "Memory unavailable"
-                                    : `${(gpu.memory_total_mb / 1024).toFixed(1)} GB total · ${((gpu.memory_used_mb ?? 0) / 1024).toFixed(1)} GB used`}
-                                </small>
-                              </span>
-                            </label>
-                          ))}
-                        </fieldset>
-                        {codeFirst && config.strategy === "ddp" && (
-                          <p className="training-muted">
-                            Each GPU runs a full model copy. Your data loader
-                            must shard data between ranks and provide matched
-                            update counts. Custom loaders still own batch sizes;
-                            saved unequal-batch tuning requires their explicit
-                            opt-in.
-                          </p>
-                        )}
-                        {config.strategy === "train_eval" && (
-                          <label>
-                            Evaluation GPU
-                            <select
-                              value={config.evaluation_device ?? ""}
-                              onChange={(e) =>
-                                setting(
-                                  "evaluation_device",
-                                  e.target.value === ""
-                                    ? null
-                                    : Number(e.target.value),
-                                )
-                              }
-                            >
-                              <option value="">Select a separate GPU…</option>
-                              {gpus.map((gpu) => (
-                                <option
-                                  key={gpu.index}
-                                  value={gpu.index}
-                                  disabled={config.devices.includes(gpu.index)}
-                                >
-                                  GPU {gpu.index} · {gpu.name}
-                                </option>
-                              ))}
-                            </select>
-                            <small>
-                              Evaluates completed checkpoints; the queue keeps
-                              the newest pending checkpoint.
-                            </small>
-                          </label>
-                        )}
-                        {config.strategy === "split" && (
-                          <div className="training-form-grid">
-                            {codeFirst && (
-                              <p className="training-muted">
-                                Leave every block unassigned to use a matching
-                                saved split profile, or assign every block
-                                manually. Split training currently requires
-                                FP32. DDP uses a full model copy on each GPU;
-                                split training divides the model's blocks.
-                              </p>
-                            )}
-                            {model?.modules.map((name) => (
-                              <label key={name}>
-                                {name}
-                                <select
-                                  value={config.placement[name] ?? ""}
-                                  onChange={(e) =>
-                                    setting(
-                                      "placement",
-                                      Object.fromEntries(
-                                        Object.entries({
-                                          ...config.placement,
-                                          [name]:
-                                            e.target.value === ""
-                                              ? undefined
-                                              : Number(e.target.value),
-                                        }).filter(
-                                          (entry): entry is [string, number] =>
-                                            entry[1] !== undefined,
-                                        ),
-                                      ),
-                                    )
-                                  }
-                                >
-                                  <option value="">Assign GPU…</option>
-                                  {config.devices.map((index) => (
-                                    <option key={index} value={index}>
-                                      GPU {index}
-                                    </option>
-                                  ))}
-                                </select>
-                              </label>
-                            ))}
-                          </div>
-                        )}
-                        {!model?.split_supported &&
-                          model?.split_reasons.map((reason) => (
-                            <p className="training-muted" key={reason}>
-                              Split placement: {reason}
-                            </p>
-                          ))}
-                      </>
-                    )}
-                    {codeFirst && (
-                      <div className="training-form-grid">
-                        <label>
-                          Validation execution
-                          <select
-                            value={config.evaluation_mode}
-                            onChange={(e) =>
-                              updateStage({
-                                config: {
-                                  ...config,
-                                  evaluation_mode: z
-                                    .enum(["script", "inline", "async"])
-                                    .parse(e.target.value),
-                                  evaluation_device:
-                                    config.evaluation_device ?? "cpu",
-                                },
+                            onClick={() =>
+                              void task(async () => {
+                                await copyText(
+                                  stage.script_path ??
+                                    savedStages[stage.id]?.script_path ??
+                                    "",
+                                );
+                                setNotice("Server script path copied.");
                               })
                             }
                           >
-                            <option value="script">
-                              Use train.py settings
-                            </option>
-                            <option value="inline">
-                              Inline · pause for validation
-                            </option>
-                            <option value="async">
-                              Asynchronous · continue training
-                            </option>
-                          </select>
-                          <small>
-                            A launch override; your Python script stays
-                            unchanged. Background validation keeps one running
-                            job and the newest pending checkpoint.
-                          </small>
-                        </label>
-                        <label>
-                          Validation device
-                          <select
-                            value={
-                              config.evaluation_mode === "async"
-                                ? (config.evaluation_device ?? "cpu")
-                                : config.evaluation_mode
-                            }
-                            disabled={config.evaluation_mode !== "async"}
-                            onChange={(e) =>
-                              setting(
-                                "evaluation_device",
-                                e.target.value === "cpu"
-                                  ? "cpu"
-                                  : Number(e.target.value),
-                              )
-                            }
-                          >
-                            {config.evaluation_mode !== "async" && (
-                              <option value={config.evaluation_mode}>
-                                {config.evaluation_mode === "script"
-                                  ? "Defined in train.py"
-                                  : "Training device"}
-                              </option>
-                            )}
-                            <option value="cpu">CPU</option>
-                            {gpus.map((gpu) => (
-                              <option key={gpu.uuid} value={gpu.index}>
-                                GPU {gpu.index} · {gpu.name}
-                              </option>
-                            ))}
-                          </select>
-                          <small>
-                            Select a separate GPU to avoid competing with
-                            training. CPU validation uses FP32. Inline
-                            validation uses the training device. Saving
-                            checkpoint weights still briefly uses the training
-                            process.
-                          </small>
-                        </label>
-                      </div>
-                    )}
-                    {codeFirst && (
-                      <details>
-                        <summary>Execution and profiling (advanced)</summary>
-                        <div className="training-form-grid">
-                          <label>
-                            Performance settings
-                            <select
-                              aria-label="Performance settings"
-                              value={config.performance_mode}
-                              onChange={(event) =>
-                                setting(
-                                  "performance_mode",
-                                  z
-                                    .enum(["script", "override"])
-                                    .parse(event.target.value),
-                                )
-                              }
-                            >
-                              <option value="script">
-                                Use train.py settings
-                              </option>
-                              <option value="override">
-                                Override for this launch
-                              </option>
-                            </select>
-                          </label>
-                          <label>
-                            Compilation
-                            <select
-                              aria-label="Compilation"
-                              value={
-                                config.performance_mode === "script"
-                                  ? "script"
-                                  : config.compile_mode
-                              }
-                              disabled={config.performance_mode !== "override"}
-                              onChange={(event) =>
-                                setting(
-                                  "compile_mode",
-                                  z
-                                    .enum([
-                                      "off",
-                                      "default",
-                                      "reduce-overhead",
-                                      "max-autotune",
-                                    ])
-                                    .parse(event.target.value),
-                                )
-                              }
-                            >
-                              {config.performance_mode === "script" && (
-                                <option value="script">
-                                  Defined in train.py
-                                </option>
-                              )}
-                              <option value="off">Off · eager PyTorch</option>
-                              <option value="default">
-                                Default · kernel fusion
-                              </option>
-                              <option value="reduce-overhead">
-                                Reduce overhead · CUDA graphs when eligible
-                              </option>
-                              <option value="max-autotune">
-                                Maximum autotuning · longer compilation
-                              </option>
-                            </select>
-                            <small>
-                              First use of each batch shape can compile slowly
-                              and use extra memory. Split placement requires
-                              eager execution.
-                            </small>
-                          </label>
-                          {config.performance_mode === "override" && (
-                            <>
-                              <label className="training-inline-check">
-                                <input
-                                  type="checkbox"
-                                  checked={config.fused_optimizer}
-                                  disabled={
-                                    config.performance_mode !== "override"
-                                  }
-                                  onChange={(event) =>
-                                    setting(
-                                      "fused_optimizer",
-                                      event.target.checked,
-                                    )
-                                  }
-                                />
-                                Fused AdamW (CUDA only)
-                              </label>
-                              <label>
-                                Profile updates (0 disables capture)
-                                <input
-                                  aria-label="Profile updates (0 disables capture)"
-                                  type="number"
-                                  min={0}
-                                  max={100}
-                                  value={config.profile_steps}
-                                  disabled={
-                                    config.performance_mode !== "override"
-                                  }
-                                  onChange={(event) => {
-                                    const value = event.target.valueAsNumber;
-                                    if (
-                                      Number.isInteger(value) &&
-                                      value >= 0 &&
-                                      value <= 100
-                                    )
-                                      setting("profile_steps", value);
-                                  }}
-                                />
-                                <small>
-                                  Captures after two warm-up updates. Traces are
-                                  saved under profiles/ in the run folder;
-                                  profiling temporarily slows training.
-                                </small>
-                              </label>
-                            </>
-                          )}
+                            Copy path
+                          </button>
                         </div>
-                        {config.performance_mode === "script" && (
-                          <p className="training-muted">
-                            Compilation, fused AdamW and profiling are defined
-                            by TrainingConfig in your Python script.
+                        {!codeFirst && (
+                          <div className="training-server-path">
+                            <span>Preset values</span>
+                            <code>
+                              {stage.config_path ??
+                                savedStages[stage.id]?.config_path ??
+                                "Creating config.json…"}
+                            </code>
+                            <button
+                              aria-label="Copy preset config server path"
+                              disabled={
+                                !(
+                                  stage.config_path ??
+                                  savedStages[stage.id]?.config_path
+                                )
+                              }
+                              onClick={() =>
+                                void task(async () => {
+                                  await copyText(
+                                    stage.config_path ??
+                                      savedStages[stage.id]?.config_path ??
+                                      "",
+                                  );
+                                  setNotice("Server config path copied.");
+                                })
+                              }
+                            >
+                              Copy path
+                            </button>
+                          </div>
+                        )}
+                        {savedStages[stage.id] && (
+                          <small>
+                            {stage.script === savedStages[stage.id].script &&
+                            JSON.stringify(config) ===
+                              JSON.stringify(savedStages[stage.id].config)
+                              ? "Browser matches the server files."
+                              : "Browser edits are not saved to the server yet."}
+                          </small>
+                        )}
+                        {savedStages[stage.id] &&
+                          ((stage.script_revision !==
+                            savedStages[stage.id].script_revision &&
+                            stage.script !== savedStages[stage.id].script) ||
+                            (stage.config_revision !==
+                              savedStages[stage.id].config_revision &&
+                              JSON.stringify(config) !==
+                                JSON.stringify(
+                                  savedStages[stage.id].config,
+                                ))) && (
+                            <p className="training-alert" role="status">
+                              Files changed on the server while this browser has
+                              a draft. Reload the server files, or duplicate
+                              this stage to preserve your browser draft.
+                            </p>
+                          )}
+                        {stage.workspace_warning && (
+                          <p className="training-alert">
+                            {stage.workspace_warning}
                           </p>
                         )}
-                        <p className="training-muted">
-                          These options apply at the next launch. Your training
-                          script and existing run snapshots are preserved.
-                        </p>
-                      </details>
-                    )}
-                    <details>
-                      <summary>GPU tuning (advanced)</summary>
-                      <label className="gpu-tuning-toggle">
-                        <input
-                          type="checkbox"
-                          checked={config.use_gpu_tuning}
-                          onChange={(event) =>
-                            setting("use_gpu_tuning", event.target.checked)
-                          }
-                        />
-                        Use matching saved GPU tuning for this stage
-                      </label>
-                      <p className="training-muted">
-                        Manage benchmarks in Weave settings. The runtime checks
-                        hardware and reports whether the saved allocation was
-                        applied. Explicit block placement takes precedence.
-                      </p>
+                      </div>
+                      <div
+                        className="training-python-environment"
+                        role="status"
+                      >
+                        {pythonEnvironment ? (
+                          <>
+                            <strong>
+                              Python {pythonEnvironment.python_version}
+                            </strong>
+                            <span>
+                              PyTorch{" "}
+                              {pythonEnvironment.torch_version ??
+                                "not installed"}{" "}
+                              ·{" "}
+                              {pythonEnvironment.cuda_available
+                                ? `CUDA ${pythonEnvironment.cuda_version} · ${pythonEnvironment.device_count} GPU(s)`
+                                : "CPU environment"}
+                            </span>
+                            <code>{pythonEnvironment.executable}</code>
+                          </>
+                        ) : (
+                          <span>
+                            {environmentError ||
+                              "Detecting the selected server Python environment…"}
+                          </span>
+                        )}
+                      </div>
                     </details>
-                    {!codeFirst && (
-                      <>
-                        <details>
-                          <summary>Optimizer, schedule, and evaluation</summary>
-                          <label className="training-inline-check">
-                            <input
-                              type="checkbox"
-                              checked={config.inspect_blocks}
-                              onChange={(e) =>
-                                setting("inspect_blocks", e.target.checked)
-                              }
-                            />
-                            Sample per-block gradient and activation summaries
-                            (adds overhead)
-                          </label>
-                          <div className="training-form-grid">
-                            {numeric(
-                              "sequence_length",
-                              "Context length",
-                              "Maximum input tokens per example.",
-                            )}
-                            {numeric(
-                              "batch_size",
-                              "Microbatch size",
-                              "Examples per GPU per forward pass.",
-                            )}
-                            {numeric(
-                              "accumulation",
-                              "Gradient accumulation",
-                              "Microbatches per optimizer update.",
-                            )}
-                            {numeric(
-                              "max_steps",
-                              "Total optimizer steps",
-                              "Resume continues toward this total.",
-                            )}
-                            {numeric(
-                              "learning_rate",
-                              "Learning rate",
-                              "AdamW learning rate after warmup.",
-                            )}
-                            {numeric(
-                              "weight_decay",
-                              "Weight decay",
-                              "AdamW regularization.",
-                            )}
-                            {numeric(
-                              "gradient_clip",
-                              "Gradient clipping",
-                              "Maximum total gradient norm.",
-                            )}
-                            {numeric(
-                              "warmup_steps",
-                              "Warmup steps",
-                              "Linear warmup, then constant learning rate.",
-                            )}
-                            {numeric(
-                              "checkpoint_every",
-                              "Checkpoint interval",
-                              "Optimizer steps between checkpoints and evaluations.",
-                            )}
-                            {numeric(
-                              "log_every",
-                              "Logging interval",
-                              "Optimizer steps between scalar reports.",
-                            )}
-                            {numeric(
-                              "eval_batches",
-                              "Validation batches",
-                              "Maximum held-out batches per evaluation.",
-                            )}
-                            {numeric(
-                              "generation_tokens",
-                              "Generated tokens",
-                              "Maximum new tokens per evaluation prompt.",
-                            )}
-                            {numeric(
-                              "seed",
-                              "Random seed",
-                              "Recorded with each run.",
-                            )}
-                            {numeric(
-                              "cpu_threads",
-                              "CPU threads",
-                              "PyTorch CPU threads per process. New scripts default to all CPUs available on the machine; set a lower limit to reserve CPU capacity.",
-                            )}
-                            {numeric(
-                              "summary_every",
-                              "Block summary interval",
-                              "Optimizer steps between sampled block summaries.",
-                            )}
-                          </div>
+                  )}
+                  {editor === "script" ? (
+                    <>
+                      <div className="training-script-location">
+                        <code>
+                          {stage.script_path ??
+                            savedStages[stage.id]?.script_path ??
+                            "Save the stage to create train.py"}
+                        </code>
+                      </div>
+                      <p className="training-field-note">
+                        Edit data loading, the loss, optimizer and schedule
+                        here. Setup controls devices for GUI launches. Saving
+                        writes this server file; clean files reload after SSH
+                        edits.
+                      </p>
+                      <div className="training-script-toolbar">
+                        <button
+                          disabled={busy}
+                          onClick={() => void task(() => saveStageFile())}
+                        >
+                          <Save size={14} aria-hidden="true" />
+                          Save file
+                        </button>
+                        <button
+                          disabled={busy || !stage.script_path}
+                          onClick={() => void task(reloadStageFile)}
+                        >
+                          Reload server files
+                        </button>
+                        <CopyTrainingScript
+                          projectId={project.id}
+                          disabled={busy}
+                          onCopy={(script, source) => {
+                            updateStage({ script });
+                            setNotice(
+                              `Copied script from ${source} into the editor. Review it, then Save file.`,
+                            );
+                          }}
+                        />
+                        {!codeFirst && (
                           <label>
-                            Evaluation prompts (JSON array)
-                            <textarea
-                              aria-label="Evaluation prompts"
-                              rows={5}
-                              value={promptsText}
-                              onChange={(e) => {
-                                setPromptsText(e.target.value);
-                                try {
-                                  const value = z
-                                    .array(
-                                      z.union([
-                                        z.string(),
-                                        z.record(z.string(), z.unknown()),
-                                      ]),
-                                    )
-                                    .parse(JSON.parse(e.target.value));
-                                  setting("prompts", value);
-                                } catch {
-                                  /* Keep incomplete JSON editable; validate on launch. */
-                                }
+                            Insert reporting hook
+                            <select
+                              aria-label="Insert reporting hook"
+                              value=""
+                              onChange={(event) => {
+                                const snippet =
+                                  reportingHooks[event.target.value];
+                                if (snippet)
+                                  codeEditorRef.current?.insertSnippet(snippet);
                               }}
-                            />
+                            >
+                              <option value="">Choose a hook…</option>
+                              {Object.keys(reportingHooks).map((key) => (
+                                <option value={key} key={key}>
+                                  {key}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                        )}
+                        <small>Ctrl/Cmd+S save · Ctrl/Cmd+F find</small>
+                      </div>
+                      <Suspense
+                        fallback={<p role="status">Loading Python editor…</p>}
+                      >
+                        <PythonEditor
+                          key={stage.id}
+                          ref={codeEditorRef}
+                          value={stage.script}
+                          onChange={(script) => updateStage({ script })}
+                          onSave={() => void task(() => saveStageFile())}
+                        />
+                      </Suspense>
+                      <button
+                        onClick={() => {
+                          if (templates)
+                            createStage({
+                              id: newId(),
+                              name: `${stage.name} · fresh template`,
+                              config: structuredClone(config),
+                              script: templates.scripts[config.recipe],
+                            });
+                        }}
+                      >
+                        Open fresh template as another stage
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <TrainingComputeSettings
+                        config={effective.config}
+                        gpus={gpus}
+                        model={model}
+                        codeFirst={codeFirst}
+                        unresolved={effective.unresolved}
+                        error={effective.error}
+                        onChange={patchSettings}
+                      />
+                      <details
+                        className="training-runtime-settings"
+                        open={config.start_mode !== "random"}
+                      >
+                        <summary>
+                          Run environment and starting checkpoint
+                        </summary>
+                        <div className="training-form-grid">
+                          <label>
+                            Run on
+                            <select
+                              value={config.execution}
+                              onChange={(e) =>
+                                setting(
+                                  "execution",
+                                  z
+                                    .enum(["local", "monitor"])
+                                    .parse(e.target.value),
+                                )
+                              }
+                            >
+                              <option value="local">
+                                Weave host · launch here
+                              </option>
+                              <option value="monitor">
+                                Terminal · prepare package and monitor
+                              </option>
+                            </select>
                             <small>
-                              Strings for plain text, or objects with messages,
-                              tools, expected_tool, and expected_arguments.
+                              Launch yourself on this server or another
+                              computer; the reporting API sends progress back to
+                              Weave.
                             </small>
                           </label>
                           <label>
-                            Chat template override (optional)
-                            <textarea
-                              rows={3}
-                              value={config.chat_template}
+                            Python executable on server
+                            <input
+                              value={config.python}
+                              disabled={config.execution === "monitor"}
                               onChange={(e) =>
-                                setting("chat_template", e.target.value)
+                                setting("python", e.target.value)
                               }
-                              placeholder="Uses the selected input tokenizer’s template by default"
                             />
+                            <small>
+                              {config.execution === "monitor"
+                                ? "Terminal launches use the Python environment you run the package with."
+                                : "Use a server environment with PyTorch and your training dependencies installed."}
+                            </small>
+                          </label>
+                        </div>
+                        <div className="training-form-grid">
+                          <label>
+                            Training recipe
+                            <select
+                              value={config.recipe}
+                              disabled={
+                                codeFirst &&
+                                !(
+                                  templates &&
+                                  Object.values(templates.scripts).includes(
+                                    stage.script,
+                                  )
+                                )
+                              }
+                              onChange={(e) => {
+                                const recipe = z
+                                  .enum(["causal", "sft", "custom"])
+                                  .parse(e.target.value);
+                                const pristine =
+                                  templates &&
+                                  Object.values(templates.scripts).includes(
+                                    stage.script,
+                                  );
+                                updateStage({
+                                  config: { ...config, recipe },
+                                  ...(pristine && templates
+                                    ? { script: templates.scripts[recipe] }
+                                    : {}),
+                                });
+                              }}
+                            >
+                              <option value="causal">
+                                Text pretraining · next-token prediction
+                              </option>
+                              <option value="sft">
+                                Chat / tool-call supervised fine-tuning
+                              </option>
+                              <option value="custom">Custom Python</option>
+                            </select>
+                            <small>
+                              {codeFirst &&
+                              !(
+                                templates &&
+                                Object.values(templates.scripts).includes(
+                                  stage.script,
+                                )
+                              )
+                                ? "Your edited Python script defines the objective. Create a new stage to use another starter template."
+                                : "Select a starter template. Custom objectives are defined in Python."}
+                            </small>
                           </label>
                           <label>
-                            Custom script configuration (JSON)
-                            <textarea
-                              rows={3}
-                              defaultValue={JSON.stringify(
-                                config.custom,
-                                null,
-                                2,
-                              )}
-                              key={stage.id}
-                              onBlur={(e) => {
-                                try {
-                                  setting(
-                                    "custom",
-                                    z
-                                      .record(z.string(), z.unknown())
-                                      .parse(JSON.parse(e.target.value)),
-                                  );
-                                } catch {
-                                  setError(
-                                    "Custom configuration must be a JSON object.",
-                                  );
-                                }
-                              }}
-                            />
+                            Starting state
+                            <select
+                              value={config.start_mode}
+                              onChange={(e) =>
+                                setting(
+                                  "start_mode",
+                                  z
+                                    .enum(["random", "weights", "resume"])
+                                    .parse(e.target.value),
+                                )
+                              }
+                            >
+                              <option value="random">
+                                Random initialization
+                              </option>
+                              <option value="weights">
+                                New stage from checkpoint weights
+                              </option>
+                              <option value="resume">
+                                Resume optimizer and training state
+                              </option>
+                            </select>
+                            <small>
+                              New stages reset the optimizer; resume continues
+                              its state.{" "}
+                              {codeFirst &&
+                                "Exact resume also requires a restorable data loader."}
+                            </small>
                           </label>
-                        </details>{" "}
-                      </>
+                        </div>
+                        {config.start_mode !== "random" && (
+                          <div className="training-form-grid">
+                            <label>
+                              Parent run
+                              <select
+                                value={config.parent_run ?? ""}
+                                onChange={(e) => {
+                                  updateStage({
+                                    config: {
+                                      ...config,
+                                      parent_run: e.target.value,
+                                      parent_checkpoint: null,
+                                    },
+                                  });
+                                }}
+                              >
+                                <option value="">Select run…</option>
+                                {runs.map((run) => (
+                                  <option value={run.id} key={run.id}>
+                                    {run.name} ·{" "}
+                                    {new Date(run.created).toLocaleString()}
+                                  </option>
+                                ))}
+                              </select>
+                            </label>
+                            <label>
+                              Checkpoint path
+                              <input
+                                value={config.parent_checkpoint ?? ""}
+                                onChange={(e) =>
+                                  setting("parent_checkpoint", e.target.value)
+                                }
+                                placeholder="Choose a checkpoint or enter its path…"
+                                list="training-checkpoint-paths"
+                              />
+                              <datalist id="training-checkpoint-paths">
+                                {parentCheckpoints
+                                  .filter((event) => !event.payload.remote)
+                                  .map((event) => (
+                                    <option
+                                      key={event.id}
+                                      value={String(event.payload.path)}
+                                    />
+                                  ))}
+                              </datalist>
+                              <small>
+                                {parentCheckpointError
+                                  ? `Could not load checkpoints: ${parentCheckpointError}`
+                                  : "Checkpoints belong to the selected parent run. You can also enter a relative path."}
+                              </small>
+                            </label>
+                          </div>
+                        )}
+                      </details>
+                      {!codeFirst && (
+                        <>
+                          <h3>Data</h3>
+                          <p className="training-muted">
+                            The tokenizer comes from your graph’s token input.{" "}
+                            <a
+                              href={`?model=${encodeURIComponent(project.id)}&node=${encodeURIComponent(project.graph.nodes.find((node) => node.data.kind === "input")?.id ?? "")}`}
+                            >
+                              Configure the input tokenizer in Architecture
+                            </a>
+                            .
+                          </p>
+                          <div className="training-form-grid">
+                            <label>
+                              Training dataset path on server
+                              <input
+                                value={config.dataset}
+                                placeholder="/path/to/train.jsonl"
+                                onChange={(e) =>
+                                  setting("dataset", e.target.value)
+                                }
+                              />
+                              <small>
+                                Host path: TXT, JSONL, JSON, or Parquet.
+                                Pretokenized input_ids/labels also work.
+                              </small>
+                            </label>
+                            <label>
+                              Validation dataset path on server
+                              <input
+                                value={config.eval_dataset}
+                                placeholder="Optional held-out dataset"
+                                onChange={(e) =>
+                                  setting("eval_dataset", e.target.value)
+                                }
+                              />
+                              <small>
+                                Use held-out data to track generalization.
+                              </small>
+                            </label>
+                          </div>
+                          <input
+                            ref={datasetRef}
+                            hidden
+                            type="file"
+                            accept=".txt,.json,.jsonl,.parquet"
+                            onChange={(e) => {
+                              const file = e.target.files?.[0];
+                              if (!file) return;
+                              void task(async () => {
+                                const form = new FormData();
+                                form.append("file", file);
+                                const uploaded = await trainingRequest(
+                                  "/datasets",
+                                  z.object({
+                                    path: z.string(),
+                                    sha256: z.string(),
+                                    bytes: z.number(),
+                                  }),
+                                  form,
+                                );
+                                setting("dataset", uploaded.path);
+                                setNotice(
+                                  `Dataset uploaded and fingerprinted: ${uploaded.sha256.slice(0, 12)}…`,
+                                );
+                              });
+                              e.target.value = "";
+                            }}
+                          />
+                          <button
+                            onClick={() => datasetRef.current?.click()}
+                            disabled={busy}
+                          >
+                            <Upload aria-hidden="true" size={14} />
+                            Upload training data
+                          </button>
+                          <button
+                            onClick={() =>
+                              void task(async () => {
+                                setPreview(
+                                  await trainingRequest(
+                                    "/preview",
+                                    previewSchema,
+                                    {
+                                      project,
+                                      stage,
+                                    },
+                                  ),
+                                );
+                              })
+                            }
+                            disabled={busy || !config.dataset}
+                          >
+                            Preview tokens & loss mask
+                          </button>
+                          {preview && (
+                            <div className="training-data-preview">
+                              <p>{preview.note}</p>
+                              {preview.records.map((row, index) => (
+                                <div key={index}>
+                                  <small>
+                                    Record {index + 1}: {row.supervised_count}{" "}
+                                    supervised target tokens
+                                  </small>
+                                  <div>
+                                    {row.tokens.map((token, i) => (
+                                      <span
+                                        key={i}
+                                        className={
+                                          token.supervised
+                                            ? "is-supervised"
+                                            : ""
+                                        }
+                                        title={`Token ${token.id}: ${token.supervised ? "contributes to loss" : "ignored as target"}`}
+                                      >
+                                        {token.text}
+                                      </span>
+                                    ))}
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                          {config.recipe === "sft" && (
+                            <p className="training-muted">
+                              Use messages and optional tools schemas.
+                              Assistant-only training requires a chat template
+                              that supplies assistant token masks, or
+                              pretokenized labels with -100 on ignored tokens.
+                            </p>
+                          )}
+                        </>
+                      )}
+                      {!codeFirst && (
+                        <>
+                          <details>
+                            <summary>
+                              Optimizer, schedule, and evaluation
+                            </summary>
+                            <label className="training-inline-check">
+                              <input
+                                type="checkbox"
+                                checked={config.inspect_blocks}
+                                onChange={(e) =>
+                                  setting("inspect_blocks", e.target.checked)
+                                }
+                              />
+                              Sample per-block gradient and activation summaries
+                              (adds overhead)
+                            </label>
+                            <div className="training-form-grid">
+                              {numeric(
+                                "sequence_length",
+                                "Context length",
+                                "Maximum input tokens per example.",
+                              )}
+                              {numeric(
+                                "batch_size",
+                                "Microbatch size",
+                                "Examples per GPU per forward pass.",
+                              )}
+                              {numeric(
+                                "accumulation",
+                                "Gradient accumulation",
+                                "Microbatches per optimizer update.",
+                              )}
+                              {numeric(
+                                "max_steps",
+                                "Total optimizer steps",
+                                "Resume continues toward this total.",
+                              )}
+                              {numeric(
+                                "learning_rate",
+                                "Learning rate",
+                                "AdamW learning rate after warmup.",
+                              )}
+                              {numeric(
+                                "weight_decay",
+                                "Weight decay",
+                                "AdamW regularization.",
+                              )}
+                              {numeric(
+                                "gradient_clip",
+                                "Gradient clipping",
+                                "Maximum total gradient norm.",
+                              )}
+                              {numeric(
+                                "warmup_steps",
+                                "Warmup steps",
+                                "Linear warmup, then constant learning rate.",
+                              )}
+                              {numeric(
+                                "checkpoint_every",
+                                "Checkpoint interval",
+                                "Optimizer steps between checkpoints and evaluations.",
+                              )}
+                              {numeric(
+                                "log_every",
+                                "Logging interval",
+                                "Optimizer steps between scalar reports.",
+                              )}
+                              {numeric(
+                                "eval_batches",
+                                "Validation batches",
+                                "Maximum held-out batches per evaluation.",
+                              )}
+                              {numeric(
+                                "generation_tokens",
+                                "Generated tokens",
+                                "Maximum new tokens per evaluation prompt.",
+                              )}
+                              {numeric(
+                                "seed",
+                                "Random seed",
+                                "Recorded with each run.",
+                              )}
+                              {numeric(
+                                "cpu_threads",
+                                "CPU threads",
+                                "PyTorch CPU threads per process. New scripts default to all CPUs available on the machine; set a lower limit to reserve CPU capacity.",
+                              )}
+                              {numeric(
+                                "summary_every",
+                                "Block summary interval",
+                                "Optimizer steps between sampled block summaries.",
+                              )}
+                            </div>
+                            <label>
+                              Evaluation prompts (JSON array)
+                              <textarea
+                                aria-label="Evaluation prompts"
+                                rows={5}
+                                value={promptsText}
+                                onChange={(e) => {
+                                  setPromptsText(e.target.value);
+                                  try {
+                                    const value = z
+                                      .array(
+                                        z.union([
+                                          z.string(),
+                                          z.record(z.string(), z.unknown()),
+                                        ]),
+                                      )
+                                      .parse(JSON.parse(e.target.value));
+                                    setting("prompts", value);
+                                  } catch {
+                                    /* Keep incomplete JSON editable; validate on launch. */
+                                  }
+                                }}
+                              />
+                              <small>
+                                Strings for plain text, or objects with
+                                messages, tools, expected_tool, and
+                                expected_arguments.
+                              </small>
+                            </label>
+                            <label>
+                              Chat template override (optional)
+                              <textarea
+                                rows={3}
+                                value={config.chat_template}
+                                onChange={(e) =>
+                                  setting("chat_template", e.target.value)
+                                }
+                                placeholder="Uses the selected input tokenizer’s template by default"
+                              />
+                            </label>
+                            <label>
+                              Custom script configuration (JSON)
+                              <textarea
+                                rows={3}
+                                defaultValue={JSON.stringify(
+                                  config.custom,
+                                  null,
+                                  2,
+                                )}
+                                key={stage.id}
+                                onBlur={(e) => {
+                                  try {
+                                    setting(
+                                      "custom",
+                                      z
+                                        .record(z.string(), z.unknown())
+                                        .parse(JSON.parse(e.target.value)),
+                                    );
+                                  } catch {
+                                    setError(
+                                      "Custom configuration must be a JSON object.",
+                                    );
+                                  }
+                                }}
+                              />
+                            </label>
+                          </details>{" "}
+                        </>
+                      )}
+                    </>
+                  )}
+                  <footer className="training-launch">
+                    <span>
+                      {effective.config
+                        ? computeSummary(effective.config)
+                        : "Reading training settings…"}
+                      <small role="status">
+                        {stageDirty
+                          ? "Unsaved changes. Start saves the stage first."
+                          : "Stage saved. Start creates a new run."}
+                      </small>
+                    </span>
+                    {editor === "settings" && (
+                      <button
+                        onClick={() => void task(() => saveStageFile())}
+                        disabled={busy || !loaded}
+                      >
+                        <Save aria-hidden="true" size={14} /> Save stage
+                      </button>
                     )}
-                  </>
-                )}
-                <footer className="training-launch">
-                  <span>
-                    {codeFirst ? (
-                      config.compute_mode === "override" ? (
-                        `${config.strategy.toUpperCase()} · ${config.devices.length ? config.devices.map((index) => `GPU ${index}`).join(", ") : "CPU"} · batch schedule: train.py`
-                      ) : (
-                        "Devices and batch schedule: train.py"
-                      )
-                    ) : (
-                      <>
-                        {config.devices.length
-                          ? `${config.devices.length} training GPU${config.devices.length > 1 ? "s" : ""}`
-                          : "CPU"}{" "}
-                        · effective batch{" "}
-                        {config.batch_size *
-                          config.accumulation *
-                          (config.strategy === "ddp"
-                            ? config.devices.length
-                            : 1)}
-                      </>
-                    )}
-                  </span>
-                  <button
-                    onClick={() => void task(savePlan)}
-                    disabled={busy || !loaded}
-                  >
-                    <Save aria-hidden="true" size={14} /> Save stages
-                  </button>
-                  <button
-                    className="primary"
-                    disabled={
-                      busy ||
-                      (!capabilities.enabled && config.execution === "local")
-                    }
-                    onClick={() => void task(launch)}
-                  >
-                    <Play aria-hidden="true" size={15} />
-                    {launchPhase === "saving"
-                      ? "Saving stage…"
-                      : launchPhase === "starting"
-                        ? "Starting training…"
-                        : config.execution === "monitor"
-                          ? "Prepare training package"
-                          : "Start training stage"}
-                  </button>
-                </footer>
-                {launchPhase !== "idle" && (
-                  <p role="status" aria-label="Training launch progress">
-                    {launchPhase === "saving"
-                      ? "Saving this stage and its generated model on the server…"
-                      : "Stage saved. Creating the new run…"}
-                  </p>
-                )}
-                {launchError && (
-                  <div
-                    className="training-alert"
-                    role="alert"
-                    aria-label="Training launch failed"
-                    ref={launchErrorRef}
-                    tabIndex={-1}
-                  >
-                    <strong>Training did not start.</strong> {launchError}
-                  </div>
-                )}
-                {!capabilities.enabled && (
-                  <p className="training-alert">
-                    Local execution is disabled. Run{" "}
-                    <code>bash scripts/install.sh --training cpu</code> on the
-                    server, or select an existing environment with
-                    scripts/configure.sh, then restart Weave.
-                  </p>
-                )}
-              </details>
-            </section>
+                    <button
+                      className="primary"
+                      disabled={
+                        busy ||
+                        (!capabilities.enabled && config.execution === "local")
+                      }
+                      onClick={() => void task(launch)}
+                    >
+                      <Play aria-hidden="true" size={15} />
+                      {launchPhase === "saving"
+                        ? "Saving stage…"
+                        : launchPhase === "starting"
+                          ? "Starting training…"
+                          : config.execution === "monitor"
+                            ? "Prepare training package"
+                            : "Start training stage"}
+                    </button>
+                  </footer>
+                  {launchPhase !== "idle" && (
+                    <p role="status" aria-label="Training launch progress">
+                      {launchPhase === "saving"
+                        ? "Saving this stage and its generated model on the server…"
+                        : "Stage saved. Creating the new run…"}
+                    </p>
+                  )}
+                  {launchError && (
+                    <div
+                      className="training-alert"
+                      role="alert"
+                      aria-label="Training launch failed"
+                      ref={launchErrorRef}
+                      tabIndex={-1}
+                    >
+                      <strong>Training did not start.</strong> {launchError}
+                    </div>
+                  )}
+                  {!capabilities.enabled && (
+                    <p className="training-alert">
+                      Local execution is disabled. Run{" "}
+                      <code>bash scripts/install.sh --training cpu</code> on the
+                      server, or select an existing environment with
+                      scripts/configure.sh, then restart Weave.
+                    </p>
+                  )}
+                </div>
+              </section>
+            )
           ) : (
             <section className="training-card training-empty">
               <Activity aria-hidden="true" size={32} />
@@ -2614,10 +2231,10 @@ export function TrainingWorkspace({ project }: { project: Project }) {
             </section>
           )}
 
-          {runId && !detail && launchPhase === "idle" && (
+          {!setupOpen && runId && !detail && launchPhase === "idle" && (
             <p role="status">Loading selected run…</p>
           )}
-          {detail && launchPhase === "idle" && (
+          {!setupOpen && detail && launchPhase === "idle" && (
             <section
               className="training-card training-dashboard"
               aria-label="Run dashboard"
@@ -2655,7 +2272,6 @@ export function TrainingWorkspace({ project }: { project: Project }) {
                   )}
                 </div>
                 <div className="training-actions">
-                  {historyButton}
                   {runs.length > 1 && (
                     <label className="training-run-picker">
                       <span>Run</span>
@@ -3319,6 +2935,8 @@ export function TrainingWorkspace({ project }: { project: Project }) {
                                   parent_checkpoint: String(event.payload.path),
                                 },
                               });
+                              setSetupOpen(true);
+                              setEditor("settings");
                               setNotice(
                                 "Checkpoint selected for this stage. Choose Resume if you want to restore optimizer state too.",
                               );

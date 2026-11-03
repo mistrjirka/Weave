@@ -86,13 +86,16 @@ test("code-owned configuration, training hooks, provenance and snapshots", async
     await page
       .getByRole("button", { name: "Create training stage", exact: true })
       .click();
+    await page
+      .getByRole("button", { name: "Python script", exact: true })
+      .click();
     const editor = page.getByRole("textbox", {
       name: "Training Python script",
       exact: true,
     });
     await expect(editor).toContainText("TrainingConfig(", { timeout: 30000 });
     await expect(
-      page.getByRole("button", { name: "Launch settings", exact: true }),
+      page.getByRole("button", { name: "Setup", exact: true }),
     ).toBeVisible();
     await expect(
       page.getByRole("combobox", {
@@ -101,28 +104,19 @@ test("code-owned configuration, training hooks, provenance and snapshots", async
       }),
     ).toHaveCount(0);
     await page.setViewportSize({ width: 390, height: 844 });
-    const deviceShortcut = page.getByRole("button", {
+    const setup = page.getByRole("button", { name: "Setup", exact: true });
+    await expect(setup).toBeInViewport();
+    await setup.click();
+    const deviceHeading = page.getByRole("heading", {
       name: "Training devices",
       exact: true,
     });
-    await expect(deviceShortcut).toBeInViewport();
-    await deviceShortcut.click();
-    const deviceHeading = page.getByRole("heading", {
-      name: "Training devices and validation",
-      exact: true,
-    });
     await expect(deviceHeading).toBeInViewport();
-    await expect(deviceHeading).toBeFocused();
     await page.screenshot({ path: "data/training-device-settings-phone.png" });
     await page.setViewportSize({ width: 1600, height: 1000 });
-    const computeMode = page.getByRole("combobox", {
-      name: "Training device settings",
-    });
-    await expect(computeMode).toHaveValue("script");
     await expect(
-      page.getByRole("combobox", { name: "GPU strategy" }),
+      page.getByRole("combobox", { name: "Training device settings" }),
     ).toHaveCount(0);
-    await computeMode.selectOption("override");
     const strategy = page.getByRole("combobox", { name: "GPU strategy" });
     await expect(strategy).toBeVisible();
     if (
@@ -131,7 +125,7 @@ test("code-owned configuration, training hooks, provenance and snapshots", async
         .getAttribute("disabled")) === null
     ) {
       await strategy.selectOption("ddp");
-      const devices = page.getByRole("group", { name: "Training devices" });
+      const devices = page.getByRole("group", { name: "Choose CPU or GPUs" });
       await expect(
         devices.getByRole("checkbox", { name: /GPU 0/ }),
       ).toBeChecked();
@@ -139,10 +133,10 @@ test("code-owned configuration, training hooks, provenance and snapshots", async
         devices.getByRole("checkbox", { name: /GPU 1/ }),
       ).toBeChecked();
       await devices.getByRole("checkbox", { name: /GPU 1/ }).uncheck();
-      await expect(strategy).toHaveValue("single");
+      await expect(strategy).toHaveValue("ddp");
       await devices.getByRole("checkbox", { name: /GPU 0/ }).uncheck();
       await expect(
-        devices.getByRole("checkbox", { name: "CPU", exact: true }),
+        devices.getByRole("checkbox", { name: /^CPU/ }),
       ).toBeChecked();
       await expect(
         page.getByRole("combobox", { name: "Precision", exact: true }),
@@ -168,13 +162,16 @@ test("code-owned configuration, training hooks, provenance and snapshots", async
     }
     await strategy.selectOption("single");
     await page
-      .getByRole("group", { name: "Training devices" })
-      .getByRole("checkbox", { name: "CPU", exact: true })
+      .getByRole("group", { name: "Choose CPU or GPUs" })
+      .getByRole("checkbox", { name: /^CPU/ })
       .check();
+    await page
+      .getByText("Run environment and starting checkpoint", { exact: true })
+      .click();
     await expect(page.getByRole("combobox", { name: "Run on" })).toBeVisible();
     await expect(
       page.getByRole("combobox", { name: "GPU strategy", exact: true }),
-    ).toHaveCount(0);
+    ).toBeVisible();
     await expect(
       page.getByRole("textbox", { name: /Training dataset path/ }),
     ).toHaveCount(0);
@@ -229,9 +226,7 @@ test("code-owned configuration, training hooks, provenance and snapshots", async
     await expect(page.locator(".training-notice")).toContainText(
       "Saved server file",
     );
-    await page
-      .getByRole("button", { name: "Launch settings", exact: true })
-      .click();
+    await page.getByRole("button", { name: "Setup", exact: true }).click();
     const validationMode = page.getByRole("combobox", {
       name: "Validation execution",
       exact: false,
@@ -240,7 +235,7 @@ test("code-owned configuration, training hooks, provenance and snapshots", async
       name: "Validation device",
       exact: false,
     });
-    await expect(validationMode).toHaveValue("script");
+    await expect(validationMode).toHaveValue("inline");
     await expect(validationDevice).toBeDisabled();
     await validationMode.selectOption("async");
     await expect(validationDevice).toBeEnabled();
@@ -363,11 +358,11 @@ test("code-owned configuration, training hooks, provenance and snapshots", async
     });
     await page.reload();
     await expect(
-      page.getByText(`Stage setup · ${saved.name}`, { exact: true }),
-    ).toBeVisible();
+      page.getByRole("button", { name: "Monitor", exact: true }),
+    ).toHaveAttribute("aria-pressed", "true");
     await expect(editor).not.toBeVisible();
     await page
-      .getByText(`Stage setup · ${saved.name}`, { exact: true })
+      .getByRole("button", { name: "Python script", exact: true })
       .click();
     await expect(editor).toContainText("TrainingConfig(", { timeout: 30000 });
     await page.setViewportSize({ width: 390, height: 844 });
@@ -389,21 +384,23 @@ test("code-owned configuration, training hooks, provenance and snapshots", async
       await route.fulfill({ response, json: stopped });
     });
     await page.reload();
+    await page.getByRole("button", { name: "Monitor", exact: true }).click();
     await expect(
       page.getByRole("status", { name: "Training stopped", exact: true }),
     ).toBeVisible();
     await expect(
-      page.locator(".training-setup-card > details"),
-    ).toHaveAttribute("open", "");
-    await expect(
-      page.getByRole("button", { name: "Start training stage", exact: true }),
-    ).toBeVisible();
+      page.getByRole("button", { name: "Pause training", exact: true }),
+    ).toHaveCount(0);
     await expect(page.getByTestId("run-freshness")).toContainText(
       "Run data refreshed",
     );
+    await page.getByRole("button", { name: "Setup", exact: true }).click();
     await expect(
-      page.getByRole("button", { name: "Pause training", exact: true }),
-    ).toHaveCount(0);
+      page.getByRole("region", { name: "Stage setup", exact: true }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "Start training stage", exact: true }),
+    ).toBeVisible();
     expect(errors).toEqual([]);
   } finally {
     releaseInitialSave();

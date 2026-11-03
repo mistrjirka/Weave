@@ -30,6 +30,7 @@ READ_ONLY_POSTS = {
     "/api/attention/expand",
     "/api/graph/unroll",
     "/api/training/model",
+    "/api/training/settings/preview",
 }
 EXECUTABLE_GETS = {"/api/training/environment"}
 

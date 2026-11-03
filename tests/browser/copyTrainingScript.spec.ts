@@ -71,6 +71,9 @@ test("copy a saved script from another project, preview, cancel or explicitly sa
     }
     await page.setViewportSize({ width: 390, height: 844 });
     await page.goto(`/?model=${ids[1]}&view=training&stage=pretraining`);
+    await page
+      .getByRole("button", { name: "Python script", exact: true })
+      .click();
     const copy = page.getByRole("button", {
       name: "Copy script from project…",
       exact: true,

@@ -112,10 +112,18 @@ test("legacy training stages, real run, charts, snapshots, and reload", async ({
       .getByRole("button", { name: "Create training stage", exact: true })
       .click();
     await page
+      .getByRole("button", { name: "Python script", exact: true })
+      .click();
+    await page
+      .getByRole("button", { name: "Stages and run history", exact: true })
+      .click();
+    await page
       .getByRole("textbox", { name: "Stage name", exact: true })
       .fill("Pretraining acceptance");
+    await page.keyboard.press("Escape");
+    await page.getByRole("button", { name: "Setup", exact: true }).click();
     await page
-      .getByRole("button", { name: "Preset settings", exact: true })
+      .getByText("Run environment and starting checkpoint", { exact: true })
       .click();
     await page
       .getByRole("textbox", { name: "Training dataset path", exact: false })
@@ -135,9 +143,7 @@ test("legacy training stages, real run, charts, snapshots, and reload", async ({
     await page
       .getByRole("spinbutton", { name: "Checkpoint interval", exact: false })
       .fill("2");
-    await page
-      .getByRole("button", { name: "Save stages", exact: true })
-      .click();
+    await page.getByRole("button", { name: "Save stage", exact: true }).click();
     await page
       .getByRole("button", { name: "Stages and run history", exact: true })
       .click();
@@ -204,6 +210,10 @@ test("legacy training stages, real run, charts, snapshots, and reload", async ({
       .click();
     await expect(page.locator(".training-stage")).toHaveCount(4);
     await page.keyboard.press("Escape");
+    await page
+      .getByRole("button", { name: "Stages and run history", exact: true })
+      .click();
+    await page.locator(".training-run").first().click();
     await page.getByRole("button", { name: "Hardware", exact: true }).click();
     await expect(page.locator(".training-dashboard")).toContainText(
       "GPU readings are device-wide",
@@ -278,6 +288,9 @@ test("training workspace fits black theme and phone", async ({
     await page
       .getByRole("button", { name: "Create training stage", exact: true })
       .click();
+    await page
+      .getByRole("button", { name: "Python script", exact: true })
+      .click();
     await expect(
       page.getByRole("textbox", {
         name: "Training Python script",
@@ -300,7 +313,7 @@ test("training workspace fits black theme and phone", async ({
     await page.screenshot({ path: "data/training-black.png", fullPage: true });
     await page.setViewportSize({ width: 390, height: 844 });
     await expect(
-      page.getByRole("textbox", { name: "Stage name", exact: true }),
+      page.getByRole("combobox", { name: "Training stage", exact: true }),
     ).toBeVisible();
     expect(
       await page
@@ -335,11 +348,15 @@ test("real server scripts sync with SSH edits and use a highlighted Python edito
     await page
       .getByRole("button", { name: "Create training stage", exact: true })
       .click();
+    await page
+      .getByRole("button", { name: "Python script", exact: true })
+      .click();
     const editor = page.getByRole("textbox", {
       name: "Training Python script",
       exact: true,
     });
     await expect(editor).toBeVisible();
+    await page.getByText(/Server files & Python environment/).click();
     await expect(page.locator(".training-server-files")).toContainText(
       "server paths",
     );
@@ -383,6 +400,7 @@ test("real server scripts sync with SSH edits and use a highlighted Python edito
     await expect(
       page.getByRole("button", { name: "Reload server files", exact: true }),
     ).toBeEnabled();
+    await page.getByText(/Server files & Python environment/).click();
     await expect(page.locator(".training-server-files")).toContainText(
       "not saved",
     );
@@ -423,8 +441,9 @@ test("real server scripts sync with SSH edits and use a highlighted Python edito
     const config = JSON.parse(readFileSync(configPath, "utf8"));
     config.learning_rate = 0.0123;
     writeFileSync(configPath, JSON.stringify(config));
+    await page.getByRole("button", { name: "Setup", exact: true }).click();
     await page
-      .getByRole("button", { name: "Preset settings", exact: true })
+      .getByText("Run environment and starting checkpoint", { exact: true })
       .click();
     await page
       .getByText("Optimizer, schedule, and evaluation", { exact: true })
@@ -451,7 +470,11 @@ test("independent training has a localhost reporting address and an editable con
       .getByRole("button", { name: "Create training stage", exact: true })
       .click();
     await page
-      .getByRole("button", { name: "Launch settings", exact: true })
+      .getByRole("button", { name: "Python script", exact: true })
+      .click();
+    await page.getByRole("button", { name: "Setup", exact: true }).click();
+    await page
+      .getByText("Run environment and starting checkpoint", { exact: true })
       .click();
     await page
       .getByRole("combobox", { name: "Training recipe" })
@@ -537,12 +560,16 @@ test("simple custom reporting infers steps, learning rates and progress", async 
       .getByRole("button", { name: "Create training stage", exact: true })
       .click();
     await page
-      .getByRole("button", { name: "Launch settings", exact: true })
+      .getByRole("button", { name: "Python script", exact: true })
+      .click();
+    await page.getByRole("button", { name: "Setup", exact: true }).click();
+    await page
+      .getByText("Run environment and starting checkpoint", { exact: true })
       .click();
     await page
       .getByRole("combobox", { name: "Training recipe" })
       .selectOption("custom");
-    await page.getByRole("checkbox", { name: "CPU", exact: true }).check();
+    await page.getByRole("checkbox", { name: /^CPU/ }).check();
     await page
       .getByRole("button", { name: "Python script", exact: true })
       .click();

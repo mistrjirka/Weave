@@ -2,7 +2,7 @@
   flex: 1;
   min-height: 0;
   overflow: auto;
-  padding: 24px 28px 60px;
+  padding: 16px 24px 32px;
   color: var(--theme-text, #263b30);
   background: var(--theme-base, #f7f9f5);
 }
@@ -176,13 +176,6 @@
 .training-stage-tools button {
   padding: 6px;
   min-width: 34px;
-}
-.training-stage-name {
-  font-size: 17px !important;
-  font-weight: 600;
-  max-width: 400px;
-  flex: 1;
-  min-width: 160px;
 }
 .training-tabs {
   display: flex;
@@ -1327,10 +1320,7 @@
   gap: 12px;
 }
 .training-setup-card {
-  padding: 12px 16px;
-}
-.training-setup-card:has(> details[open]) {
-  padding: 24px;
+  padding: 20px;
 }
 .training-heading {
   margin-bottom: 12px;
@@ -1450,31 +1440,6 @@ html:is([data-theme="dark"], [data-theme="black"]) {
   border-radius: 4px;
   background: var(--theme-neutral-surface, #edf2e9);
   text-transform: capitalize;
-}
-
-.training-setup-card {
-  position: relative;
-}
-.training-setup-card > details > summary {
-  padding-right: 165px;
-  min-height: 36px;
-  align-content: center;
-}
-.training-setup-devices {
-  position: absolute;
-  right: 12px;
-  top: 12px;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-.training-stopped-banner:first-child {
-  margin-top: 0;
-}
-
-.training-setup-card:has(> details[open]) .training-setup-devices {
-  top: 24px;
-  right: 24px;
 }
 
 .training-chart-placeholder {

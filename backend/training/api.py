@@ -28,6 +28,7 @@ from pydantic import BaseModel
 from .service import (
     TrainingService,
     TrainingConfig,
+    Stage,
     Plan,
     Launch,
     inside,
@@ -42,6 +43,7 @@ from .environment import inspect_python
 from .reporting import ReportStore, ReportBatch
 from .layout import PACKAGE, normalize_script
 from .recipe import is_code_first, starter_script
+from .stage_settings import preview_stage_settings
 from .chat import (
     ChatSessions,
     ChatPreview,
@@ -286,6 +288,11 @@ actual training code when your model/data/optimizer are ready.
             return model_metadata(compile_project(project), project)
         except (ValueError, KeyError) as exc:
             raise HTTPException(422, str(exc))
+
+    @api.post("/settings/preview", dependencies=[Depends(authenticated)])
+    def settings_preview(body: Stage):
+        """Preview the next launch's device settings without executing the script."""
+        return preview_stage_settings(body)
 
     @api.get("/plans/{project_id}", dependencies=[Depends(authenticated)])
     def get_plan(project_id: str):

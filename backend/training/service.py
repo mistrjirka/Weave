@@ -145,7 +145,10 @@ def events(directory, *, limit=None, kind=None, after=None, max_bytes=None):
 
     database = directory / "event-index.sqlite"
     with closing(sqlite3.connect(database, timeout=30)) as connection, connection:
-        connection.execute("PRAGMA journal_mode=WAL")
+        # Every read first advances the index. Acquire the writer transaction
+        # before reading offsets, so simultaneous SSE/dashboard requests wait
+        # rather than race initialization or upgrade a stale read snapshot.
+        connection.execute("BEGIN IMMEDIATE")
         connection.execute(
             "CREATE TABLE IF NOT EXISTS offsets (path TEXT PRIMARY KEY, offset INTEGER)"
         )

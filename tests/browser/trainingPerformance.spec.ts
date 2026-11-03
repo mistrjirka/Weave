@@ -73,27 +73,34 @@ for (const width of [1440, 390]) {
       folder = saved.project_path ?? null;
       await page.setViewportSize({ width, height: 900 });
       await page.goto(`/?model=${id}&view=training&stage=${stage.id}`);
+      await page.getByRole("button", { name: "Setup", exact: true }).click();
       await page
-        .getByRole("button", { name: "Training devices", exact: true })
-        .click();
-      await page
-        .getByText("Execution and profiling (advanced)", { exact: true })
+        .getByText("Performance and profiling", { exact: true })
         .click();
       await expect(
         page.getByLabel("Compilation", { exact: true }),
-      ).toBeDisabled();
-      await page
-        .getByLabel("Performance settings", { exact: true })
-        .selectOption("override");
+      ).toBeEnabled();
+      const gpus = page
+        .getByRole("group", { name: "Choose CPU or GPUs" })
+        .getByRole("checkbox", { name: /GPU/ });
+      const hasGPU = (await gpus.count()) > 0;
+      if (hasGPU) await gpus.first().check();
       await page
         .getByLabel("Compilation", { exact: true })
         .selectOption("reduce-overhead");
-      await page.getByLabel("Fused AdamW (CUDA only)", { exact: true }).check();
+      if (hasGPU)
+        await page
+          .getByLabel("Fused AdamW (CUDA only)", { exact: true })
+          .check();
+      else
+        await expect(
+          page.getByLabel("Fused AdamW (CUDA only)", { exact: true }),
+        ).toBeDisabled();
       await page
         .getByLabel("Profile updates (0 disables capture)", { exact: true })
         .fill("3");
       await page
-        .getByRole("button", { name: "Save stages", exact: true })
+        .getByRole("button", { name: "Save stage", exact: true })
         .click();
       await expect(page.locator(".training-notice")).toContainText("Saved", {
         timeout: 30000,
@@ -105,15 +112,13 @@ for (const width of [1440, 390]) {
       expect(plan.stages[0].config).toMatchObject({
         performance_mode: "override",
         compile_mode: "reduce-overhead",
-        fused_optimizer: true,
+        fused_optimizer: hasGPU,
         profile_steps: 3,
       });
       await page.reload();
+      await page.getByRole("button", { name: "Setup", exact: true }).click();
       await page
-        .getByRole("button", { name: "Training devices", exact: true })
-        .click();
-      await page
-        .getByText("Execution and profiling (advanced)", { exact: true })
+        .getByText("Performance and profiling", { exact: true })
         .click();
       await expect(page.getByLabel("Compilation", { exact: true })).toHaveValue(
         "reduce-overhead",

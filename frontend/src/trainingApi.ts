@@ -308,9 +308,13 @@ export async function trainingRequest<T>(
 }
 export const inspectTrainingModel = (project: Project) =>
   trainingRequest("/model", modelSchema, project);
-export function trainingURL(values: { stage?: string; run?: string }) {
+export function trainingURL(values: {
+  stage?: string;
+  run?: string;
+  training_panel?: "setup" | "script" | "monitor";
+}) {
   const url = new URL(window.location.href);
-  for (const key of ["stage", "run"] as const) {
+  for (const key of ["stage", "run", "training_panel"] as const) {
     if (values[key]) url.searchParams.set(key, values[key]);
     else url.searchParams.delete(key);
   }

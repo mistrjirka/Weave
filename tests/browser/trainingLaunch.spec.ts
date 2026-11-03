@@ -107,7 +107,7 @@ test("launch saves first, reports failures beside Start, and selects the new run
       page.getByText("Loading training workspace…", { exact: true }),
     ).toBeVisible();
     await expect(
-      page.getByRole("button", { name: "Training devices", exact: true }),
+      page.getByRole("button", { name: "Setup", exact: true }),
     ).toHaveCount(0);
     releaseInitial();
     await expect(
@@ -130,12 +130,12 @@ test("launch saves first, reports failures beside Start, and selects the new run
     expect(
       (await page.locator(".viewbar").boundingBox())?.height,
     ).toBeLessThanOrEqual(44);
-    await page
-      .getByRole("button", { name: "Training devices", exact: true })
-      .click();
+    await page.getByRole("button", { name: "Setup", exact: true }).click();
+    await history.click();
     await page
       .getByRole("textbox", { name: "Stage name", exact: true })
       .fill("Edited before Start");
+    await page.keyboard.press("Escape");
     const calls: string[] = [];
     let mode: "save-failure" | "launch-failure" | "success" = "save-failure";
     const saveGate = new Promise<void>((resolve) => {
@@ -205,7 +205,12 @@ test("launch saves first, reports failures beside Start, and selects the new run
     await expect(error).toBeInViewport();
     await expect(
       page.getByRole("region", { name: "Run dashboard", exact: true }),
+    ).toHaveCount(0);
+    await page.getByRole("button", { name: "Monitor", exact: true }).click();
+    await expect(
+      page.getByRole("region", { name: "Run dashboard", exact: true }),
     ).toContainText("Previous run");
+    await page.getByRole("button", { name: "Setup", exact: true }).click();
     // Persisted browser drafts may hold an older launch-settings revision,
     // even after a hard refresh. Start must apply the selected GUI settings.
     const changedSettings = JSON.parse(

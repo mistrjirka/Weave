@@ -109,6 +109,9 @@ test("GUI DDP override survives Start and runs two CUDA ranks with CPU async eva
     await page
       .getByRole("button", { name: "Create training stage", exact: true })
       .click();
+    await page
+      .getByRole("button", { name: "Python script", exact: true })
+      .click();
 
     const editor = page.getByRole("textbox", {
       name: "Training Python script",
@@ -152,17 +155,10 @@ test("GUI DDP override survives Start and runs two CUDA ranks with CPU async eva
       { timeout: 30000 },
     );
 
-    await page
-      .getByRole("button", { name: "Training devices", exact: true })
-      .click();
-    const computeMode = page.getByRole("combobox", {
-      name: "Training device settings",
-    });
-    await expect(computeMode).toHaveValue("script");
-    await computeMode.selectOption("override");
+    await page.getByRole("button", { name: "Setup", exact: true }).click();
     const strategy = page.getByRole("combobox", { name: "GPU strategy" });
     await strategy.selectOption("ddp");
-    const devices = page.getByRole("group", { name: "Training devices" });
+    const devices = page.getByRole("group", { name: "Choose CPU or GPUs" });
     await devices.getByRole("checkbox", { name: /GPU 0/ }).check();
     await devices.getByRole("checkbox", { name: /GPU 1/ }).check();
     await expect(
@@ -183,9 +179,7 @@ test("GUI DDP override survives Start and runs two CUDA ranks with CPU async eva
     });
     await expect(evaluationDevice).toBeEnabled();
     await evaluationDevice.selectOption("cpu");
-    await page
-      .getByRole("button", { name: "Save stages", exact: true })
-      .click();
+    await page.getByRole("button", { name: "Save stage", exact: true }).click();
     await expect(page.locator(".training-notice")).toContainText("Saved", {
       timeout: 30000,
     });
