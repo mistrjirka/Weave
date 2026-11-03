@@ -19,6 +19,7 @@ ROOT = Path(__file__).resolve().parent.parent
 GUIDES = (
     "README.md", "INSTALL.md", "TRAINING.md", "TRAINING_GUIDE.md", "MCP.md",
     "DESIGN_ADVICE.md", "ARCHITECTURE_AUDIT.md",
+    "USER_GUIDE.md", "DOCKER.md", "CONTRIBUTING.md", "CHECKPOINT_CHAT_DECODERS.md",
 )
 MAX_RESPONSE = 1_000_000
 MAX_GUIDE = 250_000
@@ -38,10 +39,31 @@ def mcp_transport_security() -> TransportSecuritySettings:
                 host = address.address.split("%", 1)[0]
                 names.add(f"[{host}]" if address.family == socket.AF_INET6 else host)
     names.discard("")
+    hosts = {f"{name}:*" for name in names}
+    origins = {f"{scheme}://{name}:*" for scheme in ("http", "https") for name in names}
+    # A container sees its own interfaces, not the host's LAN address or proxy
+    # hostname. Permit only explicitly configured public origins in addition.
+    for value in os.environ.get("WEAVE_MCP_PUBLIC_ORIGINS", "").split(","):
+        value = value.strip().rstrip("/")
+        if not value:
+            continue
+        origin = urlsplit(value)
+        if (
+            origin.scheme not in {"http", "https"} or not origin.hostname
+            or origin.username or origin.password or origin.path
+            or origin.query or origin.fragment or "*" in value
+        ):
+            raise ValueError(
+                "WEAVE_MCP_PUBLIC_ORIGINS must contain comma-separated "
+                "HTTP(S) origins without wildcards"
+            )
+        origin.port  # Validate malformed/out-of-range ports before serving.
+        hosts.add(origin.netloc)
+        origins.add(value)
     return TransportSecuritySettings(
         enable_dns_rebinding_protection=True,
-        allowed_hosts=[f"{name}:*" for name in sorted(names)],
-        allowed_origins=[f"{scheme}://{name}:*" for scheme in ("http", "https") for name in sorted(names)],
+        allowed_hosts=sorted(hosts),
+        allowed_origins=sorted(origins),
     )
 
 

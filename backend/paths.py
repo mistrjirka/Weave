@@ -4,7 +4,16 @@ import json
 import os
 from pathlib import Path
 
-INSTALL_SETTINGS = Path(__file__).resolve().parents[1] / ".weave-config.json"
+INSTALL_SETTINGS = (
+    Path(
+        os.environ.get(
+            "WEAVE_CONFIG_FILE",
+            Path(__file__).resolve().parents[1] / ".weave-config.json",
+        )
+    )
+    .expanduser()
+    .absolute()
+)
 
 
 def projects_directory():

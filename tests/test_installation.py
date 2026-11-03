@@ -90,7 +90,15 @@ def test_fresh_install_uses_uv_lock_and_separate_cpu_environment(
 
     monkeypatch.setattr(setup, "run", run)
     setup.main(["install", "--projects-dir", str(installation / "projects")])
-    assert ["uv", "sync", "--locked", "--no-dev", "--python", "3.12"] in calls
+    assert [
+        "uv",
+        "sync",
+        "--locked",
+        "--no-dev",
+        "--inexact",
+        "--python",
+        "3.12",
+    ] in calls
     assert ["npm", "ci"] in calls and ["npm", "run", "build"] in calls
     assert any("https://download.pytorch.org/whl/cpu" in command for command in calls)
     settings = setup.read_settings()
@@ -146,3 +154,53 @@ def test_invalid_port_and_conflicting_training_options_reject_before_install(
             ["install", "--training", "none", "--training-python", sys.executable]
         )
     assert calls == []
+
+
+def test_missing_training_interpreter_rejects_before_install(installation, monkeypatch):
+    calls = []
+    monkeypatch.setattr(setup, "run", lambda command: calls.append(command))
+    with pytest.raises(SystemExit):
+        setup.main(["install", "--training-python", str(installation / "missing")])
+    assert calls == []
+
+
+def test_shared_web_interpreter_is_not_recreated_or_pruned(installation, monkeypatch):
+    python = installation / ".venv/bin/python"
+    python.parent.mkdir(parents=True)
+    python.symlink_to(sys.executable)
+    calls = []
+    monkeypatch.setattr(setup, "check_tools", lambda: None)
+    monkeypatch.setattr(
+        setup, "run", lambda command: calls.append(list(map(str, command)))
+    )
+    setup.main(
+        [
+            "install",
+            "--training-python",
+            str(python),
+            "--projects-dir",
+            str(installation / "projects"),
+        ]
+    )
+    sync = next(command for command in calls if command[:2] == ["uv", "sync"])
+    assert "--inexact" in sync
+    assert sync[-1] == str(python)
+
+
+def test_configuration_can_live_outside_checkout(installation, monkeypatch):
+    settings = installation / "mounted/settings/weave.json"
+    monkeypatch.setattr(setup, "SETTINGS", settings)
+    setup.main(["configure", "--port", "9191"])
+    assert json.loads(settings.read_text())["port"] == 9191
+    assert not list(settings.parent.glob(".weave-config-*"))
+
+
+def test_summary_reports_effective_environment_paths(installation, monkeypatch, capsys):
+    monkeypatch.setenv("WEAVE_PROJECTS_DIR", "/workspace/projects")
+    monkeypatch.setenv("WEAVE_DATA", "/workspace/state")
+    setup.main(["configure"])
+    output = capsys.readouterr().out
+    assert "Projects: /workspace/projects" in output
+    assert "Internal data: /workspace/state" in output
+    assert "environment overrides" in output
+    assert setup.read_settings() == {}

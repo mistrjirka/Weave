@@ -1,6 +1,8 @@
 # Install Weave
 
-Weave currently targets Linux (including WSL2). The graph editor needs uv, Node.js 20.19+ and npm. The installer obtains Python 3.12 through uv; you can select another Python 3.11+ with `--python`. GPU drivers and system packages remain your responsibility. Native Windows training is not supported; the cache builder uses POSIX locks. macOS has not been verified.
+Weave currently targets Linux (including WSL2). The graph editor needs uv, Node.js 20.19+ and npm. The installer obtains Python 3.12 through uv; you can select another Python 3.11+ with `--python`. GPU drivers and system packages remain your responsibility. Native Windows is not supported; training uses POSIX locks, signals and process groups. Use WSL2 or [Docker](DOCKER.md). macOS has not been verified. There are no Arch-specific package-manager commands; the same scripts are intended for Debian/Ubuntu, Fedora and Arch. For PyTorch wheels, use a compatible glibc-based distribution rather than Alpine/musl.
+
+For an image with persistent projects and optional CPU/NVIDIA training, see [Docker setup](DOCKER.md). Native installation remains useful when scripts should run directly in your existing host environment.
 
 ## Default: browser editor and CPU training
 
@@ -11,7 +13,7 @@ bash scripts/install.sh
 bash scripts/start.sh
 ```
 
-Install [uv](https://docs.astral.sh/uv/getting-started/installation/) first if missing. The script checks Node/npm, runs `uv sync --locked --no-dev`, `npm ci`, and `npm run build`. Python is downloaded automatically if needed. A fresh default install also creates `.venv-training`, installs CPU PyTorch plus the training helper dependencies, verifies imports, and enables local training. No training starts until you supply a data loader and launch a stage.
+Install [uv](https://docs.astral.sh/uv/getting-started/installation/) first if missing. The script checks Node/npm, runs `uv sync --locked --no-dev --inexact`, `npm ci`, and `npm run build`. Python is downloaded automatically if needed. A fresh default install also creates `.venv-training`, installs CPU PyTorch plus the training helper dependencies, verifies imports, and enables local training. No training starts until you supply a data loader and launch a stage.
 
 The app listens on `0.0.0.0:8173`. Use `http://127.0.0.1:8173` on the server or `http://SERVER_IP:8173` elsewhere. This is a single-user service for a trusted machine/LAN, with server-side Python execution. It is not an authenticated multi-user hosting platform.
 
@@ -37,7 +39,9 @@ bash scripts/start.sh
 
 The installer adds `training-requirements.txt` to the selected environment, verifies imports, and saves its absolute interpreter path. It does not install or replace torch in an existing training environment. The Training UI shows the interpreter, Python/PyTorch/CUDA versions and available devices. Each stage can choose another interpreter. Default GPU/device and precision choices belong in your `train.py`.
 
-The web environment (`.venv`) is locked by `uv.lock`. Training dependencies are intentionally separate: PyTorch builds, additional data libraries and user recipe requirements depend on hardware and experiments. Run snapshots record the actual installed versions. Updating the web app does not make arbitrary training recipes reproducible automatically.
+The web dependencies in `.venv` are resolved by `uv.lock`. The installer uses inexact sync so it does not remove additional packages you installed there. If `.venv` is also the selected training environment, its interpreter is retained rather than recreated for the default Python version. A separate training environment is still recommended. Missing interpreters or missing PyTorch are reported before package installation or UI builds.
+
+Training dependencies are intentionally separate: PyTorch builds, additional data libraries and user recipe requirements depend on hardware and experiments. Run snapshots record the actual installed versions. Updating the web app does not make arbitrary training recipes reproducible automatically.
 
 ## Persistent configuration
 
@@ -48,10 +52,11 @@ bash scripts/configure.sh --enable-training --training-python /absolute/path/to/
 bash scripts/start.sh
 ```
 
-Only supplied options change. Configuration is stored in the git-ignored `.weave-config.json`; unknown keys and existing selections are preserved. Run `bash scripts/configure.sh` without options to print the current saved settings. `--disable-training` disables local process launch without removing environments, scripts or checkpoints. This configuration applies when using `scripts/start.sh`; invoking uvicorn directly bypasses the launcher settings except the existing project-directory setting.
+Only supplied options change. Configuration is stored in the git-ignored `.weave-config.json` (or `WEAVE_CONFIG_FILE` when set); unknown keys and existing selections are preserved. Run `bash scripts/configure.sh` without options to print the current saved settings. `--disable-training` disables local process launch without removing environments, scripts or checkpoints. This configuration applies when using `scripts/start.sh`; invoking uvicorn directly bypasses the launcher settings except the existing project-directory setting.
 
 | Saved setting | Default | Optional environment override |
 | --- | --- | --- |
+| Settings file | `<checkout>/.weave-config.json` | `WEAVE_CONFIG_FILE` |
 | `host` | `0.0.0.0` | `WEAVE_HOST` |
 | `port` | `8173` | `WEAVE_PORT` |
 | `projects_directory` | `~/shared/weave-projects` | `WEAVE_PROJECTS_DIR` |
@@ -102,3 +107,7 @@ Rerunning the installer retains the selected training interpreter and explicit d
 - Missing torch or data libraries: install them into the interpreter selected in Training, not your shell's unrelated Python.
 - Address already in use: stop the other instance or configure another port.
 - Using a remote browser: server paths and selected Python refer to the server, not your laptop. SSH forwarding also works: `ssh -L 8173:127.0.0.1:8173 USER@SERVER`.
+
+## Portability checks
+
+See the [installation audit](INSTALLATION_AUDIT.md) for tested native/container paths, fixes and remaining platform limits. Docker images are built from source; a prebuilt Weave image is not currently published.

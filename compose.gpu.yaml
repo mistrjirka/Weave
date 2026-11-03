@@ -1,0 +1,10 @@
+# NVIDIA only: requires the NVIDIA Container Toolkit on the Docker host.
+services:
+  weave:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

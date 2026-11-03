@@ -23,3 +23,8 @@ playwright-report/
 
 # Optional managed CPU training environment
 .venv-training/
+
+# Default Docker bind mounts (editable projects and persistent server state)
+/weave-state/
+/weave-projects/
+/weave-settings/

@@ -1,0 +1,26 @@
+services:
+  weave:
+    build:
+      context: .
+      target: ${WEAVE_IMAGE_TARGET:-editor}
+      args:
+        WEAVE_UID: ${WEAVE_UID:-1000}
+        WEAVE_GID: ${WEAVE_GID:-1000}
+        TORCH_PACKAGE: ${TORCH_PACKAGE:-torch}
+        TORCH_INDEX_URL: ${TORCH_INDEX_URL:-https://download.pytorch.org/whl/cpu}
+    ports:
+      - "${WEAVE_BIND_ADDRESS:-127.0.0.1}:${WEAVE_PUBLISHED_PORT:-8173}:8173"
+    environment:
+      WEAVE_MCP_PUBLIC_ORIGINS: ${WEAVE_MCP_PUBLIC_ORIGINS:-}
+    volumes:
+      - ./weave-state:/workspace/state
+      - ./weave-projects:/workspace/projects
+      - ./weave-settings:/workspace/settings
+      - weave-cache:/home/weave/.cache
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 60s
+    shm_size: 2gb
+
+volumes:
+  weave-cache:

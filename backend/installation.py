@@ -11,8 +11,10 @@ import subprocess
 import sys
 import tempfile
 
+from .paths import INSTALL_SETTINGS
+
 ROOT = Path(__file__).resolve().parents[1]
-SETTINGS = ROOT / ".weave-config.json"
+SETTINGS = INSTALL_SETTINGS
 ENVIRONMENT = {
     "host": "WEAVE_HOST",
     "port": "WEAVE_PORT",
@@ -33,7 +35,7 @@ def read_settings():
 
 
 def executable(value):
-    candidate = shutil.which(str(value))
+    candidate = shutil.which(os.path.expanduser(str(value)))
     if not candidate:
         raise ValueError(f"Python executable not found: {value}")
     # Preserve a venv symlink: resolving it would select the base interpreter.
@@ -42,7 +44,8 @@ def executable(value):
 
 def save_settings(values):
     values = {**read_settings(), **values}
-    fd, temporary = tempfile.mkstemp(prefix=".weave-config-", dir=ROOT)
+    SETTINGS.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix=".weave-config-", dir=SETTINGS.parent)
     try:
         with os.fdopen(fd, "w") as target:
             json.dump(values, target, indent=2)
@@ -72,6 +75,21 @@ def configuration(args):
 
 def summary(settings):
     print(f"Configuration: {SETTINGS}")
+    overrides = [
+        variable for variable in ENVIRONMENT.values() if variable in os.environ
+    ]
+    settings = dict(settings)
+    for key, variable in ENVIRONMENT.items():
+        if variable in os.environ:
+            settings[key] = (
+                os.environ[variable] == "1"
+                if key == "training_enabled"
+                else os.environ[variable]
+            )
+    if overrides:
+        print(
+            "Effective settings include environment overrides: " + ", ".join(overrides)
+        )
     print(
         f'Address: http://{settings.get("host", "0.0.0.0")}:{settings.get("port", 8173)}'
     )
@@ -94,6 +112,8 @@ def run(command, **kwargs):
 
 
 def check_tools():
+    if os.name != "posix":
+        raise ValueError("Use Linux, WSL2 or Docker; native Windows is not supported.")
     if not shutil.which("uv"):
         raise ValueError(
             "Install uv first: https://docs.astral.sh/uv/getting-started/installation/"
@@ -114,7 +134,6 @@ def check_tools():
 
 def install(args):
     python = args.python
-    check_tools()
     # Existing installations keep their selected training environment unless an
     # explicit installation mode was requested. Fresh installs include CPU torch.
     previous = read_settings()
@@ -132,7 +151,21 @@ def install(args):
         mode = "existing"
     if mode == "existing" and not training_python:
         raise ValueError("--training existing requires --training-python PATH")
-    run(["uv", "sync", "--locked", "--no-dev", "--python", python])
+    # Validate before installing anything. Inexact sync retains packages added by
+    # the user, including torch when training shares the web environment.
+    if mode == "existing":
+        training_python = executable(training_python)
+        run(
+            [
+                training_python,
+                "-c",
+                "import torch; print('Existing PyTorch:', torch.__version__)",
+            ]
+        )
+        if Path(training_python).parent == ROOT / ".venv/bin":
+            python = training_python
+    check_tools()
+    run(["uv", "sync", "--locked", "--no-dev", "--inexact", "--python", python])
     run(["npm", "ci"])
     run(["npm", "run", "build"])
     values = configuration(args)

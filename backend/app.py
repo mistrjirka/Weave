@@ -24,7 +24,7 @@ from .tokenizers import TokenizerService, ALLOWED_SUFFIXES
 from .tokenizer_bindings import input_tokenizers
 
 ROOT=Path(__file__).parent.parent
-DATA=Path(os.environ.get('WEAVE_DATA', ROOT/'data'));DATA.mkdir(parents=True,exist_ok=True)
+DATA=Path(os.environ.get('WEAVE_DATA', ROOT/'data')).expanduser().absolute();DATA.mkdir(parents=True,exist_ok=True)
 @asynccontextmanager
 async def app_lifespan(app):
     async with mcp_server.session_manager.run():

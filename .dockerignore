@@ -1,0 +1,23 @@
+# Allow only release source into the build context. Never send user data,
+# checkpoints, local credentials, environments or decoder registrations.
+**
+!Dockerfile
+!package.json
+!package-lock.json
+!tsconfig.json
+!vite.config.ts
+!pyproject.toml
+!uv.lock
+!training-requirements.txt
+!*.md
+!frontend/
+!frontend/**
+!backend/
+!backend/**
+!references/
+!references/**
+!examples/
+!examples/**
+!LICENSE
+**/__pycache__/
+**/*.pyc

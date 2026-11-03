@@ -5,6 +5,7 @@ import json
 import socket
 from types import SimpleNamespace
 
+import pytest
 from fastapi.testclient import TestClient
 
 from backend.app import app, mcp_server
@@ -94,5 +95,18 @@ def test_mcp_host_policy_includes_lan_and_rejects_unrelated_hosts(monkeypatch):
     assert "http://10.8.0.8:*" in security.allowed_origins
     assert "weave-box:*" in security.allowed_hosts
     assert "attacker.example:*" not in security.allowed_hosts
+
+
+def test_mcp_container_public_origin_is_explicit(monkeypatch):
+    monkeypatch.setenv("WEAVE_MCP_PUBLIC_ORIGINS", "https://weave.example.com,http://192.168.1.10:8173")
+    security = mcp_transport_security()
+    assert "weave.example.com" in security.allowed_hosts
+    assert "192.168.1.10:8173" in security.allowed_hosts
+    assert "https://weave.example.com" in security.allowed_origins
+    assert "http://weave.example.com" not in security.allowed_origins
+    for invalid in ("https://*.example.com", "https://weave.example.com/path", "https://user:pass@example.com", "http://example.com:99999"):
+        monkeypatch.setenv("WEAVE_MCP_PUBLIC_ORIGINS", invalid)
+        with pytest.raises(ValueError):
+            mcp_transport_security()
 
 
