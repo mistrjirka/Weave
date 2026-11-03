@@ -32,7 +32,7 @@ load generated Model → load tokenizer → get_dataloaders(tokenizer, config)
 
 `get_dataloaders` may return arbitrary PyTorch-compatible iterables. The optional cache does not decide data formats, train/validation splits, chunk lengths, augmentation or batching. Sequence length belongs in your loader/model contract, not in TrainingConfig.
 
-The starter's data hook intentionally raises NotImplementedError. Implement it or use the complete [cached JSONL example](examples/train_cached_jsonl.py), copied into a project stage as a separate recipe. That example is single-process, next-token training with whole short documents and dynamic right-padding; it is a teaching example, not a replacement for your custom bucket sampler.
+The starter's data hook intentionally raises NotImplementedError. Implement it or use the complete [cached JSONL example](../examples/train_cached_jsonl.py), copied into a project stage as a separate recipe. That example is single-process, next-token training with whole short documents and dynamic right-padding; it is a teaching example, not a replacement for your custom bucket sampler.
 
 ## Configuration and hooks
 
@@ -253,7 +253,7 @@ Snapshots capture graph, code, checkpoint state, tokenizer and traces. They reco
 
 ## Evaluation and inference
 
-A background evaluator starts a fresh process, loads immutable checkpoint weights and invokes your hooks. Use `config.evaluation_only` to avoid constructing the training loader. Shared completed caches are reused; separate preparation streams prevent evaluator startup from replacing training progress. CPU evaluation uses FP32; sharing a training GPU competes for memory/compute. The run waits for final evaluation before marking itself complete. See [training operations](TRAINING.md) for placement and launch details.
+A background evaluator starts a fresh process, loads immutable checkpoint weights and invokes your hooks. Use `config.evaluation_only` to avoid constructing the training loader. Shared completed caches are reused; separate preparation streams prevent evaluator startup from replacing training progress. CPU evaluation uses FP32; sharing a training GPU competes for memory/compute. The run waits for final evaluation before marking itself complete. See [training operations](training.md) for placement and launch details.
 
 Checkpoint chat/text completion uses the frozen model and tokenizer without importing train.py. A custom tokenizer mutation in your script may need to be represented in saved tokenizer settings or a chat-template override for inference. A base pretrained model is not automatically a chat model. Chat tool-call text is displayed, not executed.
 
@@ -297,7 +297,7 @@ Subsequent calls reuse the completed cache without needing `existing`.
 
 ## Consuming a saved GPU tuning profile
 
-See [host-wide GPU tuning](TRAINING.md#host-wide-gpu-performance-tuning) for benchmarking and automatic compatibility checks. Default `TrainingConfig(use_gpu_tuning=True)` permits a matching launch profile; set it false to preserve your exact manual allocation. No profile is required to train, and a benchmark does not edit train.py.
+See [host-wide GPU tuning](training.md#host-wide-gpu-performance-tuning) for benchmarking and automatic compatibility checks. Default `TrainingConfig(use_gpu_tuning=True)` permits a matching launch profile; set it false to preserve your exact manual allocation. No profile is required to train, and a benchmark does not edit train.py.
 
 For a normal map-style dataset, use a standard `DataLoader(..., sampler=DistributedSampler(dataset), batch_size=config.micro_batch_size)`. The Trainer can rebuild that standard loader with measured unequal batches while preserving the global microbatch and matched step counts. Custom collation is retained. It does not replace DataLoader subclasses, IterableDataset batching, or custom batch samplers.
 

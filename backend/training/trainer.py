@@ -45,7 +45,7 @@ from weave_training import (
 )
 from token_cache import cache_progress_reporting
 from tuning_runtime import load_tuning, tune_loader, WeightedBatchSampler
-from preparation import distributed_preparation, preparation_barrier
+from preparation import distributed_preparation
 from performance import configure_execution, training_profile
 from evaluation_worker import (
     EvaluationSession,

@@ -2,7 +2,6 @@
 
 import json
 import math
-import os
 from pathlib import Path
 
 
@@ -86,7 +85,6 @@ def tune_loader(loader, config, rank):
         return loader, False
     if getattr(loader, "weave_tuning_applied", False):
         return loader, True
-    import torch
     from torch.utils.data import DataLoader, BatchSampler, IterableDataset
     from torch.utils.data.distributed import DistributedSampler
 

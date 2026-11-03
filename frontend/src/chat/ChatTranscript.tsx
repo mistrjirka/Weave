@@ -1,7 +1,7 @@
 import { useRef, useState, useEffect } from "react";
 import type { ChatSession, ChatMessage } from "./chatSchema";
 import { downloadJsonl } from "./chatSchema";
-import { copyText } from "./ui";
+import { copyText } from "../ui";
 
 export function ChatTranscript({
   session,

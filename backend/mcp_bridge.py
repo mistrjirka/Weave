@@ -14,13 +14,10 @@ from mcp.server import MCPServer
 from mcp.server.mcpserver.context import Context
 from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import ToolAnnotations
+from .documentation import GUIDE_PATHS, guide_path
 
 ROOT = Path(__file__).resolve().parent.parent
-GUIDES = (
-    "README.md", "INSTALL.md", "TRAINING.md", "TRAINING_GUIDE.md", "MCP.md",
-    "DESIGN_ADVICE.md", "ARCHITECTURE_AUDIT.md",
-    "USER_GUIDE.md", "DOCKER.md", "CONTRIBUTING.md", "CHECKPOINT_CHAT_DECODERS.md",
-)
+GUIDES = GUIDE_PATHS
 MAX_RESPONSE = 1_000_000
 MAX_GUIDE = 250_000
 EXCLUDED_PATHS = {
@@ -224,8 +221,8 @@ def create_mcp_server(bridge: WeaveBridge) -> MCPServer:
         if not term or len(term) > 200:
             return [{"error": "Supply a search term of 1 to 200 characters"}]
         matches = []
-        for name in GUIDES:
-            lines = (ROOT / name).read_text(encoding="utf-8").splitlines()
+        for name, location in GUIDES.items():
+            lines = (ROOT / location).read_text(encoding="utf-8").splitlines()
             for number, line in enumerate(lines, 1):
                 if term in line.casefold():
                     matches.append({"guide": name, "line": number, "text": line[:500]})
@@ -236,11 +233,12 @@ def create_mcp_server(bridge: WeaveBridge) -> MCPServer:
     @server.tool(annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=False))
     async def read_weave_doc(guide: str, start_line: int = 1, max_lines: int = 160) -> dict:
         """Read an allowlisted Weave guide, optionally by line range."""
-        if guide not in GUIDES:
+        location = guide_path(guide)
+        if location is None:
             return {"error": "Unknown guide", "available": list(GUIDES)}
         if start_line < 1 or not 1 <= max_lines <= 300:
             return {"error": "start_line must be positive and max_lines must be 1 to 300"}
-        source = ROOT / guide
+        source = ROOT / location
         if source.stat().st_size > MAX_GUIDE:
             return {"error": "Guide exceeds size limit"}
         lines = source.read_text(encoding="utf-8").splitlines()

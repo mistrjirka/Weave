@@ -2,7 +2,6 @@
 from pathlib import Path
 import hashlib
 import json
-import shutil
 import os
 
 # This service only loads tokenizers, never neural models. Avoid importing ML runtimes.

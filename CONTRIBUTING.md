@@ -1,6 +1,6 @@
 # Developing Weave
 
-Use Linux or WSL2. Start with the [installation guide](INSTALL.md), then install development dependencies:
+Use Linux or WSL2. Start with the [installation guide](docs/install.md), then install development dependencies:
 
 ```bash
 uv sync --locked --group dev --inexact
@@ -31,6 +31,8 @@ TypeScript tests such as `npm run test:routing` use Node's native TypeScript sup
 
 ## Source map
 
+See the [repository map](docs/structure.md) for source boundaries, generated storage and indirectly loaded modules.
+
 - `frontend/src/`: React, TypeScript, React Flow, CodeMirror and graph operations.
 - `backend/core.py`: contracts and tensor-shape inference.
 - `backend/compiler.py`, `backend/codegen.py`: PyTorch code generation.
@@ -42,8 +44,8 @@ The backend and frontend share the same versioned graph document. Avoid changes 
 
 ## API and guides
 
-The running server exposes interactive API documentation at `/docs` and its schema at `/openapi.json`. Core endpoints include projects, templates, validation, code generation, export and tokenizer inspection/upload. [MCP.md](MCP.md) describes tool access to the API and guides.
+The running server exposes interactive API documentation at `/docs` and its schema at `/openapi.json`. Core endpoints include projects, templates, validation, code generation, export and tokenizer inspection/upload. [MCP.md](docs/mcp.md) describes tool access to the API and guides.
 
-[USER_GUIDE.md](USER_GUIDE.md) contains the graph editor's detailed behavior and reference-model limits. Update the relevant guide when changing user-visible behavior; keep README focused on what the app does and how to start it.
+[USER_GUIDE.md](docs/user-guide.md) contains the graph editor's detailed behavior and reference-model limits. Update the relevant guide when changing user-visible behavior; keep README focused on what the app does and how to start it.
 
 README screenshots use an isolated installation and example models, never personal project data. The overview screenshot uses manually arranged nodes; node positions do not change the computation.

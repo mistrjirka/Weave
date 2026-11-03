@@ -7,7 +7,6 @@ import gc
 from contextlib import nullcontext
 from datetime import timedelta
 import json
-import math
 import os
 import signal
 from pathlib import Path

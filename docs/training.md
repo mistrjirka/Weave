@@ -12,7 +12,7 @@ Dashboard loading does not wait for Python/PyTorch inspection. Environment check
 
 Generated examples follow the newest evaluated checkpoint by default, ordered by optimizer-update number even if evaluations arrive out of order. You can select an older checkpoint or all checkpoints. Automatic built-in examples use greedy decoding and label that choice; custom sample hooks can use their own decoder and metadata. An asynchronous evaluator can lag behind the training step, which the UI labels explicitly.
 
-Checkpoint chat accepts tool catalogs and optional local token decoders through **Tools & constrained decoding**. See [decoder installation, controls and API](CHECKPOINT_CHAT_DECODERS.md). This does not change model architecture or frozen training files.
+Checkpoint chat accepts tool catalogs and optional local token decoders through **Tools & constrained decoding**. See [decoder installation, controls and API](checkpoint-chat-decoders.md). This does not change model architecture or frozen training files.
 
 ## Enable local execution
 
@@ -30,7 +30,7 @@ bash scripts/configure.sh --enable-training --training-python /absolute/path/to/
 bash scripts/start.sh
 ```
 
-See [installation and GPU setup](INSTALL.md). Environment variables such as `WEAVE_TRAINING_ENABLED` and `WEAVE_TRAINING_PYTHON` are optional overrides, not required setup steps.
+See [installation and GPU setup](install.md). Environment variables such as `WEAVE_TRAINING_ENABLED` and `WEAVE_TRAINING_PYTHON` are optional overrides, not required setup steps.
 
 The web application remains on `0.0.0.0:8173`. Training opens without a token by default. Operators can opt into authentication by setting `WEAVE_TRAINING_TOKEN`; existing generated `operator.token` files are no longer used as an implicit access gate. When optional authentication is enabled, the browser uses an HttpOnly, same-site session cookie. Training APIs reject cross-origin browser requests. Editable scripts run with the server user's permissions; this is a trusted local workbench.
 
@@ -251,7 +251,7 @@ npx playwright test tests/browser/training.spec.ts
 
 Real two-GPU acceptance compares single-device, DDP and split-model weights; checks incompatible weight-sharing placement; and runs a separate evaluation GPU. Browser tests cover stage editing, actual training, token-mask preview, charts, snapshots, reloads, black theme, accessibility and phone layouts.
 
-See the [training authoring guide](TRAINING_GUIDE.md) and [optional cached JSONL example](examples/train_cached_jsonl.py). New stages keep the minimal data-loader placeholder; persistent document caching is opt-in. Copies of the guide and example are included under `weave_support/` in project folders and downloaded packages. Cache progress appears automatically when called from a Trainer data-loader hook; no extra reporting hook is required.
+See the [training authoring guide](training-guide.md) and [optional cached JSONL example](../examples/train_cached_jsonl.py). New stages keep the minimal data-loader placeholder; persistent document caching is opt-in. Copies of the guide and example are included under `weave_support/` in project folders and downloaded packages. Cache progress appears automatically when called from a Trainer data-loader hook; no extra reporting hook is required.
 
 ## Host-wide GPU performance tuning
 

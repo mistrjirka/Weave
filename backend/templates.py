@@ -189,7 +189,7 @@ def needle_layer(index, conf):
 
 
 def needle_network(conf):
-    lanes=conf['extras']['mhc_lanes'];layers=conf['num_hidden_layers'];width=conf['hidden_size']
+    lanes=conf['extras']['mhc_lanes'];layers=conf['num_hidden_layers']
     stack={'nodes':[node('x','input','Residual lanes',0,150,{'index':0,'shape':['B','T',lanes,'$width'],'dtype':'float32'}),node('ids','input','Token IDs',0,600,{'index':1,'shape':['B','T'],'dtype':'int64'})],'edges':[]}
     last='x'
     for i in range(layers):

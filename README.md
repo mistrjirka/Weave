@@ -24,15 +24,15 @@ bash scripts/start.sh
 
 Open **http://localhost:8173**. Choose **New project** to start from a blank graph or copy a reference model.
 
-For editor/export only, install with `bash scripts/install.sh --training none`. For GPU training, select a compatible existing PyTorch environment with `--training-python /path/to/venv/bin/python`. See [installation and updates](INSTALL.md).
+For editor/export only, install with `bash scripts/install.sh --training none`. For GPU training, select a compatible existing PyTorch environment with `--training-python /path/to/venv/bin/python`. See [installation and updates](docs/install.md).
 
-Prefer a container? [Docker setup](DOCKER.md) covers persistent storage and optional CPU/NVIDIA training.
+Prefer a container? [Docker setup](docs/docker.md) covers persistent storage and optional CPU/NVIDIA training.
 
 **Weave runs Python with the server user's permissions.** Use it on a trusted machine or network. The native launcher listens on `0.0.0.0:8173`; Docker binds to localhost by default.
 
 ## Explore a model
 
-Examples include decoder and looped transformers, text diffusion, MoE, embedding tables, GPT-2, Needle 1–3, Thimble, Hammer 2.1 and LFM2.5 SHELLper. They describe model computation and start with random weights. Reference-specific omissions and fidelity checks are documented in the [user guide](USER_GUIDE.md#reference-projects-and-fidelity) and [architecture audit](ARCHITECTURE_AUDIT.md).
+Examples include decoder and looped transformers, text diffusion, MoE, embedding tables, GPT-2, Needle 1–3, Thimble, Hammer 2.1 and LFM2.5 SHELLper. They describe model computation and start with random weights. Reference-specific omissions and fidelity checks are documented in the [user guide](docs/user-guide.md#reference-projects-and-fidelity) and [architecture audit](docs/reference-models.md).
 
 <details>
 <summary>Inside a transformer</summary>
@@ -45,14 +45,16 @@ Training requires your own data loader and data. Exporting a graph does not prod
 
 ## Documentation
 
+[All guides](docs/README.md) · [Repository map](docs/structure.md)
+
 | I want to… | Guide |
 | --- | --- |
-| Install, configure paths, use a GPU, or start after reboot | [Installation](INSTALL.md) · [Docker](DOCKER.md) |
-| Edit graphs, tokenizers, shared weights and reference models | [Using Weave](USER_GUIDE.md) |
-| Write a training script, cache data or add augmentations | [Training authoring](TRAINING_GUIDE.md) |
-| Launch, monitor, resume and back up training runs | [Training operations](TRAINING.md) |
-| Test tool calls with a constrained decoder | [Checkpoint chat](CHECKPOINT_CHAT_DECODERS.md) |
-| Control Weave from an MCP client | [MCP](MCP.md) |
+| Install, configure paths, use a GPU, or start after reboot | [Installation](docs/install.md) · [Docker](docs/docker.md) |
+| Edit graphs, tokenizers, shared weights and reference models | [Using Weave](docs/user-guide.md) |
+| Write a training script, cache data or add augmentations | [Training authoring](docs/training-guide.md) |
+| Launch, monitor, resume and back up training runs | [Training operations](docs/training.md) |
+| Test tool calls with a constrained decoder | [Checkpoint chat](docs/checkpoint-chat-decoders.md) |
+| Control Weave from an MCP client | [MCP](docs/mcp.md) |
 
 For development and checks, see [CONTRIBUTING.md](CONTRIBUTING.md). Report bugs through [GitHub issues](https://github.com/mistrjirka/Weave/issues), with reproduction steps and the relevant graph or error output.
 

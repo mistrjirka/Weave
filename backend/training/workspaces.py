@@ -16,8 +16,8 @@ import tempfile
 import unicodedata
 from threading import RLock
 
-from .service import Stage, Plan, TrainingConfig, valid_id, inside
-from .weave_training import atomic_json, file_hash
+from .service import Plan, TrainingConfig, valid_id, inside
+from .weave_training import atomic_json
 from ..paths import projects_directory
 from .layout import (
     PACKAGE,

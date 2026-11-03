@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Gauge, X } from "lucide-react";
 import { z } from "zod";
@@ -53,16 +53,18 @@ export function GPUTuning({ project }: { project: Project }) {
   const [enabled, setEnabled] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const jobRequest = useRef(0);
   useEffect(() => {
     if (!open) return;
     let current = true;
+    const version = jobRequest.current;
     Promise.all([
       trainingRequest("/capabilities", capabilitySchema),
       trainingRequest("/hardware", hardwareSchema),
       trainingRequest("/gpu-tuning", tuningListSchema),
     ])
       .then(([capabilities, hardware, saved]) => {
-        if (!current) return;
+        if (!current || version !== jobRequest.current) return;
         setEnabled(capabilities.enabled);
         setPython((value) => value || capabilities.python);
         setGPUs(hardware.gpus);
@@ -75,11 +77,17 @@ export function GPUTuning({ project }: { project: Project }) {
         const running = saved.jobs.find((item) => active.has(item.state));
         if (running)
           void trainingRequest(`/gpu-tuning/${running.id}`, tuningJobSchema)
-            .then(setJob)
-            .catch((e) => setError(errorMessage(e)));
+            .then((next) => {
+              if (current && version === jobRequest.current) setJob(next);
+            })
+            .catch((e) => {
+              if (current && version === jobRequest.current)
+                setError(errorMessage(e));
+            });
       })
       .catch((e) => {
-        if (current) setError(errorMessage(e));
+        if (current && version === jobRequest.current)
+          setError(errorMessage(e));
       });
     return () => {
       current = false;
@@ -88,18 +96,25 @@ export function GPUTuning({ project }: { project: Project }) {
   useEffect(() => {
     if (!open || !job || !active.has(job.state)) return;
     let cancelled = false;
+    const version = jobRequest.current;
     const timer = setInterval(() => {
       void trainingRequest(`/gpu-tuning/${job.id}`, tuningJobSchema)
         .then((next) => {
-          if (cancelled) return;
+          if (cancelled || version !== jobRequest.current) return;
           setJob(next);
           if (!active.has(next.state))
             void trainingRequest("/gpu-tuning", tuningListSchema)
-              .then(setList)
-              .catch((e) => setError(errorMessage(e)));
+              .then((next) => {
+                if (!cancelled && version === jobRequest.current) setList(next);
+              })
+              .catch((e) => {
+                if (!cancelled && version === jobRequest.current)
+                  setError(errorMessage(e));
+              });
         })
         .catch((e) => {
-          if (!cancelled) setError(errorMessage(e));
+          if (!cancelled && version === jobRequest.current)
+            setError(errorMessage(e));
         });
     }, 1500);
     return () => {
@@ -108,25 +123,25 @@ export function GPUTuning({ project }: { project: Project }) {
     };
   }, [job?.id, job?.state, open]);
   async function start() {
+    const version = ++jobRequest.current;
     setError("");
     setBusy(true);
     try {
-      setJob(
-        await trainingRequest("/gpu-tuning", tuningJobSchema, {
-          project,
-          python,
-          devices,
-          precision,
-          sequence_length: length,
-          global_batch_size: batch,
-          measure_steps: steps,
-          max_candidates: candidates,
-        }),
-      );
+      const next = await trainingRequest("/gpu-tuning", tuningJobSchema, {
+        project,
+        python,
+        devices,
+        precision,
+        sequence_length: length,
+        global_batch_size: batch,
+        measure_steps: steps,
+        max_candidates: candidates,
+      });
+      if (version === jobRequest.current) setJob(next);
     } catch (error) {
-      setError(errorMessage(error));
+      if (version === jobRequest.current) setError(errorMessage(error));
     } finally {
-      setBusy(false);
+      if (version === jobRequest.current) setBusy(false);
     }
   }
   const running = !!job && active.has(job.state);

@@ -27,7 +27,6 @@ from pydantic import BaseModel
 from .service import (
     TrainingService,
     TrainingConfig,
-    Stage,
     Plan,
     Launch,
     inside,
@@ -36,7 +35,6 @@ from .service import (
     hardware,
     model_metadata,
     import_snapshot,
-    HERE,
 )
 from .workspaces import WorkspaceConflict
 from .environment import inspect_python
@@ -57,7 +55,7 @@ from .chat import (
     configured_decoders,
 )
 from .chat_protocol import presets
-from .gpu_tuning import GPUTuning, TuningRequest, matching_profile
+from .gpu_tuning import GPUTuning, TuningRequest
 from .run_controls import ValidationSettings, validation_state
 from ..paths import projects_directory
 from ..compiler import compile_project
@@ -443,7 +441,7 @@ actual training code when your model/data/optimizer are ready.
             if len(content) > 2 * 1024 * 1024:
                 raise HTTPException(413, "Report batch exceeds 2 MB")
         try:
-            batch = ReportBatch.model_validate_json(content)
+            batch = await asyncio.to_thread(ReportBatch.model_validate_json, content)
             return await asyncio.to_thread(
                 reports.ingest,
                 run_directory(run_id),

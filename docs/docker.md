@@ -72,7 +72,7 @@ RUN uv pip install --python /opt/training/bin/python your-data-library
 USER weave
 ```
 
-Optional decoder modules must also be installed or mounted inside the container and registered with **container** paths in `weave-settings/weave.json`. See [checkpoint decoders](CHECKPOINT_CHAT_DECODERS.md).
+Optional decoder modules must also be installed or mounted inside the container and registered with **container** paths in `weave-settings/weave.json`. See [checkpoint decoders](checkpoint-chat-decoders.md).
 
 ## Address, settings and lifecycle
 

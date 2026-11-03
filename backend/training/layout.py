@@ -156,6 +156,8 @@ def write_support(directory, bundle):
 
 
 def write_helpers(package):
+    from ..documentation import GUIDE_PATHS
+
     package = Path(package)
     package.mkdir(parents=True, exist_ok=True)
     generated = []
@@ -179,7 +181,7 @@ def write_helpers(package):
         generated.append(PACKAGE + "/" + name)
     # Ship the authoring guide and optional complete example with offline exports.
     for source_path, name in (
-        (HERE.parent.parent / "TRAINING_GUIDE.md", "TRAINING_GUIDE.md"),
+        (HERE.parent.parent / GUIDE_PATHS["TRAINING_GUIDE.md"], "TRAINING_GUIDE.md"),
         (
             HERE.parent.parent / "examples" / "train_cached_jsonl.py",
             "example_cached_jsonl.py",
@@ -189,10 +191,10 @@ def write_helpers(package):
         content = source_path.read_text()
         if name == "TRAINING_GUIDE.md":
             content = content.replace(
-                "examples/train_cached_jsonl.py", "example_cached_jsonl.py"
+                "../examples/train_cached_jsonl.py", "example_cached_jsonl.py"
             ).replace(
-                "(TRAINING.md)",
-                "(https://github.com/mistrjirka/Weave/blob/main/TRAINING.md)",
+                "(training.md",
+                "(https://github.com/mistrjirka/Weave/blob/main/docs/training.md",
             )
         if not target.exists() or target.read_text() != content:
             target.write_text(content)

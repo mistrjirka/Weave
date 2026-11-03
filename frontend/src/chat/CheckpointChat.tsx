@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { z } from "zod";
-import { trainingRequest, type TrainingGPU } from "./trainingApi";
+import { trainingRequest, type TrainingGPU } from "../trainingApi";
 import {
   catalogSchema,
   sessionSchema,
@@ -11,7 +11,7 @@ import {
 } from "./chatSchema";
 import { ChatTranscript } from "./ChatTranscript";
 import { ChatTestRunner } from "./ChatTestRunner";
-import { copyText } from "./ui";
+import { copyText } from "../ui";
 
 export function CheckpointChat({
   runId,

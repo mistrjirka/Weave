@@ -38,7 +38,7 @@ import { TrainingCounters } from "./TrainingCounters";
 import { TrainingChart } from "./TrainingChart";
 import { TrainingETA } from "./TrainingETA";
 import { metricsForDisplay } from "./trainingMetrics";
-import { CheckpointChat } from "./CheckpointChat";
+import { CheckpointChat } from "./chat/CheckpointChat";
 import { newId, copyText, Dialog } from "./ui";
 import type { PythonEditorHandle } from "./PythonEditor";
 const PythonEditor = lazy(() =>

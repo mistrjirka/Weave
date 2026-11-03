@@ -1,8 +1,8 @@
 # Install Weave
 
-Weave currently targets Linux (including WSL2). The graph editor needs uv, Node.js 20.19+ and npm. The installer obtains Python 3.12 through uv; you can select another Python 3.11+ with `--python`. GPU drivers and system packages remain your responsibility. Native Windows is not supported; training uses POSIX locks, signals and process groups. Use WSL2 or [Docker](DOCKER.md). macOS has not been verified. There are no Arch-specific package-manager commands; the same scripts are intended for Debian/Ubuntu, Fedora and Arch. For PyTorch wheels, use a compatible glibc-based distribution rather than Alpine/musl.
+Weave currently targets Linux (including WSL2). The graph editor needs uv, Node.js 20.19+ and npm. The installer obtains Python 3.12 through uv; you can select another Python 3.11+ with `--python`. GPU drivers and system packages remain your responsibility. Native Windows is not supported; training uses POSIX locks, signals and process groups. Use WSL2 or [Docker](docker.md). macOS has not been verified. There are no Arch-specific package-manager commands; the same scripts are intended for Debian/Ubuntu, Fedora and Arch. For PyTorch wheels, use a compatible glibc-based distribution rather than Alpine/musl.
 
-For an image with persistent projects and optional CPU/NVIDIA training, see [Docker setup](DOCKER.md). Native installation remains useful when scripts should run directly in your existing host environment.
+For an image with persistent projects and optional CPU/NVIDIA training, see [Docker setup](docker.md). Native installation remains useful when scripts should run directly in your existing host environment.
 
 ## Default: browser editor and CPU training
 
@@ -66,7 +66,7 @@ Only supplied options change. Configuration is stored in the git-ignored `.weave
 
 Environment overrides take precedence. `.env.example` documents them; copying it to `.env` does not load it. Optional `WEAVE_TRAINING_TOKEN` protects training endpoints with an operator access code; it does not authenticate the rest of the application. No token is required by default. Restart the server after changing settings.
 
-Projects and caches are separate from environments. Back up the projects directory and internal app data for project graphs, run records, snapshots and tokenizer assets. Token caches may live elsewhere as chosen by your recipe. See [training operations](TRAINING.md) and [recipe authoring](TRAINING_GUIDE.md).
+Projects and caches are separate from environments. Back up the projects directory and internal app data for project graphs, run records, snapshots and tokenizer assets. Token caches may live elsewhere as chosen by your recipe. See [training operations](training.md) and [recipe authoring](training-guide.md).
 
 ## Restart and startup after reboot
 
@@ -77,7 +77,7 @@ cd /absolute/path/to/Weave
 bash scripts/start.sh
 ```
 
-On Linux with systemd, copy [the example user service](scripts/weave.service.example) to `~/.config/systemd/user/weave.service`, replacing both checkout paths with your actual path. Then:
+On Linux with systemd, copy [the example user service](../scripts/weave.service.example) to `~/.config/systemd/user/weave.service`, replacing both checkout paths with your actual path. Then:
 
 ```bash
 systemctl --user daemon-reload
@@ -110,4 +110,4 @@ Rerunning the installer retains the selected training interpreter and explicit d
 
 ## Portability checks
 
-See the [installation audit](INSTALLATION_AUDIT.md) for tested native/container paths, fixes and remaining platform limits. Docker images are built from source; a prebuilt Weave image is not currently published.
+See the [installation audit](reviews/installation-2026-11-03.md) for tested native/container paths, fixes and remaining platform limits. Docker images are built from source; a prebuilt Weave image is not currently published.

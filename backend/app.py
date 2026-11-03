@@ -1,5 +1,4 @@
 from __future__ import annotations
-import io
 import json
 import logging
 import shutil
@@ -8,12 +7,10 @@ from pathlib import Path
 import re
 import sqlite3
 import uuid
-import zipfile
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, contextmanager, closing
 from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.responses import Response, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 from .core import validate_project, params, graph_context
 from .attention import expand_attention
@@ -27,6 +24,12 @@ ROOT=Path(__file__).parent.parent
 DATA=Path(os.environ.get('WEAVE_DATA', ROOT/'data')).expanduser().absolute();DATA.mkdir(parents=True,exist_ok=True)
 @asynccontextmanager
 async def app_lifespan(app):
+    # MCP session managers are single-use. Build a transport for each ASGI
+    # lifespan so sequential app startups do not reuse a terminated manager.
+    app.state.mcp_http = mcp_server.streamable_http_app(
+        streamable_http_path='/', stateless_http=True,
+        transport_security=mcp_transport_security(),
+    )
     async with mcp_server.session_manager.run():
         yield
 
@@ -55,10 +58,11 @@ async def revalidate_frontend(request, call_next):
 tokenizers=TokenizerService(DATA/'tokenizers')
 
 
+@contextmanager
 def db():
-    conn=sqlite3.connect(DATA/'studio.db')
-    conn.execute('CREATE TABLE IF NOT EXISTS projects (id TEXT PRIMARY KEY, name TEXT, document TEXT, updated TEXT DEFAULT CURRENT_TIMESTAMP)')
-    return conn
+    with closing(sqlite3.connect(DATA/'studio.db')) as conn, conn:
+        conn.execute('CREATE TABLE IF NOT EXISTS projects (id TEXT PRIMARY KEY, name TEXT, document TEXT, updated TEXT DEFAULT CURRENT_TIMESTAMP)')
+        yield conn
 
 
 @app.get('/api/health')
@@ -210,12 +214,12 @@ def inspect_tokenizer(request:TokenizerRequest):
 
 
 @app.post('/api/tokenizers/upload')
-async def upload_tokenizer(files:list[UploadFile]=File(...)):
+def upload_tokenizer(files:list[UploadFile]=File(...)):
     target=DATA/'uploads'/uuid.uuid4().hex;target.mkdir(parents=True)
     try:
         total=0
         for f in files:
-            content=await f.read(64*1024*1024+1);total+=len(content)
+            content=f.file.read(64*1024*1024+1);total+=len(content)
             if total>64*1024*1024:raise HTTPException(413,'Tokenizer bundle exceeds 64 MB')
             name=Path(f.filename or '').name
             if Path(name).suffix not in ALLOWED_SUFFIXES:raise HTTPException(422,'Upload tokenizer JSON, model, vocabulary, or merges files.')
@@ -226,7 +230,7 @@ async def upload_tokenizer(files:list[UploadFile]=File(...)):
         if not names:raise HTTPException(422,'Choose at least one tokenizer file.')
         if len(names)==1 and names[0].suffix in ('.json','.model') and names[0].name not in ('tokenizer_config.json','config.json'):source=names[0]
         label=names[0].name if len(names)==1 else f"{names[0].name} + {len(names)-1} {'file' if len(names)==2 else 'files'}"
-        try:return await run_in_threadpool(tokenizers.load, source, display_name=label)
+        try:return tokenizers.load(source, display_name=label)
         except Exception as exc:raise HTTPException(422,str(exc))
     finally:
         shutil.rmtree(target, ignore_errors=True)
@@ -248,7 +252,13 @@ app.include_router(training_router(DATA))
 
 from .mcp_bridge import WeaveBridge, create_mcp_server, mcp_transport_security
 mcp_server = create_mcp_server(WeaveBridge(app=app))
-app.mount('/mcp', mcp_server.streamable_http_app(streamable_http_path='/', stateless_http=True, transport_security=mcp_transport_security()), name='mcp')
+
+
+async def mcp_http(scope, receive, send):
+    await app.state.mcp_http(scope, receive, send)
+
+
+app.mount('/mcp', mcp_http, name='mcp')
 
 
 if (ROOT/'dist').is_dir():app.mount('/',StaticFiles(directory=ROOT/'dist',html=True),name='frontend')

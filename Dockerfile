@@ -53,6 +53,7 @@ COPY --chown=weave:weave references ./references
 COPY --chown=weave:weave examples ./examples
 COPY --chown=weave:weave LICENSE ./
 COPY --chown=weave:weave *.md ./
+COPY --chown=weave:weave docs ./docs
 COPY --chown=weave:weave --from=frontend /build/dist ./dist
 RUN mkdir -p /home/weave/.cache
 
@@ -62,6 +63,7 @@ COPY --chown=weave:weave references ./references
 COPY --chown=weave:weave examples ./examples
 COPY --chown=weave:weave LICENSE ./
 COPY --chown=weave:weave *.md ./
+COPY --chown=weave:weave docs ./docs
 COPY --chown=weave:weave --from=frontend /build/dist ./dist
 RUN mkdir -p /home/weave/.cache
 

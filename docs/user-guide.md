@@ -1,6 +1,6 @@
 # Using Weave
 
-Editing graphs, inspecting reference architectures, exporting PyTorch and working with training stages. For setup, see [INSTALL.md](INSTALL.md).
+Editing graphs, inspecting reference architectures, exporting PyTorch and working with training stages. For setup, see [INSTALL.md](install.md).
 
 ## Design a model
 
@@ -91,7 +91,7 @@ Fresh examples use aligned stages and wider routing gaps. Restored/imported coor
 Run `npm run test:routing` for the routing geometry checks (Node 22.18+), or `npx playwright test tests/browser/routing.spec.ts` for desktop/phone walkthroughs of all example scopes, dragging, expanded attention, and coordinate preservation.
 
 
-Auto arrange runs ELK Layered in a browser worker using measured cards, fixed ports and tensor-label dimensions. It reduces crossings and reserves space for labels. **Show edge labels** displays tensor shapes together; manual dragging recomputes routes and places full label boxes clear of cards and other labels. When a crowded manual drawing has no free label location, select the connection for its details or use Auto arrange. Parameter-sharing links remain separate from computational ordering. See [layout research and tradeoffs](LAYOUT_RESEARCH.md).
+Auto arrange runs ELK Layered in a browser worker using measured cards, fixed ports and tensor-label dimensions. It reduces crossings and reserves space for labels. **Show edge labels** displays tensor shapes together; manual dragging recomputes routes and places full label boxes clear of cards and other labels. When a crowded manual drawing has no free label location, select the connection for its details or use Auto arrange. Parameter-sharing links remain separate from computational ordering. See [layout research and tradeoffs](research/layout.md).
 
 ## Split view and shareable locations
 
@@ -105,11 +105,11 @@ The address bar tracks the current model, open blocks, selected node, Architectu
 
 Saving a network gives it a server project ID that links can reopen on the same server. Local recovery preserves unsaved edits in the current browser; a URL contains view state rather than a copy of those edits. Save the model before sharing edits with another browser. Reference views use snapshots: Reload reference fetches the latest saved version. No project data or tokenizer contents are embedded in the URL.
 
-The application is MIT licensed; see [LICENSE](LICENSE). Third-party architecture sources, libraries and fonts retain the licenses documented in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+The application is MIT licensed; see [LICENSE](../LICENSE). Third-party architecture sources, libraries and fonts retain the licenses documented in [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md).
 
 ## Design assistance
 
-The validation bar reports tensor errors separately from **Design notes**. Notes also appear in the selected block's properties, with explanations, suggested checks, and source links. They cover extreme hidden bottlenecks, consecutive linear projections, output softmax and cross-entropy, unused learned branches, discrete sampling gradients, fixed zero scales, and empty custom attention rows. They never block export. See [the research, exact heuristics, exceptions, and correctness tests](DESIGN_ADVICE.md).
+The validation bar reports tensor errors separately from **Design notes**. Notes also appear in the selected block's properties, with explanations, suggested checks, and source links. They cover extreme hidden bottlenecks, consecutive linear projections, output softmax and cross-entropy, unused learned branches, discrete sampling gradients, fixed zero scales, and empty custom attention rows. They never block export. See [the research, exact heuristics, exceptions, and correctness tests](design-advice.md).
 
 ## Creating, opening and studying networks
 
@@ -117,7 +117,7 @@ Use **New project** in the top bar to name a network and start from a blank canv
 
 **Your workspace** opens a browser with **Your projects** and **Reference architectures**. Saved projects appear first in the sidebar's **Projects** collection. Reference shortcuts are single rows; **Browse all examples** opens descriptions and copy actions. **View reference** opens a read-only example beside your work; **Create copy** creates an independent editable copy. The reference pane also has **Use this example**. Viewing references does not replace your editing document.
 
-Browser tabs and creation starters survive reload and copying the URL: `?workspace=projects`, `?workspace=examples`, or `?workspace=new&starter=looped`. See the [workflow assessment and tested user journeys](PROJECT_WORKFLOW_REVIEW.md).
+Browser tabs and creation starters survive reload and copying the URL: `?workspace=projects`, `?workspace=examples`, or `?workspace=new&starter=looped`. See the [workflow assessment and tested user journeys](reviews/project-workflow.md).
 
 ## Color themes
 
@@ -163,8 +163,8 @@ The block library also includes LayerNorm, GELU, ReLU, dropout, learned position
 
 ## Training workspace
 
-The **Training** tab provides editable multi-stage PyTorch recipes, local launch or terminal monitoring, live metrics, generated examples, GPU monitoring, checkpoint lineage and verified snapshots. Single-device, DDP, supported split-model placement and separate evaluation-GPU strategies are available. The default installer enables local execution; training starts only when you launch a stage. Access tokens are optional. Projects have on-disk folders under the configured projects directory (default `~/shared/weave-projects`), with saved graphs and editable training scripts. Generated network code, tokenizers and trainer support live separately under each stage’s `weave_support/` package. The default `train.py` contains typed Python configuration, a data-loader placeholder, a next-token loss example, plain AdamW and warmup–stable–decay (WSD) with peak/minimum learning rates. Sequence lengths belong to your loader. Training can stop by epochs or optimizer updates, with separate work counters in the UI. Validation can run asynchronously on CPU or a selected GPU, using a bounded latest-checkpoint queue. HTTP reporting runs in a background thread. A checkpoint playground offers chat and bounded raw-text continuation on CPU or a selected GPU, preferring logged tool-task metrics when available and otherwise recommending by matching validation loss. The chat panel supports independent regression cases, parsed tool calls and simulated tool results; see [checkpoint chat](CHECKPOINT_CHAT_DECODERS.md). The optional bundled Trainer handles devices, accumulation, AMP, evaluation, reporting and checkpoints; new recipes need no user `config.json`. Snapshots retain source-file manifests and consumed-record traces without copying the corpus unless requested. Training displays SSH-friendly paths, the actual Python/PyTorch versions and a syntax-highlighted editor. Independent scripts can report through the HTTP API using the included connection file; localhost is the default. See [training setup, recipes, limitations, reporting API and backup/restore](TRAINING.md).
+The **Training** tab provides editable multi-stage PyTorch recipes, local launch or terminal monitoring, live metrics, generated examples, GPU monitoring, checkpoint lineage and verified snapshots. Single-device, DDP, supported split-model placement and separate evaluation-GPU strategies are available. The default installer enables local execution; training starts only when you launch a stage. Access tokens are optional. Projects have on-disk folders under the configured projects directory (default `~/shared/weave-projects`), with saved graphs and editable training scripts. Generated network code, tokenizers and trainer support live separately under each stage’s `weave_support/` package. The default `train.py` contains typed Python configuration, a data-loader placeholder, a next-token loss example, plain AdamW and warmup–stable–decay (WSD) with peak/minimum learning rates. Sequence lengths belong to your loader. Training can stop by epochs or optimizer updates, with separate work counters in the UI. Validation can run asynchronously on CPU or a selected GPU, using a bounded latest-checkpoint queue. HTTP reporting runs in a background thread. A checkpoint playground offers chat and bounded raw-text continuation on CPU or a selected GPU, preferring logged tool-task metrics when available and otherwise recommending by matching validation loss. The chat panel supports independent regression cases, parsed tool calls and simulated tool results; see [checkpoint chat](checkpoint-chat-decoders.md). The optional bundled Trainer handles devices, accumulation, AMP, evaluation, reporting and checkpoints; new recipes need no user `config.json`. Snapshots retain source-file manifests and consumed-record traces without copying the corpus unless requested. Training displays SSH-friendly paths, the actual Python/PyTorch versions and a syntax-highlighted editor. Independent scripts can report through the HTTP API using the included connection file; localhost is the default. See [training setup, recipes, limitations, reporting API and backup/restore](training.md).
 
-For Python recipe authors, see the [training authoring guide](TRAINING_GUIDE.md): custom loaders, token caching, augmentations, batching, progress, provenance and resume limitations.
+For Python recipe authors, see the [training authoring guide](training-guide.md): custom loaders, token caching, augmentations, batching, progress, provenance and resume limitations.
 
-The top-toolbar **Weave settings** utility benchmarks each GPU, DDP allocations and supported block splits on the current model, then saves compatible allocation profiles for multi-GPU launches. See [GPU tuning and custom-loader behavior](TRAINING.md#host-wide-gpu-performance-tuning).
+The top-toolbar **Weave settings** utility benchmarks each GPU, DDP allocations and supported block splits on the current model, then saves compatible allocation profiles for multi-GPU launches. See [GPU tuning and custom-loader behavior](training.md#host-wide-gpu-performance-tuning).
