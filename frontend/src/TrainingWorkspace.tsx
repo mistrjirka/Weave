@@ -14,6 +14,7 @@ import { z } from "zod";
 import { createPortal } from "react-dom";
 import {
   Activity,
+  CheckCircle2,
   History,
   X,
   ArrowDown,
@@ -354,40 +355,49 @@ export function TrainingWorkspace({ project }: { project: Project }) {
           recovered
             ? {
                 ...recovered,
-                stages: recovered.stages.map((draft) => {
-                  const disk = savedStagesRef.current[draft.id];
-                  if (!disk) return draft;
-                  const migrated =
-                    disk.previous_script != null &&
-                    draft.script === disk.previous_script;
-                  return {
-                    ...draft,
-                    script: migrated ? disk.script : draft.script,
-                    script_path: disk.script_path,
-                    config_path: disk.config_path,
-                    project_path: disk.project_path,
-                    model_path: disk.model_path,
-                    support_path: disk.support_path,
-                    previous_script: disk.previous_script,
-                    script_revision: migrated
-                      ? disk.script_revision
-                      : (draft.script_revision ??
-                        (draft.script === disk.script
-                          ? disk.script_revision
-                          : null)),
-                    config_revision:
-                      draft.config_revision ??
-                      (JSON.stringify(draft.config) ===
-                      JSON.stringify(disk.config)
-                        ? disk.config_revision
-                        : null),
-                  };
-                }),
+                stages: [
+                  ...recovered.stages.map((draft) => {
+                    const disk = savedStagesRef.current[draft.id];
+                    if (!disk) return draft;
+                    const migrated =
+                      disk.previous_script != null &&
+                      draft.script === disk.previous_script;
+                    return {
+                      ...draft,
+                      script: migrated ? disk.script : draft.script,
+                      script_path: disk.script_path,
+                      config_path: disk.config_path,
+                      project_path: disk.project_path,
+                      model_path: disk.model_path,
+                      support_path: disk.support_path,
+                      previous_script: disk.previous_script,
+                      script_revision: migrated
+                        ? disk.script_revision
+                        : (draft.script_revision ??
+                          (draft.script === disk.script
+                            ? disk.script_revision
+                            : null)),
+                      config_revision:
+                        draft.config_revision ??
+                        (JSON.stringify(draft.config) ===
+                        JSON.stringify(disk.config)
+                          ? disk.config_revision
+                          : null),
+                    };
+                  }),
+                  ...p.stages.filter(
+                    (saved) =>
+                      !recovered.stages.some((draft) => draft.id === saved.id),
+                  ),
+                ],
               }
             : p,
         );
         setLoaded(true);
-        if (!runId || !r.some((run) => run.id === runId)) {
+        const linkedRun = r.find((run) => run.id === runId);
+        if (linkedRun) {
+          setSelected(linkedRun.stage_id);
+        } else {
           setMonitorError("");
           const replacement = preferredTrainingRun(r, selected);
           setRunId(replacement?.id ?? "");
@@ -1169,6 +1179,30 @@ export function TrainingWorkspace({ project }: { project: Project }) {
           </a>
         </div>
       )}
+      {!setupOpen &&
+        detail?.status.state === "completed" &&
+        launchPhase === "idle" && (
+          <p
+            className="training-completed-banner"
+            role="status"
+            aria-label="Training completed"
+          >
+            <CheckCircle2 size={18} aria-hidden="true" />
+            <strong>Run finished</strong>
+            {typeof detail.status.updated === "number" && (
+              <span>
+                Finished{" "}
+                <time
+                  dateTime={new Date(
+                    detail.status.updated * 1000,
+                  ).toISOString()}
+                >
+                  {new Date(detail.status.updated * 1000).toLocaleString()}
+                </time>
+              </span>
+            )}
+          </p>
+        )}
       {!setupOpen &&
         detail?.status.state === "stopped" &&
         !otherActiveRun &&
@@ -2487,7 +2521,11 @@ export function TrainingWorkspace({ project }: { project: Project }) {
                   );
                 })}
               {detail.events
-                .filter((e) => e.kind === "progress")
+                .filter(
+                  (e) =>
+                    e.kind === "progress" &&
+                    (e.channel ?? "training") === "training",
+                )
                 .slice(-1)
                 .map((event) => {
                   const useEpochs =
@@ -2502,18 +2540,21 @@ export function TrainingWorkspace({ project }: { project: Project }) {
                   const unit = useEpochs ? "epochs" : event.payload.unit;
                   return (
                     <div key={event.id} className="training-progress">
-                      <progress
-                        aria-label="Training progress"
-                        value={
-                          typeof completed === "number" &&
-                          typeof total === "number"
-                            ? completed
-                            : undefined
-                        }
-                        max={typeof total === "number" ? total : undefined}
-                      />
+                      {active && (
+                        <progress
+                          aria-label="Training progress"
+                          value={
+                            typeof completed === "number" &&
+                            typeof total === "number"
+                              ? completed
+                              : undefined
+                          }
+                          max={typeof total === "number" ? total : undefined}
+                        />
+                      )}
                       <span className="training-progress-caption">
                         <span>
+                          {!active && "Last reported progress · "}
                           {typeof completed === "number"
                             ? completed.toLocaleString()
                             : String(completed)}{" "}

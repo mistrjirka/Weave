@@ -1452,7 +1452,8 @@ html:is([data-theme="dark"], [data-theme="black"]) {
   margin-left: 8px;
 }
 
-.training-stopped-banner {
+.training-stopped-banner,
+.training-completed-banner {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -1462,6 +1463,9 @@ html:is([data-theme="dark"], [data-theme="black"]) {
   border-left: 4px solid var(--theme-muted, #637263);
   border-radius: 8px;
   background: var(--theme-raised, #fff);
+}
+.training-completed-banner {
+  border-left-color: var(--theme-green-accent, #608d76);
 }
 .training-run-state {
   display: inline-block;

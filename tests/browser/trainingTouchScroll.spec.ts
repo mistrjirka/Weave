@@ -10,7 +10,7 @@ test.use({
   isMobile: true,
 });
 
-async function trainingFixture(page: Page) {
+async function trainingFixture(page: Page, completed = false) {
   await page.goto("/");
   await expect(page.locator('.react-flow__node[data-id="ids"]')).toBeVisible();
   const project = projectSchema.parse(
@@ -42,8 +42,21 @@ async function trainingFixture(page: Page) {
   };
   const detail: RunDetail = {
     run,
-    status: { state: "running" },
-    events: [],
+    status: { state: completed ? "completed" : "running", updated: 1793753560 },
+    events: completed
+      ? [
+          {
+            version: 1,
+            id: "final-progress",
+            kind: "progress",
+            time: 1793753500,
+            step: 207,
+            tokens: 0,
+            channel: "training",
+            payload: { completed: 828, total: 1000, unit: "rollout groups" },
+          },
+        ]
+      : [],
     hardware: [],
     logs: "",
     evaluation_logs: "",
@@ -57,9 +70,36 @@ async function trainingFixture(page: Page) {
     script: stage.script,
     datasets: {},
   };
+  const earlier = {
+    ...stage,
+    id: "earlier-stage",
+    name: "Earlier stage",
+    script: stage.script + "\n# Unsaved draft\n",
+  };
+  if (completed) {
+    await page.evaluate(
+      ({ projectId, draft }) => {
+        localStorage.setItem(
+          `weave:training:${projectId}`,
+          JSON.stringify({
+            version: 1,
+            project_id: projectId,
+            stages: [draft],
+          }),
+        );
+      },
+      { projectId: project.id, draft: earlier },
+    );
+  }
   await page.route("**/api/training/plans/*", (route) =>
     route.fulfill({
-      json: { version: 1, project_id: project.id, stages: [stage] },
+      json: {
+        version: 1,
+        project_id: project.id,
+        stages: completed
+          ? [{ ...earlier, script: stage.script }, stage]
+          : [stage],
+      },
     }),
   );
   await page.route("**/api/training/runs?project_id=*", (route) =>
@@ -73,6 +113,53 @@ async function trainingFixture(page: Page) {
   );
   return `/?model=${encodeURIComponent(project.id)}&stage=touch-stage&run=run-touch`;
 }
+
+for (const width of [390, 1440])
+  test(`finished run shows completion instead of an active partial progress bar at ${width}px`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width, height: 1000 });
+    const base = await trainingFixture(page, true);
+    const link = new URL(base, "http://127.0.0.1:8173");
+    link.searchParams.delete("stage");
+    link.searchParams.set("view", "training");
+    await page.goto(link.pathname + link.search);
+    const completed = page.getByRole("status", {
+      name: "Training completed",
+      exact: true,
+    });
+    await expect(completed).toBeVisible();
+    await expect(
+      page.getByRole("combobox", { name: "Training stage", exact: true }),
+    ).toHaveValue("touch-stage");
+    const restoredDraft = await page.evaluate(() =>
+      localStorage.getItem(
+        `weave:training:${new URL(location.href).searchParams.get("model")}`,
+      ),
+    );
+    expect(restoredDraft).toContain("# Unsaved draft");
+    await expect(completed).toContainText("Run finished");
+    await expect(completed.locator("time")).toHaveAttribute(
+      "datetime",
+      new Date(1793753560000).toISOString(),
+    );
+    await expect(
+      page.getByRole("progressbar", { name: "Training progress", exact: true }),
+    ).toHaveCount(0);
+    await expect(
+      page.getByText("Last reported progress · 828 / 1,000 rollout groups", {
+        exact: true,
+      }),
+    ).toBeVisible();
+    await expect(
+      page.getByLabel("Training finish estimate", { exact: true }),
+    ).toHaveCount(0);
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= innerWidth,
+      ),
+    ).toBe(true);
+  });
 
 async function swipeUp(page: Page) {
   const cdp = await page.context().newCDPSession(page);

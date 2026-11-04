@@ -205,6 +205,7 @@ export const detailSchema = z.object({
   status: z.object({
     state: z.string(),
     message: z.string().nullable().optional(),
+    updated: z.number().finite().optional(),
   }),
   events: z.array(eventSchema),
   hardware: z.array(
