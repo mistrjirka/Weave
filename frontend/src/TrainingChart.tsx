@@ -10,6 +10,7 @@ import {
   formatMetric,
   metricPresentation,
   metricDomain,
+  metricScope,
 } from "./trainingMetrics";
 
 export function TrainingChart({
@@ -28,6 +29,13 @@ export function TrainingChart({
   const [hover, setHover] = useState<number | null>(null);
   const contract = runContract(events);
   const presentation = metricPresentation(metric, contract);
+  const scope = metricScope(metric);
+  const title = (
+    <div className="training-metric-title">
+      <strong title={metric}>{presentation.label}</strong>
+      {scope && <small>{scope}</small>}
+    </div>
+  );
   const axisLabel = axis.startsWith("counter:")
     ? counterLabel(axis.slice(8))
     : axis === "step"
@@ -75,9 +83,7 @@ export function TrainingChart({
         className="training-chart training-chart-empty"
         style={chartStyle}
       >
-        <figcaption>
-          <strong>{presentation.label}</strong>
-        </figcaption>
+        <figcaption>{title}</figcaption>
         {presentation.empty ? (
           <p>{presentation.empty}</p>
         ) : (
@@ -144,13 +150,16 @@ export function TrainingChart({
   return (
     <figure className="training-chart" style={chartStyle}>
       <figcaption>
-        <strong title={metric}>{presentation.label}</strong>
+        {title}
         <span>
           {active
             ? `${formatMetric(active.raw)} · ${formatMetric(active.step)} ${contract.step_unit}`
             : "Comparison"}
         </span>
       </figcaption>
+      {current.length === 1 && (
+        <p className="training-chart-note">One reported point · no trend yet</p>
+      )}
       <svg
         viewBox="0 0 550 180"
         role="img"
@@ -190,6 +199,14 @@ export function TrainingChart({
           {formatMetric(x1)}
         </text>
         <path d={path(other)} className="training-chart-compare" />
+        {other.length === 1 && (
+          <circle
+            cx={scaleX(other[0].x)}
+            cy={scaleY(other[0].y)}
+            r="4"
+            className="training-chart-compare-point"
+          />
+        )}
         <path d={path(current)} className="training-chart-line" />
         {active && (
           <circle

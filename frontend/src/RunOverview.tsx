@@ -1,6 +1,10 @@
 import { runContract } from "./trainingContract";
 import type { RunDetail } from "./trainingApi";
-import { formatMetric, metricPresentation } from "./trainingMetrics";
+import {
+  formatMetric,
+  metricPresentation,
+  metricScope,
+} from "./trainingMetrics";
 
 const headlineMetrics = [
   "train/loss",
@@ -48,6 +52,7 @@ export function RunOverview({ detail }: { detail: RunDetail }) {
               <dd title={typeof value === "number" ? String(value) : undefined}>
                 {typeof value === "number" ? formatMetric(value) : "Pending"}
                 <small>
+                  {metricScope(metric) && `${metricScope(metric)} · `}
                   {event
                     ? `${event.step.toLocaleString()} ${contract.step_unit}`
                     : metric === "eval/loss"

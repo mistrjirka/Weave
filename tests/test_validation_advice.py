@@ -199,6 +199,31 @@ def test_ffn_extreme_bottleneck_does_not_repeat_advice():
     assert codes(project) == {"narrow-bottleneck"}
 
 
+def test_ffn_advice_uses_lexical_graph_variables_like_validation():
+    project = chain(["ffn"])
+    project["config"]["ffn_width"] = 32
+    project["graph"]["variables"] = {"ffn_width": 256}
+    project["graph"]["nodes"][1]["data"]["params"]["hidden"] = "$ffn_width"
+    assert "ffn-bottleneck" not in codes(project)
+    body = project["graph"]
+    project["graph"] = {
+        "nodes": [
+            copy.deepcopy(body["nodes"][0]),
+            node("body", "block", "Nested", 0, 0, {"ffn_width": 32}, body),
+            node("out", "output", "Out", 0, 0),
+        ],
+        "edges": [edge("x", "body"), edge("body", "out")],
+    }
+    assert "ffn-bottleneck" not in codes(project)
+    body["variables"]["ffn_width"] = 32
+    report = validate_project(project)
+    assert report["valid"], report["errors"]
+    assert any(
+        warning.get("code") == "ffn-bottleneck" and warning["node"] == "body/n0"
+        for warning in report["warnings"]
+    )
+
+
 def test_ffn_bottleneck_appears_in_a_resolved_unfinished_container():
     project = chain(["ffn"])
     project["graph"]["nodes"][1]["data"]["params"]["hidden"] = 64

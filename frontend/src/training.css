@@ -443,6 +443,24 @@
   color: var(--theme-muted, #59685d);
   font-size: 11px;
 }
+.training-metric-title {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.training-metric-title small {
+  color: var(--theme-muted, #59685d);
+  font-size: 11px;
+}
+.training-chart .training-chart-note {
+  margin: 6px 0 0;
+  color: var(--theme-muted, #59685d);
+  font-size: 12px;
+}
+.training-chart-compare-point {
+  fill: var(--theme-muted, #64748b);
+}
 .training-chart svg {
   width: 100%;
   height: auto;

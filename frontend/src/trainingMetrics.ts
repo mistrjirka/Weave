@@ -28,6 +28,15 @@ type MetricPresentation = {
   max?: number;
   empty?: string;
 };
+
+export function metricScope(metric: string): string | undefined {
+  const scopes: Record<string, string> = {
+    train: "Training",
+    eval: "Validation",
+    test: "Test",
+  };
+  return scopes[metric.split("/")[0]];
+}
 const metricDefinitions: Record<string, MetricPresentation> = {
   "train/loss": {
     label: "Training loss",
@@ -110,10 +119,15 @@ export function metricDomain(
     maximum === minimum
       ? Math.max(Math.abs(minimum) * 0.03, 1e-6)
       : (maximum - minimum) * 0.08;
-  return [
-    presentation.min ?? minimum - padding,
-    presentation.max ?? maximum + padding,
-  ];
+  // Auto-padding should not invent negative values when all observations are
+  // nonnegative. Signed losses/rewards retain their actual negative range.
+  const lower =
+    presentation.min ??
+    (minimum >= 0 ? Math.max(0, minimum - padding) : minimum - padding);
+  const upper =
+    presentation.max ??
+    (minimum === 0 && maximum === 0 ? 1 : maximum + padding);
+  return [lower, upper];
 }
 
 export function metricsForDisplay(

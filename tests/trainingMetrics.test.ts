@@ -5,6 +5,7 @@ import {
   metricPresentation,
   metricDomain,
   metricsForDisplay,
+  metricScope,
 } from "../frontend/src/trainingMetrics.ts";
 
 test("training metrics use readable units without scientific notation", () => {
@@ -22,6 +23,17 @@ test("training metrics use readable units without scientific notation", () => {
     metricPresentation("eval/loss").color,
   );
   assert.equal(metricPresentation("eval/loss").label, "Validation loss");
+});
+
+test("RL plots distinguish scopes and padding preserves observed signs", () => {
+  assert.equal(metricScope("train/invalid"), "Training");
+  assert.equal(metricScope("eval/invalid"), "Validation");
+  assert.equal(metricScope("test/success"), "Test");
+  assert.equal(metricScope("custom/reward"), undefined);
+  assert.equal(metricDomain("train/invalid", 0, 0.0625)[0], 0);
+  assert.deepEqual(metricDomain("train/clip_applied", 0, 0), [0, 1]);
+  assert.ok(metricDomain("train/loss", -0.07, 0.001)[0] < -0.07);
+  assert.ok(metricDomain("train/reward", -0.4, 0.7)[0] < -0.4);
 });
 
 test("utilization always has a 0–100 percent axis, including idle and saturated GPUs", () => {

@@ -218,6 +218,7 @@ def design_advice(project, shapes, counts, resolve):
     advice = []
 
     def visit(graph, config, prefix=""):
+        config = {**config, **graph.get("variables", {})}
         nodes = {n["id"]: n for n in graph["nodes"]}
         parents, children = defaultdict(dict), defaultdict(list)
         for edge in graph["edges"]:
