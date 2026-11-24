@@ -172,6 +172,8 @@ import {
 import {
   createProject,
   matchesSavedRevision,
+  parseScheduleValue,
+  shouldRecoverProject,
   withProjectIdentity,
 } from "./projectWorkflow";
 import type {
@@ -840,6 +842,7 @@ function Field<T extends JsonValue>({
   options,
   variables,
   displayName,
+  parseValue,
 }: {
   name: string;
   options?: string[];
@@ -847,6 +850,7 @@ function Field<T extends JsonValue>({
   displayName?: string;
   value: T;
   onChange: (value: T) => void;
+  parseValue?: (value: JsonValue) => T | null;
   disabledReason?: string;
   help?: string;
 }) {
@@ -1032,6 +1036,16 @@ function Field<T extends JsonValue>({
         return;
       }
     }
+    if (parseValue) {
+      const parsed = parseValue(next);
+      if (parsed === null) {
+        setError("Not applied. Enter a finite number.");
+        return;
+      }
+      setError("");
+      onChange(parsed);
+      return;
+    }
     setError("");
     onChange(next as T);
   };
@@ -1099,6 +1113,38 @@ function Field<T extends JsonValue>({
   );
 }
 
+function readLocalProject(
+  id?: string,
+): { project: Project; dirty: boolean; recoverable: boolean } | null {
+  try {
+    const raw =
+      (id && localStorage.getItem("weave.project." + id)) ||
+      localStorage.getItem("weave.project");
+    const parsed = projectSchema.safeParse(JSON.parse(raw || "null"));
+    if (!parsed.success || (id && parsed.data.id !== id)) return null;
+    const project = parsed.data;
+    const statusRaw =
+      localStorage.getItem("weave.project.status." + project.id) ||
+      localStorage.getItem("weave.project.status");
+    const status = recoveryStatusSchema.safeParse(
+      JSON.parse(statusRaw || "null"),
+    );
+    const matchingStatus =
+      status.success && status.data.id === project.id ? status.data : null;
+    return {
+      project,
+      dirty: matchingStatus?.dirty ?? false,
+      recoverable: shouldRecoverProject(
+        project.id,
+        matchingStatus,
+        !!statusRaw && (!status.success || status.data.id === project.id),
+      ),
+    };
+  } catch {
+    return null;
+  }
+}
+
 function Bootstrap() {
   const [state, setState] = useState<
     | { status: "loading" }
@@ -1109,6 +1155,7 @@ function Bootstrap() {
         saved: SavedProject[];
         initial: Project;
         arrange: boolean;
+        initialDirty: boolean;
       }
   >({ status: "loading" });
   useEffect(() => {
@@ -1121,30 +1168,30 @@ function Bootstrap() {
         let initial = templates[0];
         let arrange = true;
         if (!initial) throw new Error("No initial project is available");
-        let recovered: unknown = null;
-        try {
-          recovered = JSON.parse(
-            (location.model &&
-              localStorage.getItem("weave.project." + location.model)) ||
-              localStorage.getItem("weave.project") ||
-              "null",
-          );
-        } catch {}
-        const restored = projectSchema.safeParse(recovered);
-        if (
-          restored.success &&
-          (!location.model || restored.data.id === location.model)
-        ) {
-          initial = restored.data;
+        const restored = readLocalProject(location.model || undefined);
+        const restoredSaved =
+          restored && saved.some((p) => p.id === restored.project.id);
+        let initialDirty = false;
+        if (restored && (!restoredSaved || restored.recoverable)) {
+          initial = restored.project;
+          initialDirty =
+            restored.dirty ||
+            (!!restoredSaved && restored.recoverable) ||
+            (initial.id.startsWith("project-") && !restoredSaved);
           arrange = false;
-        } else if (location.model) {
-          const template = templates.find((p) => p.id === location.model);
-          if (template) initial = template;
-          else
-            initial = projectSchema.parse(
-              await api("/projects/" + encodeURIComponent(location.model)),
-            );
-          arrange = !!template;
+        } else {
+          const id =
+            location.model ||
+            (restoredSaved ? restored?.project.id : undefined);
+          if (id) {
+            const template = templates.find((p) => p.id === id);
+            if (template) initial = template;
+            else
+              initial = projectSchema.parse(
+                await api("/projects/" + encodeURIComponent(id)),
+              );
+            arrange = !!template;
+          }
         }
         if (active)
           setState({
@@ -1153,6 +1200,7 @@ function Bootstrap() {
             saved,
             initial: localizeLayerDefaults(initial),
             arrange,
+            initialDirty,
           });
       })
       .catch((e) => {
@@ -1192,6 +1240,7 @@ function Bootstrap() {
       initialTemplates={state.templates}
       initialSaved={state.saved}
       initiallyArrange={state.arrange}
+      initialDirty={state.initialDirty}
     />
   );
 }
@@ -1200,11 +1249,13 @@ function Workbench({
   initialTemplates,
   initialSaved,
   initiallyArrange,
+  initialDirty,
 }: {
   initial: Project;
   initialTemplates: Project[];
   initialSaved: SavedProject[];
   initiallyArrange: boolean;
+  initialDirty: boolean;
 }) {
   const [project, setProject] = useState<Project>(initial),
     [templates] = useState(initialTemplates),
@@ -1241,23 +1292,7 @@ function Workbench({
     ),
     [toast, setToast] = useState(""),
     [busy, setBusy] = useState(false),
-    [dirty, setDirty] = useState(() => {
-      try {
-        const status = recoveryStatusSchema.safeParse(
-          JSON.parse(
-            localStorage.getItem("weave.project.status." + initial.id) ||
-              localStorage.getItem("weave.project.status") ||
-              "null",
-          ),
-        );
-        if (status.success && status.data.id === initial.id)
-          return status.data.dirty;
-      } catch {}
-      return (
-        initial.id.startsWith("project-") &&
-        !initialSaved.some((p) => p.id === initial.id)
-      );
-    });
+    [dirty, setDirty] = useState(initialDirty);
   const librarySearchRef = useRef<HTMLInputElement>(null);
   const [projectTab, setProjectTab] = useState<ProjectTab>(
     initialLocation.workspace === "examples" ? "examples" : "projects",
@@ -2226,26 +2261,8 @@ function Workbench({
     try {
       let recovered: Project | null = null;
       if (options.saved) {
-        try {
-          const status = recoveryStatusSchema.safeParse(
-            JSON.parse(
-              localStorage.getItem("weave.project.status." + p.id) || "null",
-            ),
-          );
-          const draft = projectSchema.safeParse(
-            JSON.parse(localStorage.getItem("weave.project." + p.id) || "null"),
-          );
-          if (
-            status.success &&
-            status.data.id === p.id &&
-            status.data.dirty &&
-            draft.success &&
-            draft.data.id === p.id
-          )
-            recovered = draft.data;
-        } catch {
-          /* Fall back to the server copy. */
-        }
+        const draft = readLocalProject(p.id);
+        if (draft?.recoverable) recovered = draft.project;
       }
       const loaded =
         recovered ||
@@ -4458,6 +4475,7 @@ function Workbench({
                           <Field
                             key={key}
                             name={"schedule " + key}
+                            parseValue={parseScheduleValue}
                             value={selected.data.iteration![key]}
                             onChange={(value) =>
                               updateNode((n) => {

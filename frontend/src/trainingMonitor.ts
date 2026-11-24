@@ -13,5 +13,22 @@ export function mergeMonitorEvents(
     ids.add(event.id);
     return true;
   });
-  return added.length ? [...current, ...added].slice(-10000) : current;
+  if (!added.length) return current;
+  const all = [...current, ...added];
+  // Metadata is a snapshot, not part of the rolling metric window. Keep the
+  // latest training declaration of each kind ahead of the chronological tail.
+  const metadata = new Map<string, TrainingEvent>();
+  for (const event of all) {
+    if (
+      (event.channel ?? "training") === "training" &&
+      (event.kind === "configuration" || event.kind === "capabilities")
+    ) {
+      metadata.set(event.kind, event);
+    }
+  }
+  const tail = all.slice(-10000);
+  const tailIds = new Set(tail.map((event) => event.id));
+  return [...metadata.values()]
+    .filter((event) => !tailIds.has(event.id))
+    .concat(tail);
 }

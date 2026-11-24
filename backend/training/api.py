@@ -6,6 +6,7 @@ import asyncio
 import hmac
 import json
 import os
+import sqlite3
 import stat
 from pathlib import Path
 from typing import Literal
@@ -35,6 +36,7 @@ from .service import (
     valid_id,
     events,
     hardware,
+    index_busy,
     model_metadata,
     import_snapshot,
 )
@@ -62,6 +64,17 @@ from .gpu_tuning import GPUTuning, TuningRequest
 from .run_controls import ValidationSettings, validation_state
 from ..paths import projects_directory
 from ..compiler import compile_project
+
+
+MONITOR_INDEX_TIMEOUT = 0.5
+
+
+def monitor_index_unavailable() -> HTTPException:
+    return HTTPException(
+        status_code=503,
+        detail="The training event index is busy. Retry shortly.",
+        headers={"Retry-After": "3"},
+    )
 
 
 class Login(BaseModel):
@@ -480,7 +493,12 @@ actual training code when your model/data/optimizer are ready.
                 # JSON re-encoding can expand a 1 MiB source line substantially.
                 # Leave room for one event so a large record cannot wedge a cursor.
                 max_bytes=8_000_000,
+                timeout=MONITOR_INDEX_TIMEOUT,
             )
+        except sqlite3.OperationalError as exc:
+            if index_busy(exc):
+                raise monitor_index_unavailable() from exc
+            raise
         except ValueError as exc:
             raise HTTPException(422, str(exc))
         return {
@@ -493,7 +511,13 @@ actual training code when your model/data/optimizer are ready.
         """Lightweight progress without loading full logs, samples or snapshots."""
         directory = run_directory(run_id)
         if compact:
-            return {"run_id": run_id, "status": service.status(directory)}
+            try:
+                status = service.status(directory, index_timeout=MONITOR_INDEX_TIMEOUT)
+            except sqlite3.OperationalError as exc:
+                if index_busy(exc):
+                    raise monitor_index_unavailable() from exc
+                raise
+            return {"run_id": run_id, "status": status}
         latest = events(directory, limit=1)
         try:
             metrics = events(directory, kind="metrics", limit=1, max_bytes=8_000_000)
@@ -513,6 +537,7 @@ actual training code when your model/data/optimizer are ready.
         directory = run_directory(run_id)
         service.complete_snapshots(directory)
         records = events(directory, limit=10000)
+        first_event = events(directory, after="", limit=1)
         retained_ids = {event["id"] for event in records}
         metadata = [
             event
@@ -622,6 +647,7 @@ actual training code when your model/data/optimizer are ready.
             ),
             "status": status,
             "events": records,
+            "first_event_time": first_event[0]["time"] if first_event else None,
             "hardware": hw,
             "logs": tail(output)
             + "\n".join(

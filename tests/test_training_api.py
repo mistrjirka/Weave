@@ -1,4 +1,5 @@
 import json
+import sqlite3
 import time
 from pathlib import Path
 
@@ -8,7 +9,7 @@ import pytest
 
 from backend.training.api import router
 from backend.training.api import directory_size
-from backend.training.service import TrainingConfig
+from backend.training.service import TrainingConfig, events
 from backend.training.weave_training import Run
 from test_training import tiny_project
 
@@ -73,6 +74,36 @@ def test_event_records_latest_checkpoints_are_bounded_and_chronological(training
     assert [event["id"] for event in after["events"]] == ["4", "5"]
     empty = client.get(url, params={"kind": "checkpoint", "latest": "true", "after": "5"}).json()
     assert empty == {"events": [], "next_after": "5"}
+
+
+@pytest.mark.parametrize("endpoint", ["status?compact=true", "event-records"])
+def test_monitor_reads_report_busy_index_and_recover(training_client, endpoint):
+    client, root = training_client
+    client.post("/api/training/session", json={"token": "test-training-secret"})
+    directory = root / "training/runs/contended"
+    directory.mkdir(parents=True)
+    (directory / "run.json").write_text("{}")
+    (directory / "status.json").write_text(json.dumps({"state": "running"}))
+    events(directory)  # Create the database before simulating unindexed input.
+    event = {"version": 1, "id": "new", "time": 1, "kind": "metrics", "step": 1, "tokens": 1, "payload": {}}
+    (directory / "events.jsonl").write_text(json.dumps(event) + "\n")
+    url = f"/api/training/runs/contended/{endpoint}"
+    lock = sqlite3.connect(directory / "event-index.sqlite")
+    try:
+        lock.execute("BEGIN IMMEDIATE")
+        start = time.monotonic()
+        unavailable = client.get(url)
+        assert time.monotonic() - start < 3
+        assert unavailable.status_code == 503
+        assert unavailable.headers["Retry-After"] == "3"
+    finally:
+        lock.close()
+    recovered = client.get(url)
+    assert recovered.status_code == 200, recovered.text
+    if endpoint == "event-records":
+        assert recovered.json()["next_after"] == "new"
+    else:
+        assert recovered.json()["status"]["state"] == "running"
 
 
 def test_event_records_advance_past_large_unicode_event(training_client):

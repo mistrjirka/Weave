@@ -18,6 +18,19 @@ export function matchesSavedRevision(
   return saved !== null && JSON.stringify(project) === saved;
 }
 
+/** A missing status is a legacy draft; an explicit clean status is not recovery. */
+export function shouldRecoverProject(
+  id: string,
+  status: { id: string; dirty: boolean } | null,
+  statusPresent: boolean,
+): boolean {
+  return status ? status.id === id && status.dirty : !statusPresent;
+}
+
+export function parseScheduleValue(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
 export interface OpenProjectOptions {
   saved?: boolean;
   force?: boolean;

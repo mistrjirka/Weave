@@ -567,15 +567,15 @@ export function TrainingWorkspace({ project }: { project: Project }) {
     let lastMetadata = 0;
     let lastState = "";
     const runEndpoint = `/runs/${encodeURIComponent(runId)}`;
-    const recoverMissingRun = async () => {
+    const recoverMissingRun = async (signal: AbortSignal) => {
       const list = await trainingRequest(
         `/runs?project_id=${encodeURIComponent(project.id)}`,
         z.array(runSchema),
         undefined,
         undefined,
-        controller.signal,
+        signal,
       );
-      if (controller.signal.aborted) return;
+      if (signal.aborted) return;
       const replacement = preferredTrainingRun(
         list.filter((run) => run.id !== runId),
         selected,
@@ -594,6 +594,10 @@ export function TrainingWorkspace({ project }: { project: Project }) {
     const refresh = async () => {
       if (pending) return;
       pending = true;
+      const request = new AbortController();
+      const abortRequest = () => request.abort();
+      controller.signal.addEventListener("abort", abortRequest, { once: true });
+      const deadline = window.setTimeout(abortRequest, 10000);
       try {
         if (!lastMetadata) {
           const value = await trainingRequest(
@@ -601,13 +605,18 @@ export function TrainingWorkspace({ project }: { project: Project }) {
             detailSchema,
             undefined,
             undefined,
-            controller.signal,
+            request.signal,
           );
-          if (controller.signal.aborted) return;
+          if (request.signal.aborted)
+            throw new Error("Monitor refresh timed out. Retrying.");
           cursor = value.events.at(-1)?.id ?? "";
           lastState = value.status.state;
           lastMetadata = Date.now();
-          setDetail(value);
+          setDetail({
+            ...value,
+            first_event_time:
+              value.first_event_time ?? value.events[0]?.time ?? null,
+          });
           setSelected(value.run.stage_id);
         } else {
           const [status, page] = await Promise.all([
@@ -616,62 +625,72 @@ export function TrainingWorkspace({ project }: { project: Project }) {
               monitorStatusSchema,
               undefined,
               undefined,
-              controller.signal,
+              request.signal,
             ),
             trainingRequest(
               `${runEndpoint}/event-records?limit=500&after=${encodeURIComponent(cursor)}`,
               monitorEventsSchema,
               undefined,
               undefined,
-              controller.signal,
+              request.signal,
             ),
           ]);
-          if (controller.signal.aborted) return;
+          if (request.signal.aborted)
+            throw new Error("Monitor refresh timed out. Retrying.");
+          const changedState = lastState !== status.status.state;
+          const relevant = page.events.some((event) =>
+            ["checkpoint", "command", "configuration", "capabilities"].includes(
+              event.kind,
+            ),
+          );
           cursor = page.next_after;
+          lastState = status.status.state;
           setDetail((current) =>
             current
               ? {
                   ...current,
                   status: status.status,
                   events: mergeMonitorEvents(current.events, page.events),
+                  first_event_time:
+                    current.first_event_time ?? page.events[0]?.time ?? null,
                 }
               : current,
           );
-          const changedState = lastState !== status.status.state;
-          lastState = status.status.state;
-          const relevant = page.events.some((event) =>
-            ["checkpoint", "command", "configuration", "capabilities"].includes(
-              event.kind,
-            ),
-          );
+          setLastRefreshed(Date.now());
           if (changedState || relevant || Date.now() - lastMetadata >= 30000) {
+            lastMetadata = Date.now();
             const [value, list] = await Promise.all([
               trainingRequest(
                 runEndpoint,
                 detailSchema,
                 undefined,
                 undefined,
-                controller.signal,
+                request.signal,
               ),
               trainingRequest(
                 `/runs?project_id=${encodeURIComponent(project.id)}`,
                 z.array(runSchema),
                 undefined,
                 undefined,
-                controller.signal,
+                request.signal,
               ),
             ]);
-            if (controller.signal.aborted) return;
+            if (request.signal.aborted)
+              throw new Error("Monitor refresh timed out. Retrying.");
             setDetail((current) =>
               current
                 ? {
                     ...value,
-                    events: mergeMonitorEvents(current.events, value.events),
+                    status: current.status,
+                    events: current.events,
+                    first_event_time:
+                      current.first_event_time ??
+                      value.first_event_time ??
+                      null,
                   }
-                : value,
+                : current,
             );
             setRuns(list);
-            lastMetadata = Date.now();
           }
         }
         if (!controller.signal.aborted) {
@@ -680,19 +699,28 @@ export function TrainingWorkspace({ project }: { project: Project }) {
         }
       } catch (e) {
         if (controller.signal.aborted) return;
-        if (
+        if (request.signal.aborted) {
+          setMonitorError("Monitor refresh timed out. Retrying.");
+        } else if (
           e instanceof TrainingRequestError &&
           e.status === 404 &&
           (e.path === runEndpoint || e.path.startsWith(`${runEndpoint}/`))
         ) {
           try {
-            await recoverMissingRun();
+            await recoverMissingRun(request.signal);
           } catch (recoveryError) {
             if (!controller.signal.aborted)
-              setMonitorError(message(recoveryError));
+              setMonitorError(
+                request.signal.aborted
+                  ? "Monitor refresh timed out. Retrying."
+                  : message(recoveryError),
+              );
           }
         } else setMonitorError(message(e));
       } finally {
+        window.clearTimeout(deadline);
+        request.abort();
+        controller.signal.removeEventListener("abort", abortRequest);
         pending = false;
       }
     };
@@ -2947,6 +2975,8 @@ export function TrainingWorkspace({ project }: { project: Project }) {
                         key={metric}
                         events={detail.events}
                         comparison={comparison?.events}
+                        origin={detail.first_event_time}
+                        comparisonOrigin={comparison?.first_event_time}
                         metric={metric}
                         axis={axis}
                         smooth={smooth}

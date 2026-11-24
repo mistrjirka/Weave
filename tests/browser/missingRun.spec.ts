@@ -93,6 +93,8 @@ test("missing run links recover on mobile, while valid history and transient fai
     };
     let available = [latest, older];
     let responseStatus = 200;
+    let releaseStalledStatus: (() => void) | undefined;
+    let statusGate: Promise<void> | undefined;
     await page.route(`**/api/training/runs?project_id=${id}`, (route) =>
       route.fulfill({ json: available }),
     );
@@ -112,14 +114,20 @@ test("missing run links recover on mobile, while valid history and transient fai
     );
     await page.route(
       `**/api/training/runs/${run.id}/status?compact=true`,
-      (route) =>
-        route.fulfill({
+      async (route) => {
+        if (statusGate) {
+          await statusGate;
+          await route.abort().catch(() => {});
+          return;
+        }
+        await route.fulfill({
           status: responseStatus,
           json:
             responseStatus === 200
               ? { run_id: run.id, status: older.status, last_event_id: "" }
               : { detail: "Training run not found" },
-        }),
+        });
+      },
     );
     await page.route(
       `**/api/training/runs/${latest.id}/status?compact=true`,
@@ -154,7 +162,27 @@ test("missing run links recover on mobile, while valid history and transient fai
     await expect(page).toHaveURL(
       (url) => url.searchParams.get("run") === run.id,
     );
-    responseStatus = 500;
+    statusGate = new Promise<void>((resolve) => {
+      releaseStalledStatus = resolve;
+    });
+    try {
+      await expect(page.getByText(/Monitor refresh timed out/)).toBeVisible({
+        timeout: 17000,
+      });
+      await expect(
+        page.getByRole("region", { name: "Run dashboard" }),
+      ).toBeVisible();
+      await expect(page).toHaveURL(
+        (url) => url.searchParams.get("run") === run.id,
+      );
+    } finally {
+      statusGate = undefined;
+      releaseStalledStatus?.();
+    }
+    await expect(page.getByText(/Live updates interrupted/)).not.toBeVisible({
+      timeout: 12000,
+    });
+    responseStatus = 503;
     await expect(page.getByText(/Live updates interrupted/)).toBeVisible({
       timeout: 15000,
     });

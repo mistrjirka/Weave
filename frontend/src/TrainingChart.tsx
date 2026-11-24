@@ -20,8 +20,9 @@ function chartPoints(
   metric: string,
   axis: TrainingAxis,
   smooth: boolean,
+  origin?: number | null,
 ) {
-  const start = items[0]?.time ?? 0;
+  const start = origin ?? items[0]?.time ?? 0;
   const counter = axis.startsWith("counter:") ? axis.slice(8) : null;
   const points: { x: number; y: number; raw: number; step: number }[] = [];
   let average: number | undefined;
@@ -59,9 +60,13 @@ export function TrainingChart({
   metric,
   axis,
   smooth,
+  origin,
+  comparisonOrigin,
 }: {
   events: TrainingEvent[];
   comparison?: TrainingEvent[];
+  origin?: number | null;
+  comparisonOrigin?: number | null;
   metric: string;
   axis: TrainingAxis;
   smooth: boolean;
@@ -85,12 +90,12 @@ export function TrainingChart({
     "--chart-color": presentation.color,
   };
   const current = useMemo(
-    () => chartPoints(events, metric, axis, smooth),
-    [events, metric, axis, smooth],
+    () => chartPoints(events, metric, axis, smooth, origin),
+    [events, metric, axis, smooth, origin],
   );
   const other = useMemo(
-    () => chartPoints(comparison, metric, axis, smooth),
-    [comparison, metric, axis, smooth],
+    () => chartPoints(comparison, metric, axis, smooth, comparisonOrigin),
+    [comparison, metric, axis, smooth, comparisonOrigin],
   );
   const plot = useMemo(() => {
     if (!current.length && !other.length) return null;

@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import sqlite3
 import subprocess
 import threading
 import sys
@@ -139,12 +140,17 @@ def inside(directory, relative):
     return path
 
 
+def index_busy(exc: sqlite3.OperationalError) -> bool:
+    return (getattr(exc, "sqlite_errorcode", 0) & 0xFF) in (
+        sqlite3.SQLITE_BUSY,
+        sqlite3.SQLITE_LOCKED,
+    )
+
+
 def events(
     directory, *, limit=None, kind=None, kinds=None, after=None, max_bytes=None, channel=None, timeout=30, latest=False, _attempt=0
 ):
     """Incremental SQLite index over durable script-owned JSONL event streams."""
-    import sqlite3
-
     database = directory / "event-index.sqlite"
     with closing(sqlite3.connect(database, timeout=timeout)) as connection:
         schema = {row[0] for row in connection.execute(
@@ -507,12 +513,15 @@ class TrainingService:
                 continue  # A run can be removed while the list is being read.
         return sorted(result, key=lambda item: item["created"], reverse=True)
 
-    def status(self, directory):
+    def status(self, directory, *, index_timeout=30):
         path = directory / "status.json"
         status = json.loads(path.read_text()) if path.exists() else None
         if status and status["state"] not in ("starting", "running"):
             return status
-        preparation = events(directory, kind="preparation", channel="system", limit=1)
+        preparation = events(
+            directory, kind="preparation", channel="system", limit=1,
+            timeout=index_timeout,
+        )
         progress = (
             preparation[-1]["payload"]
             if preparation and preparation[-1].get("channel") == "system"
@@ -544,12 +553,21 @@ class TrainingService:
             return status
         info = json.loads((directory / "run.json").read_text())
         if info.get("execution") == "monitor":
-            starts = events(directory, kind="started", channel="training", limit=1)
+            starts = events(
+                directory, kind="started", channel="training", limit=1,
+                timeout=index_timeout,
+            )
             start_id = starts[-1]["id"] if starts else None
-            stopped = events(directory, kind="stopped", channel="training", after=start_id, limit=1)
+            stopped = events(
+                directory, kind="stopped", channel="training", after=start_id,
+                limit=1, timeout=index_timeout,
+            )
             if stopped:
                 return {"state": "stopped"}
-            finished = events(directory, kind="finished", channel="training", after=start_id, limit=1, latest=True)
+            finished = events(
+                directory, kind="finished", channel="training", after=start_id,
+                limit=1, latest=True, timeout=index_timeout,
+            )
             if finished:
                 return {
                     "state": (

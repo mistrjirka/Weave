@@ -11,13 +11,9 @@ import subprocess
 import sys
 import time
 
-from .service import build_snapshot, events, hardware
+from .service import build_snapshot, events, hardware, index_busy
 from .weave_training import Run, atomic_json
 from .recipe import is_code_first
-
-
-def index_busy(exc):
-    return isinstance(exc, sqlite3.OperationalError) and (getattr(exc, "sqlite_errorcode", 0) & 0xff) in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED)
 
 
 def index_events(directory, **options):

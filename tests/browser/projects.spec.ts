@@ -43,6 +43,62 @@ test.beforeEach(async ({ page }) => {
   ).toBeVisible();
 });
 
+test("server saves beat clean local copies, while dirty and legacy drafts recover", async ({
+  page,
+}) => {
+  const base = await currentProject(page);
+  const id = "project-recovery-check";
+  const server = { ...base, id, name: "New server version" };
+  const local = { ...base, id, name: "Older local version" };
+  await page.route("**/api/projects", (route) =>
+    route.fulfill({ json: [{ id, name: server.name }] }),
+  );
+  await page.route(`**/api/projects/${id}`, (route) =>
+    route.fulfill({ json: server }),
+  );
+  async function seed(status: { id: string; dirty: boolean } | null) {
+    await page.evaluate(
+      ({ id, local, status }) => {
+        localStorage.setItem("weave.project." + id, JSON.stringify(local));
+        localStorage.setItem("weave.project", JSON.stringify(local));
+        for (const key of [
+          "weave.project.status." + id,
+          "weave.project.status",
+        ]) {
+          if (status) localStorage.setItem(key, JSON.stringify(status));
+          else localStorage.removeItem(key);
+        }
+      },
+      { id, local, status },
+    );
+    await page.goto(`/?model=${id}`);
+  }
+  await seed({ id, dirty: false });
+  await expect(page.locator(".project-title")).toHaveText(server.name);
+  await page.evaluate(
+    ({ id, local }) => {
+      localStorage.setItem("weave.project." + id, JSON.stringify(local));
+      localStorage.setItem(
+        "weave.project.status." + id,
+        JSON.stringify({ id, dirty: false }),
+      );
+    },
+    { id, local },
+  );
+  const browser = await openBrowser(page);
+  await browser
+    .locator(".open-saved-project")
+    .filter({ hasText: server.name })
+    .click();
+  await expect(page.locator(".project-title")).toHaveText(server.name);
+  await seed({ id, dirty: true });
+  await expect(page.locator(".project-title")).toHaveText(local.name);
+  await expect(page.locator(".project-meta")).toContainText("Unsaved");
+  await seed(null);
+  await expect(page.locator(".project-title")).toHaveText(local.name);
+  await expect(page.locator(".project-meta")).toContainText("Unsaved");
+});
+
 test("create, recover, save and reopen a named blank project", async ({
   page,
 }) => {
