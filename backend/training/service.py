@@ -140,24 +140,26 @@ def inside(directory, relative):
 
 
 def events(
-    directory, *, limit=None, kind=None, after=None, max_bytes=None, channel=None
+    directory, *, limit=None, kind=None, kinds=None, after=None, max_bytes=None, channel=None, timeout=30, latest=False, _attempt=0
 ):
     """Incremental SQLite index over durable script-owned JSONL event streams."""
     import sqlite3
 
     database = directory / "event-index.sqlite"
-    with closing(sqlite3.connect(database, timeout=30)) as connection, connection:
-        # Every read first advances the index. Acquire the writer transaction
-        # before reading offsets, so simultaneous SSE/dashboard requests wait
-        # rather than race initialization or upgrade a stale read snapshot.
-        connection.execute("BEGIN IMMEDIATE")
-        connection.execute(
-            "CREATE TABLE IF NOT EXISTS offsets (path TEXT PRIMARY KEY, offset INTEGER)"
-        )
-        connection.execute(
-            "CREATE TABLE IF NOT EXISTS events (seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT UNIQUE, kind TEXT, document TEXT)"
-        )
-        connection.execute("CREATE INDEX IF NOT EXISTS kind_index ON events(kind)")
+    with closing(sqlite3.connect(database, timeout=timeout)) as connection:
+        schema = {row[0] for row in connection.execute(
+            "SELECT name FROM sqlite_master WHERE name IN ('offsets', 'events', 'kind_index')"
+        )}
+        if schema != {"offsets", "events", "kind_index"}:
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute(
+                "CREATE TABLE IF NOT EXISTS offsets (path TEXT PRIMARY KEY, offset INTEGER)"
+            )
+            connection.execute(
+                "CREATE TABLE IF NOT EXISTS events (seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT UNIQUE, kind TEXT, document TEXT)"
+            )
+            connection.execute("CREATE INDEX IF NOT EXISTS kind_index ON events(kind)")
+            connection.commit()
         sources = [
             directory / "events.jsonl",
             directory / "system/events.jsonl",
@@ -165,6 +167,7 @@ def events(
             *sorted(directory.glob("evaluation-*/events.jsonl")),
             *sorted(directory.glob("evaluation-*/preparation/events.jsonl")),
         ]
+        batches = []
         for path in sources:
             if not path.exists():
                 continue
@@ -173,6 +176,7 @@ def events(
                 "SELECT offset FROM offsets WHERE path=?", (name,)
             ).fetchone()
             offset = row[0] if row and row[0] <= path.stat().st_size else 0
+            documents = []
             with path.open("rb") as stream:
                 stream.seek(offset)
                 while True:
@@ -219,22 +223,40 @@ def events(
                                 )
                             )
                         )
-                        connection.execute(
-                            "INSERT OR IGNORE INTO events(id,kind,document) VALUES(?,?,?)",
-                            (event["id"], event["kind"], json.dumps(event)),
-                        )
+                        documents.append((event["id"], event["kind"], json.dumps(event)))
                     except (ValueError, KeyError, AttributeError):
                         continue
-                if row is None or row[0] != stream.tell():
-                    connection.execute(
-                        "INSERT OR REPLACE INTO offsets(path,offset) VALUES(?,?)",
-                        (name, stream.tell()),
-                    )
+                old_offset = row[0] if row else None
+                if stream.tell() != (old_offset if old_offset is not None else 0):
+                    batches.append((name, old_offset, stream.tell(), documents))
+        if batches:
+            connection.execute("BEGIN IMMEDIATE")
+        for name, old_offset, new_offset, documents in batches:
+            current = connection.execute("SELECT offset FROM offsets WHERE path=?", (name,)).fetchone()
+            if (current[0] if current else None) != old_offset:
+                connection.rollback()
+                if _attempt >= 7:
+                    exc = sqlite3.OperationalError("event index changed repeatedly while reading")
+                    exc.sqlite_errorcode = sqlite3.SQLITE_BUSY
+                    raise exc
+                return events(directory, limit=limit, kind=kind, kinds=kinds, after=after, max_bytes=max_bytes, channel=channel, timeout=timeout, latest=latest, _attempt=_attempt + 1)
+            connection.executemany(
+                "INSERT OR IGNORE INTO events(id,kind,document) VALUES(?,?,?)", documents
+            )
+            if old_offset != new_offset:
+                connection.execute("INSERT OR REPLACE INTO offsets(path,offset) VALUES(?,?)", (name, new_offset))
+        if batches:
+            connection.commit()
         query = "SELECT document FROM events"
         values, filters = [], []
         if kind:
             filters.append("kind=?")
             values.append(kind)
+        if kinds is not None:
+            if not kinds:
+                return []
+            filters.append("kind IN (" + ",".join("?" for _ in kinds) + ")")
+            values.extend(kinds)
         if channel is not None:
             filters.append("json_extract(document, '$.channel')=?")
             values.append(channel)
@@ -246,7 +268,8 @@ def events(
             values.append(previous[0] if previous else 0)
         if filters:
             query += " WHERE " + " AND ".join(filters)
-        query += " ORDER BY seq " + ("ASC" if after is not None else "DESC")
+        ascending = after is not None and not latest
+        query += " ORDER BY seq " + ("ASC" if ascending else "DESC")
         if limit is not None:
             query += " LIMIT ?"
             values.append(limit)
@@ -266,7 +289,7 @@ def events(
                 rows.append(row)
         return [
             json.loads(row[0])
-            for row in (rows if after is not None else reversed(rows))
+            for row in (rows if ascending else reversed(rows))
         ]
 
 
@@ -485,7 +508,11 @@ class TrainingService:
         return sorted(result, key=lambda item: item["created"], reverse=True)
 
     def status(self, directory):
-        preparation = events(directory, kind="preparation", limit=1)
+        path = directory / "status.json"
+        status = json.loads(path.read_text()) if path.exists() else None
+        if status and status["state"] not in ("starting", "running"):
+            return status
+        preparation = events(directory, kind="preparation", channel="system", limit=1)
         progress = (
             preparation[-1]["payload"]
             if preparation and preparation[-1].get("channel") == "system"
@@ -507,9 +534,7 @@ class TrainingService:
                 ),
             }
 
-        path = directory / "status.json"
-        if path.exists():
-            status = json.loads(path.read_text())
+        if status is not None:
             if (
                 status["state"] in ("starting", "running")
                 and progress
@@ -519,19 +544,12 @@ class TrainingService:
             return status
         info = json.loads((directory / "run.json").read_text())
         if info.get("execution") == "monitor":
-            records = [e for e in events(directory) if e.get("channel") == "training"]
-            last_start = max(
-                (
-                    index
-                    for index, event in enumerate(records)
-                    if event["kind"] == "started"
-                ),
-                default=0,
-            )
-            records = records[last_start:]
-            if any(e["kind"] == "stopped" for e in records):
+            starts = events(directory, kind="started", channel="training", limit=1)
+            start_id = starts[-1]["id"] if starts else None
+            stopped = events(directory, kind="stopped", channel="training", after=start_id, limit=1)
+            if stopped:
                 return {"state": "stopped"}
-            finished = [e for e in records if e["kind"] == "finished"]
+            finished = events(directory, kind="finished", channel="training", after=start_id, limit=1, latest=True)
             if finished:
                 return {
                     "state": (
@@ -540,7 +558,7 @@ class TrainingService:
                         else "failed"
                     )
                 }
-            if any(e["kind"] == "started" for e in records):
+            if starts:
                 return {
                     "state": "running",
                     "message": "Terminal-launched process; liveness is based on reported events.",
@@ -1291,7 +1309,7 @@ class TrainingService:
 
 
 def build_snapshot(
-    directory, checkpoint_event=None, include_data=False, identifier=None
+    directory, checkpoint_event=None, include_data=False, identifier=None, *, index_timeout=30
 ):
     if checkpoint_event and checkpoint_event["payload"].get("remote"):
         raise ValueError(
@@ -1420,7 +1438,7 @@ def build_snapshot(
                     add_path(archive, name, path)
             selected = [
                 event
-                for event in events(directory)
+                for event in events(directory, timeout=index_timeout)
                 if event["time"] <= cutoff
                 and (
                     not checkpoint_event

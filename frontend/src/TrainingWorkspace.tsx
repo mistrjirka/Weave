@@ -9,7 +9,7 @@ import {
 import { CustomRunControls } from "./CustomRunControls";
 import "./training.css";
 import "./trainingSetup.css";
-import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { z } from "zod";
 import { createPortal } from "react-dom";
 import {
@@ -31,6 +31,7 @@ import {
   Upload,
 } from "lucide-react";
 import type { Project } from "./types";
+import { trainingConfigsEqual } from "./trainingConfigEquality";
 import { GPUTuningStatus } from "./GPUTuningStatus";
 import { FP16Status } from "./FP16Status";
 import { TrainingMessages } from "./TrainingMessages";
@@ -53,6 +54,7 @@ import {
   computeSummary,
 } from "./TrainingComputeSettings";
 import { metricsForDisplay } from "./trainingMetrics";
+import { mergeMonitorEvents } from "./trainingMonitor";
 import { CheckpointChat } from "./chat/CheckpointChat";
 import { newId, copyText, Dialog } from "./ui";
 import type { PythonEditorHandle } from "./PythonEditor";
@@ -62,7 +64,8 @@ const PythonEditor = lazy(() =>
 import {
   capabilitySchema,
   detailSchema,
-  eventSchema,
+  monitorEventsSchema,
+  monitorStatusSchema,
   hardwareSchema,
   inspectTrainingModel,
   planSchema,
@@ -142,7 +145,10 @@ export function TrainingWorkspace({ project }: { project: Project }) {
   const [runs, setRuns] = useState<TrainingRun[]>([]);
   const [detail, setDetail] = useState<RunDetail | null>(null);
   const [gpus, setGPUs] = useState<TrainingGPU[]>([]);
-  const [initialViewReady, setInitialViewReady] = useState(false);
+  const [bootstrapRetry, setBootstrapRetry] = useState(0);
+  const [auxiliaryRetry, setAuxiliaryRetry] = useState(0);
+  const [auxiliaryError, setAuxiliaryError] = useState("");
+  const selectionTouched = useRef(false);
   const [model, setModel] = useState<Awaited<
     ReturnType<typeof inspectTrainingModel>
   > | null>(null);
@@ -205,7 +211,10 @@ export function TrainingWorkspace({ project }: { project: Project }) {
   const [smooth, setSmooth] = useState(false);
   const [comparisonId, setComparisonId] = useState("");
   const [comparison, setComparison] = useState<RunDetail | null>(null);
-  const [deletedStage, setDeletedStage] = useState<TrainingStage | null>(null);
+  const [deletedStage, setDeletedStage] = useState<{
+    stage: TrainingStage;
+    index: number;
+  } | null>(null);
   const [preview, setPreview] = useState<z.infer<typeof previewSchema> | null>(
     null,
   );
@@ -230,11 +239,10 @@ export function TrainingWorkspace({ project }: { project: Project }) {
     (!savedStage ||
       stage.name !== savedStage.name ||
       stage.script !== savedStage.script ||
-      JSON.stringify(stage.config) !== JSON.stringify(savedStage.config));
-  const codeFirst = /^\s*from\s+weave_support\.trainer\s+import\b/m.test(
-    stage?.script ?? "",
-  );
-  const effective = useStageSettings(stage, codeFirst);
+      !trainingConfigsEqual(stage.config, savedStage.config));
+  const effective = useStageSettings(stage);
+  const codeFirst = effective.codeFirst === true;
+  const launchReady = effective.codeFirst !== null && !effective.error;
   const [parentCheckpoints, setParentCheckpoints] = useState<TrainingEvent[]>(
     [],
   );
@@ -250,26 +258,20 @@ export function TrainingWorkspace({ project }: { project: Project }) {
       return;
     const controller = new AbortController();
     const parent = config.parent_run;
-    void (async () => {
-      let after = "";
-      let records: TrainingEvent[] = [];
-      while (!controller.signal.aborted) {
-        const page = await trainingRequest(
-          `/runs/${encodeURIComponent(parent)}/event-records?kind=checkpoint&limit=100&after=${encodeURIComponent(after)}`,
-          z.object({ events: z.array(eventSchema), next_after: z.string() }),
-          undefined,
-          undefined,
-          controller.signal,
-        );
-        if (!page.events.length) break;
-        records = [...records, ...page.events].slice(-500);
-        after = page.next_after;
-      }
-      if (!controller.signal.aborted) setParentCheckpoints(records);
-    })().catch((failure: unknown) => {
-      if (!controller.signal.aborted)
-        setParentCheckpointError(message(failure));
-    });
+    void trainingRequest(
+      `/runs/${encodeURIComponent(parent)}/event-records?kind=checkpoint&latest=true&limit=500`,
+      monitorEventsSchema,
+      undefined,
+      undefined,
+      controller.signal,
+    )
+      .then(({ events }) => {
+        if (!controller.signal.aborted) setParentCheckpoints(events);
+      })
+      .catch((failure: unknown) => {
+        if (!controller.signal.aborted)
+          setParentCheckpointError(message(failure));
+      });
     return () => controller.abort();
   }, [capabilities?.authenticated, config?.parent_run, config?.start_mode]);
 
@@ -279,15 +281,6 @@ export function TrainingWorkspace({ project }: { project: Project }) {
         detail.reporting_url.replace(/\/api\/training\/reports\/[^/]+$/, ""),
       );
   }, [detail?.run.id, detail?.reporting_url]);
-  useEffect(() => {
-    if (
-      !initialViewReady &&
-      loaded &&
-      (setupOpen || !runId || detail || monitorError)
-    ) {
-      setInitialViewReady(true);
-    }
-  }, [initialViewReady, loaded, setupOpen, runId, detail, monitorError]);
   const cacheKey = `weave:training:${project.id}`;
 
   useEffect(() => {
@@ -313,30 +306,14 @@ export function TrainingWorkspace({ project }: { project: Project }) {
         undefined,
         controller.signal,
       ),
-      trainingRequest(
-        `/runs?project_id=${encodeURIComponent(project.id)}`,
-        z.array(runSchema),
-        undefined,
-        undefined,
-        controller.signal,
-      ),
-      trainingRequest(
-        "/hardware",
-        hardwareSchema,
-        undefined,
-        undefined,
-        controller.signal,
-      ),
     ])
-      .then(([t, p, r, h]) => {
+      .then(([t, p]) => {
         if (controller.signal.aborted) return;
         setTemplates(t);
         savedStagesRef.current = Object.fromEntries(
           p.stages.map((item) => [item.id, item]),
         );
         setSavedStages(savedStagesRef.current);
-        setRuns(r);
-        setGPUs(h.gpus);
         const cached = localStorage.getItem(cacheKey);
         let recovered: TrainingPlan | null = null;
         try {
@@ -379,8 +356,7 @@ export function TrainingWorkspace({ project }: { project: Project }) {
                             : null)),
                       config_revision:
                         draft.config_revision ??
-                        (JSON.stringify(draft.config) ===
-                        JSON.stringify(disk.config)
+                        (trainingConfigsEqual(draft.config, disk.config)
                           ? disk.config_revision
                           : null),
                     };
@@ -394,25 +370,7 @@ export function TrainingWorkspace({ project }: { project: Project }) {
             : p,
         );
         setLoaded(true);
-        const linkedRun = r.find((run) => run.id === runId);
-        if (linkedRun) {
-          setSelected(linkedRun.stage_id);
-        } else {
-          setMonitorError("");
-          const replacement = preferredTrainingRun(r, selected);
-          setRunId(replacement?.id ?? "");
-          if (replacement) {
-            setSelected(replacement.stage_id);
-            if (!initialPanel.current) setSetupOpen(false);
-          } else setSetupOpen(true);
-          if (runId) {
-            setNotice(
-              replacement
-                ? "The linked run is unavailable. Opened the latest available run."
-                : "The linked run is unavailable. No saved runs were found for this project.",
-            );
-          }
-        }
+        setError("");
       })
       .catch((e) => {
         if (!controller.signal.aborted) setError(message(e));
@@ -420,7 +378,56 @@ export function TrainingWorkspace({ project }: { project: Project }) {
     return () => controller.abort();
     // Initial run choice must not reload unsaved stages on every selection.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [capabilities?.authenticated, project.id, cacheKey]);
+  }, [capabilities?.authenticated, project.id, cacheKey, bootstrapRetry]);
+  useEffect(() => {
+    if (!capabilities?.authenticated) return;
+    const controller = new AbortController();
+    setAuxiliaryError("");
+    void trainingRequest(
+      `/runs?project_id=${encodeURIComponent(project.id)}`,
+      z.array(runSchema),
+      undefined,
+      undefined,
+      controller.signal,
+    )
+      .then((history) => {
+        if (controller.signal.aborted) return;
+        setRuns(history);
+        if (!selectionTouched.current && !runId) {
+          const replacement = preferredTrainingRun(history, selected);
+          if (replacement) {
+            setRunId(replacement.id);
+            setSelected(replacement.stage_id);
+            if (!initialPanel.current) setSetupOpen(false);
+          }
+        }
+      })
+      .catch((failure: unknown) => {
+        if (!controller.signal.aborted)
+          setAuxiliaryError(
+            (current) => `${current} Run history: ${message(failure)}`,
+          );
+      });
+    void trainingRequest(
+      "/hardware",
+      hardwareSchema,
+      undefined,
+      undefined,
+      controller.signal,
+    )
+      .then((hardware) => {
+        if (!controller.signal.aborted) setGPUs(hardware.gpus);
+      })
+      .catch((failure: unknown) => {
+        if (!controller.signal.aborted)
+          setAuxiliaryError(
+            (current) => `${current} Hardware: ${message(failure)}`,
+          );
+      });
+    return () => controller.abort();
+    // Selection is intentionally captured only for the initial history choice.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [capabilities?.authenticated, project.id, auxiliaryRetry]);
   useEffect(() => {
     if (!capabilities?.authenticated || !setupOpen) return;
     const controller = new AbortController();
@@ -446,6 +453,7 @@ export function TrainingWorkspace({ project }: { project: Project }) {
     }
   }, [plan, cacheKey, loaded]);
   useEffect(() => {
+    if (!loaded) return;
     trainingURL({
       stage: stage?.id,
       run: runId || undefined,
@@ -455,7 +463,7 @@ export function TrainingWorkspace({ project }: { project: Project }) {
           : "setup"
         : "monitor",
     });
-  }, [stage?.id, runId, setupOpen, editor]);
+  }, [stage?.id, runId, setupOpen, editor, loaded]);
   useEffect(() => {
     setPreview(null);
   }, [
@@ -520,7 +528,7 @@ export function TrainingWorkspace({ project }: { project: Project }) {
               item.id === remote.id &&
               previous &&
               item.script === previous.script &&
-              JSON.stringify(item.config) === JSON.stringify(previous.config)
+              trainingConfigsEqual(item.config, previous.config)
                 ? { ...remote, name: item.name }
                 : item,
             ),
@@ -555,6 +563,9 @@ export function TrainingWorkspace({ project }: { project: Project }) {
     setMonitorError("");
     setLastRefreshed(null);
     let pending = false;
+    let cursor = "";
+    let lastMetadata = 0;
+    let lastState = "";
     const runEndpoint = `/runs/${encodeURIComponent(runId)}`;
     const recoverMissingRun = async () => {
       const list = await trainingRequest(
@@ -584,23 +595,86 @@ export function TrainingWorkspace({ project }: { project: Project }) {
       if (pending) return;
       pending = true;
       try {
-        const value = await trainingRequest(
-          runEndpoint,
-          detailSchema,
-          undefined,
-          undefined,
-          controller.signal,
-        );
-        if (!controller.signal.aborted) setDetail(value);
-        const list = await trainingRequest(
-          `/runs?project_id=${encodeURIComponent(project.id)}`,
-          z.array(runSchema),
-          undefined,
-          undefined,
-          controller.signal,
-        );
+        if (!lastMetadata) {
+          const value = await trainingRequest(
+            runEndpoint,
+            detailSchema,
+            undefined,
+            undefined,
+            controller.signal,
+          );
+          if (controller.signal.aborted) return;
+          cursor = value.events.at(-1)?.id ?? "";
+          lastState = value.status.state;
+          lastMetadata = Date.now();
+          setDetail(value);
+          setSelected(value.run.stage_id);
+        } else {
+          const [status, page] = await Promise.all([
+            trainingRequest(
+              `${runEndpoint}/status?compact=true`,
+              monitorStatusSchema,
+              undefined,
+              undefined,
+              controller.signal,
+            ),
+            trainingRequest(
+              `${runEndpoint}/event-records?limit=500&after=${encodeURIComponent(cursor)}`,
+              monitorEventsSchema,
+              undefined,
+              undefined,
+              controller.signal,
+            ),
+          ]);
+          if (controller.signal.aborted) return;
+          cursor = page.next_after;
+          setDetail((current) =>
+            current
+              ? {
+                  ...current,
+                  status: status.status,
+                  events: mergeMonitorEvents(current.events, page.events),
+                }
+              : current,
+          );
+          const changedState = lastState !== status.status.state;
+          lastState = status.status.state;
+          const relevant = page.events.some((event) =>
+            ["checkpoint", "command", "configuration", "capabilities"].includes(
+              event.kind,
+            ),
+          );
+          if (changedState || relevant || Date.now() - lastMetadata >= 30000) {
+            const [value, list] = await Promise.all([
+              trainingRequest(
+                runEndpoint,
+                detailSchema,
+                undefined,
+                undefined,
+                controller.signal,
+              ),
+              trainingRequest(
+                `/runs?project_id=${encodeURIComponent(project.id)}`,
+                z.array(runSchema),
+                undefined,
+                undefined,
+                controller.signal,
+              ),
+            ]);
+            if (controller.signal.aborted) return;
+            setDetail((current) =>
+              current
+                ? {
+                    ...value,
+                    events: mergeMonitorEvents(current.events, value.events),
+                  }
+                : value,
+            );
+            setRuns(list);
+            lastMetadata = Date.now();
+          }
+        }
         if (!controller.signal.aborted) {
-          setRuns(list);
           setMonitorError("");
           setLastRefreshed(Date.now());
         }
@@ -609,7 +683,7 @@ export function TrainingWorkspace({ project }: { project: Project }) {
         if (
           e instanceof TrainingRequestError &&
           e.status === 404 &&
-          e.path === runEndpoint
+          (e.path === runEndpoint || e.path.startsWith(`${runEndpoint}/`))
         ) {
           try {
             await recoverMissingRun();
@@ -624,16 +698,13 @@ export function TrainingWorkspace({ project }: { project: Project }) {
     };
     void refresh();
     const timer = window.setInterval(() => void refresh(), 3000);
-    const stream = new EventSource(
-      `/api/training/runs/${encodeURIComponent(runId)}/events`,
-    );
-    stream.onmessage = () => void refresh();
     return () => {
       controller.abort();
       window.clearInterval(timer);
-      stream.close();
     };
-  }, [runId, capabilities?.authenticated, project.id, selected]);
+    // A stage selection must not restart the monitor for the same run.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [runId, capabilities?.authenticated, project.id]);
   useEffect(() => {
     if (!comparisonId) {
       setComparison(null);
@@ -647,7 +718,9 @@ export function TrainingWorkspace({ project }: { project: Project }) {
       undefined,
       controller.signal,
     )
-      .then(setComparison)
+      .then((value) => {
+        if (!controller.signal.aborted) setComparison(value);
+      })
       .catch((e) => {
         if (!controller.signal.aborted) setError(message(e));
       });
@@ -709,10 +782,9 @@ export function TrainingWorkspace({ project }: { project: Project }) {
               name: item.name === submitted.name ? saved.name : item.name,
               script:
                 item.script === submitted.script ? saved.script : item.script,
-              config:
-                JSON.stringify(item.config) === JSON.stringify(submitted.config)
-                  ? saved.config
-                  : item.config,
+              config: trainingConfigsEqual(item.config, submitted.config)
+                ? saved.config
+                : item.config,
             },
       ),
     }));
@@ -833,7 +905,7 @@ export function TrainingWorkspace({ project }: { project: Project }) {
     });
   }
   async function launch() {
-    if (!stage || launchInFlight.current) return;
+    if (!stage || !launchReady || launchInFlight.current) return;
     launchInFlight.current = true;
     setLaunchError("");
     setLaunchPhase("saving");
@@ -893,7 +965,7 @@ export function TrainingWorkspace({ project }: { project: Project }) {
         : kind === "snapshot"
           ? "Snapshot requested at the next safe training boundary. A custom script must support checkpoint requests."
           : kind === "stop"
-            ? "Pause requested. Waiting for the safe checkpoint boundary…"
+            ? "Stop requested. Waiting for the next safe training boundary…"
             : "Force stop requested.",
     );
     if (kind === "snapshot") setDashboard("checkpoints");
@@ -920,29 +992,53 @@ export function TrainingWorkspace({ project }: { project: Project }) {
     label: string,
     help: string,
   ) {
+    const min =
+      key === "sequence_length"
+        ? 2
+        : key === "learning_rate" ||
+            key === "gradient_clip" ||
+            key === "warmup_steps" ||
+            key === "weight_decay" ||
+            key === "seed"
+          ? 0
+          : 1;
     return (
       <label>
         {label}
         <input
           type="number"
           aria-label={label}
-          value={config?.[key] ?? 0}
-          step={key === "learning_rate" || key === "weight_decay" ? "any" : 1}
-          min={
-            key === "warmup_steps" || key === "weight_decay" || key === "seed"
-              ? 0
-              : undefined
+          value={config?.[key] ?? min}
+          step={
+            key === "learning_rate" ||
+            key === "weight_decay" ||
+            key === "gradient_clip"
+              ? "any"
+              : 1
           }
-          onChange={(e) => setting(key, e.target.valueAsNumber || 0)}
+          min={min}
+          onChange={({ currentTarget: input }) => {
+            const value = input.valueAsNumber;
+            if (
+              Number.isFinite(value) &&
+              input.validity.valid &&
+              (value > 0 ||
+                (key !== "learning_rate" && key !== "gradient_clip"))
+            )
+              setting(key, value);
+          }}
         />
         <small>{help}</small>
       </label>
     );
   }
-  const checkpoints =
-    detail?.events.filter((e) => e.kind === "checkpoint") ?? [];
-  const contract = runContract(detail?.events ?? []);
-  const counters = namedCounters(detail?.events ?? []);
+  const events = detail?.events;
+  const checkpoints = useMemo(
+    () => events?.filter((e) => e.kind === "checkpoint") ?? [],
+    [events],
+  );
+  const contract = useMemo(() => runContract(events ?? []), [events]);
+  const counters = useMemo(() => namedCounters(events ?? []), [events]);
   const scriptCapabilities =
     detail?.events
       .filter(
@@ -954,13 +1050,24 @@ export function TrainingWorkspace({ project }: { project: Project }) {
     detail?.script_capabilities ??
     {};
   const customRun = detail?.run.recipe === "custom" && !detail.run.code_first;
-  const metrics = metricsForDisplay(
-    detail?.events ?? [],
-    Boolean(detail?.run.code_first),
-    contract,
-    detail?.run.recipe === "custom",
+  const metrics = useMemo(
+    () =>
+      metricsForDisplay(
+        events ?? [],
+        Boolean(detail?.run.code_first),
+        contract,
+        detail?.run.recipe === "custom",
+      ),
+    [events, contract, detail?.run.code_first, detail?.run.recipe],
   );
   const active = detail && running.has(detail.status.state);
+  const runLabel = (run: TrainingRun) =>
+    run.status?.state ??
+    (run.execution === "monitor" ? "prepared" : "starting");
+  useEffect(() => {
+    if (pauseRequested && (pauseRequested !== runId || (detail && !active)))
+      setPauseRequested(null);
+  }, [pauseRequested, runId, detail?.run.id, active]);
   const otherActiveRun =
     detail && !active
       ? runs.find(
@@ -971,6 +1078,7 @@ export function TrainingWorkspace({ project }: { project: Project }) {
         )
       : undefined;
   function selectStage(id: string) {
+    selectionTouched.current = true;
     setSelected(id);
     const latest = preferredTrainingRun(
       runs.filter((run) => run.stage_id === id),
@@ -984,6 +1092,7 @@ export function TrainingWorkspace({ project }: { project: Project }) {
     setLaunchError("");
   }
   function selectRun(run: TrainingRun) {
+    selectionTouched.current = true;
     setDetail(null);
     setRunId(run.id);
     setSelected(run.stage_id);
@@ -1015,16 +1124,30 @@ export function TrainingWorkspace({ project }: { project: Project }) {
     </button>
   );
 
-  if (!capabilities || (capabilities.authenticated && !initialViewReady))
+  if (!capabilities || (capabilities.authenticated && !loaded))
     return (
       <section
         className="training-workspace training-loading"
         aria-label="Training workspace"
-        aria-busy="true"
+        aria-busy={!error}
       >
-        <p role="status">Loading training workspace…</p>
+        {!error && <p role="status">Loading training workspace…</p>}
         {error || monitorError ? (
-          <p role="alert">{error || monitorError}</p>
+          <div role="alert">
+            {error || monitorError}{" "}
+            <button
+              onClick={() => {
+                setError("");
+                if (!capabilities)
+                  void trainingRequest("/capabilities", capabilitySchema)
+                    .then(setCapabilities)
+                    .catch((e) => setError(message(e)));
+                else setBootstrapRetry((value) => value + 1);
+              }}
+            >
+              Retry
+            </button>
+          </div>
         ) : (
           <div className="training-loading-layout" aria-hidden="true">
             <div className="training-loading-bar" />
@@ -1093,6 +1216,14 @@ export function TrainingWorkspace({ project }: { project: Project }) {
 
   return (
     <section className="training-workspace" aria-label="Training workspace">
+      {auxiliaryError && (
+        <div className="training-alert" role="alert">
+          {auxiliaryError}{" "}
+          <button onClick={() => setAuxiliaryRetry((value) => value + 1)}>
+            Retry
+          </button>
+        </div>
+      )}
       {stage && (
         <div className="training-workflow-bar">
           <label className="training-stage-picker">
@@ -1383,7 +1514,13 @@ export function TrainingWorkspace({ project }: { project: Project }) {
                     aria-label="Delete stage"
                     disabled={!stage}
                     onClick={() => {
-                      setDeletedStage(stage ?? null);
+                      if (!stage) return;
+                      setDeletedStage({
+                        stage,
+                        index: plan.stages.findIndex(
+                          (item) => item.id === stage.id,
+                        ),
+                      });
                       setPlan((current) => ({
                         ...current,
                         stages: current.stages.filter(
@@ -1402,11 +1539,22 @@ export function TrainingWorkspace({ project }: { project: Project }) {
                 {deletedStage && (
                   <button
                     onClick={() => {
-                      setPlan((current) => ({
-                        ...current,
-                        stages: [...current.stages, deletedStage],
-                      }));
-                      selectStage(deletedStage.id);
+                      setPlan((current) => {
+                        if (
+                          current.stages.some(
+                            (item) => item.id === deletedStage.stage.id,
+                          )
+                        )
+                          return current;
+                        const stages = [...current.stages];
+                        stages.splice(
+                          deletedStage.index,
+                          0,
+                          deletedStage.stage,
+                        );
+                        return { ...current, stages };
+                      });
+                      selectStage(deletedStage.stage.id);
                       setDeletedStage(null);
                     }}
                   >
@@ -1435,8 +1583,7 @@ export function TrainingWorkspace({ project }: { project: Project }) {
                   >
                     <strong>{run.name}</strong>
                     <small>
-                      {run.status?.state ?? "prepared"} ·{" "}
-                      {new Date(run.created).toLocaleString()}
+                      {runLabel(run)} · {new Date(run.created).toLocaleString()}
                     </small>
                     {run.parent && (
                       <small>
@@ -1569,8 +1716,10 @@ export function TrainingWorkspace({ project }: { project: Project }) {
                         {savedStages[stage.id] && (
                           <small>
                             {stage.script === savedStages[stage.id].script &&
-                            JSON.stringify(config) ===
-                              JSON.stringify(savedStages[stage.id].config)
+                            trainingConfigsEqual(
+                              config,
+                              savedStages[stage.id].config,
+                            )
                               ? "Browser matches the server files."
                               : "Browser edits are not saved to the server yet."}
                           </small>
@@ -1581,10 +1730,10 @@ export function TrainingWorkspace({ project }: { project: Project }) {
                             stage.script !== savedStages[stage.id].script) ||
                             (stage.config_revision !==
                               savedStages[stage.id].config_revision &&
-                              JSON.stringify(config) !==
-                                JSON.stringify(
-                                  savedStages[stage.id].config,
-                                ))) && (
+                              !trainingConfigsEqual(
+                                config,
+                                savedStages[stage.id].config,
+                              ))) && (
                             <p className="training-alert" role="status">
                               Files changed on the server while this browser has
                               a draft. Reload the server files, or duplicate
@@ -2235,6 +2384,7 @@ export function TrainingWorkspace({ project }: { project: Project }) {
                       className="primary"
                       disabled={
                         busy ||
+                        !launchReady ||
                         (!capabilities.enabled && config.execution === "local")
                       }
                       onClick={() => void task(launch)}
@@ -2354,7 +2504,7 @@ export function TrainingWorkspace({ project }: { project: Project }) {
                       >
                         {runs.map((run) => (
                           <option key={run.id} value={run.id}>
-                            {run.status?.state ?? "prepared"} ·{" "}
+                            {runLabel(run)} ·{" "}
                             {new Date(run.created).toLocaleString(undefined, {
                               month: "short",
                               day: "numeric",
@@ -2420,10 +2570,14 @@ export function TrainingWorkspace({ project }: { project: Project }) {
                       >
                         <Pause aria-hidden="true" size={14} />
                         {pauseRequested === detail.run.id
-                          ? "Pausing…"
-                          : customRun && scriptCapabilities.resume !== true
-                            ? "Stop safely"
-                            : "Pause training"}
+                          ? detail.run.code_first ||
+                            scriptCapabilities.resume === true
+                            ? "Pausing…"
+                            : "Stopping…"
+                          : detail.run.code_first ||
+                              scriptCapabilities.resume === true
+                            ? "Pause training"
+                            : "Stop safely"}
                       </button>
                       <button
                         disabled={busy || detail.run.execution === "monitor"}
@@ -2436,11 +2590,13 @@ export function TrainingWorkspace({ project }: { project: Project }) {
                 </div>
               </div>
               <GPUTuningStatus events={detail.events} />
-              {detail.status.state === "failed" && detail.status.message && (
-                <p role="status" className="training-alert">
-                  {detail.status.message}
-                </p>
-              )}
+              {(detail.status.state === "failed" ||
+                detail.status.state === "unknown") &&
+                detail.status.message && (
+                  <p role="status" className="training-alert">
+                    {detail.status.message}
+                  </p>
+                )}
               {detail.events
                 .filter(
                   (event) =>

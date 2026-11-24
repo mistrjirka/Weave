@@ -3,7 +3,7 @@ import {
   counterLabel,
   type TrainingAxis,
 } from "./trainingContract";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import type { CSSProperties } from "react";
 import type { TrainingEvent } from "./trainingApi";
 import {
@@ -13,9 +13,49 @@ import {
   metricScope,
 } from "./trainingMetrics";
 
+const noEvents: TrainingEvent[] = [];
+
+function chartPoints(
+  items: TrainingEvent[],
+  metric: string,
+  axis: TrainingAxis,
+  smooth: boolean,
+) {
+  const start = items[0]?.time ?? 0;
+  const counter = axis.startsWith("counter:") ? axis.slice(8) : null;
+  const points: { x: number; y: number; raw: number; step: number }[] = [];
+  let average: number | undefined;
+  for (const event of items) {
+    const value = event.payload[metric];
+    if (
+      event.kind !== "metrics" ||
+      typeof value !== "number" ||
+      !Number.isFinite(value)
+    )
+      continue;
+    const x =
+      counter !== null
+        ? event.counters?.[counter]
+        : axis === "time"
+          ? event.time - start
+          : axis === "tokens"
+            ? event.tokens
+            : event.step;
+    if (typeof x !== "number" || !Number.isFinite(x)) continue;
+    average = average === undefined ? value : average * 0.8 + value * 0.2;
+    points.push({
+      x,
+      y: smooth ? average : value,
+      raw: value,
+      step: event.step,
+    });
+  }
+  return points;
+}
+
 export function TrainingChart({
   events,
-  comparison = [],
+  comparison = noEvents,
   metric,
   axis,
   smooth,
@@ -27,7 +67,7 @@ export function TrainingChart({
   smooth: boolean;
 }) {
   const [hover, setHover] = useState<number | null>(null);
-  const contract = runContract(events);
+  const contract = useMemo(() => runContract(events), [events]);
   const presentation = metricPresentation(metric, contract);
   const scope = metricScope(metric);
   const title = (
@@ -44,40 +84,48 @@ export function TrainingChart({
   const chartStyle: CSSProperties & { "--chart-color": string } = {
     "--chart-color": presentation.color,
   };
-  const points = (items: TrainingEvent[]) => {
-    const start = items[0]?.time ?? 0;
-    let average: number | undefined;
-    return items.flatMap((event) => {
-      const value = event.payload[metric];
-      if (
-        event.kind !== "metrics" ||
-        typeof value !== "number" ||
-        !Number.isFinite(value)
-      )
-        return [];
-      const x = axis.startsWith("counter:")
-        ? event.counters?.[axis.slice(8)]
-        : axis === "time"
-          ? event.time - start
-          : axis === "tokens"
-            ? event.tokens
-            : event.step;
-      if (typeof x !== "number" || !Number.isFinite(x)) return [];
-      average = average === undefined ? value : average * 0.8 + value * 0.2;
-      return [
-        {
-          x,
-          y: smooth ? average : value,
-          raw: value,
-          step: event.step,
-        },
-      ];
-    });
-  };
-  const current = points(events),
-    other = points(comparison),
-    all = [...current, ...other];
-  if (!all.length)
+  const current = useMemo(
+    () => chartPoints(events, metric, axis, smooth),
+    [events, metric, axis, smooth],
+  );
+  const other = useMemo(
+    () => chartPoints(comparison, metric, axis, smooth),
+    [comparison, metric, axis, smooth],
+  );
+  const plot = useMemo(() => {
+    if (!current.length && !other.length) return null;
+    let x0 = Infinity,
+      x1 = -Infinity,
+      minimum = Infinity,
+      maximum = -Infinity;
+    for (const series of [current, other]) {
+      for (const point of series) {
+        x0 = Math.min(x0, point.x);
+        x1 = Math.max(x1, point.x);
+        minimum = Math.min(minimum, point.y);
+        maximum = Math.max(maximum, point.y);
+      }
+    }
+    x1 = Math.max(x0 + 1, x1);
+    const [y0, y1] = metricDomain(metric, minimum, maximum, contract);
+    const scaleX = (x: number) => 64 + ((x - x0) / (x1 - x0)) * 464;
+    const scaleY = (y: number) => 150 - ((y - y0) / (y1 - y0)) * 124;
+    const path = (data: typeof current) =>
+      data
+        .map((p, i) => `${i ? "L" : "M"}${scaleX(p.x)},${scaleY(p.y)}`)
+        .join(" ");
+    return {
+      x0,
+      x1,
+      y0,
+      y1,
+      scaleX,
+      scaleY,
+      currentPath: path(current),
+      otherPath: path(other),
+    };
+  }, [current, other, metric, contract]);
+  if (!plot)
     return (
       <figure
         className="training-chart training-chart-empty"
@@ -114,11 +162,7 @@ export function TrainingChart({
         )}
       </figure>
     );
-  const x0 = Math.min(...all.map((p) => p.x)),
-    x1 = Math.max(x0 + 1, ...all.map((p) => p.x));
-  const minimum = Math.min(...all.map((p) => p.y));
-  const maximum = Math.max(...all.map((p) => p.y));
-  const [y0, y1] = metricDomain(metric, minimum, maximum, contract);
+  const { x0, x1, y0, y1, scaleX, scaleY, currentPath, otherPath } = plot;
   const tickDigits = Math.min(
     8,
     Math.max(
@@ -129,12 +173,6 @@ export function TrainingChart({
         ),
     ),
   );
-  const scaleX = (x: number) => 64 + ((x - x0) / (x1 - x0)) * 464;
-  const scaleY = (y: number) => 150 - ((y - y0) / (y1 - y0)) * 124;
-  const path = (data: typeof current) =>
-    data
-      .map((p, i) => `${i ? "L" : "M"}${scaleX(p.x)},${scaleY(p.y)}`)
-      .join(" ");
   const active =
     hover === null
       ? current.at(-1)
@@ -198,7 +236,7 @@ export function TrainingChart({
         <text x="480" y="174">
           {formatMetric(x1)}
         </text>
-        <path d={path(other)} className="training-chart-compare" />
+        <path d={otherPath} className="training-chart-compare" />
         {other.length === 1 && (
           <circle
             cx={scaleX(other[0].x)}
@@ -207,7 +245,7 @@ export function TrainingChart({
             className="training-chart-compare-point"
           />
         )}
-        <path d={path(current)} className="training-chart-line" />
+        <path d={currentPath} className="training-chart-line" />
         {active && (
           <circle
             cx={scaleX(active.x)}

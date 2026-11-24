@@ -467,15 +467,19 @@ actual training code when your model/data/optimizer are ready.
         after: str = Query(default="", max_length=128),
         kind: str | None = Query(default=None, max_length=64),
         limit: int = Query(default=100, ge=1, le=500),
+        latest: bool = False,
     ):
-        """Read chronological event pages; pass next_after until a page is empty."""
+        """Read chronological pages, or the newest bounded page after the cursor."""
         try:
             records = events(
                 run_directory(run_id),
                 after=after,
                 kind=kind,
                 limit=limit,
-                max_bytes=512_000,
+                latest=latest,
+                # JSON re-encoding can expand a 1 MiB source line substantially.
+                # Leave room for one event so a large record cannot wedge a cursor.
+                max_bytes=8_000_000,
             )
         except ValueError as exc:
             raise HTTPException(422, str(exc))
@@ -485,13 +489,15 @@ actual training code when your model/data/optimizer are ready.
         }
 
     @api.get("/runs/{run_id}/status", dependencies=[Depends(authenticated)])
-    def run_status(run_id: str):
+    def run_status(run_id: str, compact: bool = False):
         """Lightweight progress without loading full logs, samples or snapshots."""
         directory = run_directory(run_id)
+        if compact:
+            return {"run_id": run_id, "status": service.status(directory)}
         latest = events(directory, limit=1)
         try:
-            metrics = events(directory, kind="metrics", limit=1, max_bytes=256_000)
-            progress = events(directory, kind="progress", limit=1, max_bytes=256_000)
+            metrics = events(directory, kind="metrics", limit=1, max_bytes=8_000_000)
+            progress = events(directory, kind="progress", limit=1, max_bytes=8_000_000)
         except ValueError as exc:
             raise HTTPException(422, str(exc))
         return {
@@ -562,7 +568,14 @@ actual training code when your model/data/optimizer are ready.
             for path in sorted((directory / "snapshots").glob("*.json"))
         ]
         hw_path = directory / "hardware.jsonl"
-        hw_lines = hw_path.read_text().splitlines()[-1000:] if hw_path.exists() else []
+        hw_lines = []
+        if hw_path.is_file():
+            with hw_path.open("rb") as stream:
+                size = hw_path.stat().st_size
+                stream.seek(max(0, size - 2_000_000))
+                if size > 2_000_000:
+                    stream.readline()  # discard a partial first record
+                hw_lines = stream.read().decode(errors="replace").splitlines()[-1000:]
         hw = []
         for line in hw_lines:
             try:

@@ -110,11 +110,27 @@ test("missing run links recover on mobile, while valid history and transient fai
         json: { ...detail, run: latest, status: latest.status },
       }),
     );
-    await page.route(`**/api/training/runs/${latest.id}/events`, (route) =>
-      route.fulfill({
-        contentType: "text/event-stream",
-        body: ": connected\n\n",
-      }),
+    await page.route(
+      `**/api/training/runs/${run.id}/status?compact=true`,
+      (route) =>
+        route.fulfill({
+          status: responseStatus,
+          json:
+            responseStatus === 200
+              ? { run_id: run.id, status: older.status, last_event_id: "" }
+              : { detail: "Training run not found" },
+        }),
+    );
+    await page.route(
+      `**/api/training/runs/${latest.id}/status?compact=true`,
+      (route) =>
+        route.fulfill({
+          json: { run_id: latest.id, status: latest.status, last_event_id: "" },
+        }),
+    );
+    await page.route(
+      `**/api/training/runs/${latest.id}/event-records?*`,
+      (route) => route.fulfill({ json: { events: [], next_after: "" } }),
     );
     await page.setViewportSize({ width: 390, height: 844 });
     const base = `/?model=${id}&view=training&stage=${stage.id}`;
@@ -168,7 +184,7 @@ test("missing run links recover on mobile, while valid history and transient fai
       page.getByText("Loading selected run…", { exact: true }),
     ).not.toBeVisible();
     await expect(
-      page.getByRole("textbox", { name: "Stage name", exact: true }),
+      page.getByRole("region", { name: "Stage setup", exact: true }),
     ).toBeVisible();
   } finally {
     await page.goto("about:blank");

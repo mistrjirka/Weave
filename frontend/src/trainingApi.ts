@@ -110,6 +110,10 @@ export const eventSchema = z.object({
   policy_version: z.string().nullable().optional(),
 });
 export type TrainingEvent = z.infer<typeof eventSchema>;
+export const monitorEventsSchema = z.object({ events: z.array(eventSchema), next_after: z.string() });
+export const monitorStatusSchema = z.object({
+  status: z.object({ state: z.string(), message: z.string().nullable().optional(), updated: z.number().finite().optional() }),
+});
 const gpuSchema = z.object({
   index: z.number(),
   uuid: z.string(),

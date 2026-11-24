@@ -136,15 +136,13 @@ export function metricsForDisplay(
   contract?: RunContract,
   custom = false,
 ): string[] {
-  const reported = events
-    .filter((event) => event.kind === "metrics")
-    .flatMap((event) =>
-      Object.entries(event.payload)
-        .filter(
-          ([, value]) => typeof value === "number" && Number.isFinite(value),
-        )
-        .map(([key]) => key),
-    );
+  const reported = new Set<string>();
+  for (const event of events) {
+    if (event.kind !== "metrics") continue;
+    for (const [key, value] of Object.entries(event.payload))
+      if (typeof value === "number" && Number.isFinite(value))
+        reported.add(key);
+  }
   if (custom)
     return [
       ...new Set([
@@ -154,9 +152,8 @@ export function metricsForDisplay(
       ]),
     ];
   const learningRate =
-    ["lr/group_0", "train/learning_rate"].find((key) =>
-      reported.includes(key),
-    ) ?? (codeFirst ? "lr/group_0" : "train/learning_rate");
+    ["lr/group_0", "train/learning_rate"].find((key) => reported.has(key)) ??
+    (codeFirst ? "lr/group_0" : "train/learning_rate");
   return [
     ...new Set([
       "train/loss",

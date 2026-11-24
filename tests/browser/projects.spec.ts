@@ -12,10 +12,17 @@ async function currentProject(page: Page) {
   );
 }
 async function openBrowser(page: Page) {
-  const opener = page.locator(".workspace-button");
-  if (!(await opener.isVisible()))
+  const compact = await page.evaluate(
+    () =>
+      window.matchMedia(
+        "(max-width: 760px), (max-width: 1000px) and (max-height: 500px) and (pointer: coarse)",
+      ).matches,
+  );
+  if (compact) {
     await page.getByRole("button", { name: "Projects", exact: true }).click();
-  await opener.click();
+  } else {
+    await page.locator(".workspace-button").click();
+  }
   return page.getByRole("dialog", { name: "Projects & examples", exact: true });
 }
 async function newForm(page: Page, name: string) {

@@ -59,6 +59,7 @@ def preview_stage_settings(stage):
     except SyntaxError as exc:
         return {
             "config": config,
+            "code_first": None,
             "unresolved": list(PREVIEW_FIELDS),
             "error": f"Python line {exc.lineno}: {exc.msg}",
         }
@@ -68,6 +69,7 @@ def preview_stage_settings(stage):
         )
         return {
             "config": config,
+            "code_first": False,
             "unresolved": [],
             "error": None,
             "supported": (
@@ -198,7 +200,8 @@ def preview_stage_settings(stage):
     except ValueError:
         return {
             "config": stage.config.model_dump(),
+            "code_first": True,
             "unresolved": sorted(unresolved),
             "error": "The Python device settings contain invalid values. Check TrainingConfig in the script.",
         }
-    return {"config": config, "unresolved": sorted(unresolved), "error": None}
+    return {"config": config, "code_first": True, "unresolved": sorted(unresolved), "error": None}

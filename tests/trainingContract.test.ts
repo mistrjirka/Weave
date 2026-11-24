@@ -64,6 +64,27 @@ test("late evaluation never replaces the current training counters or configurat
   assert.deepEqual(namedCounters(events), { episodes: 100 });
   assert.equal(runContract(events).step_unit, "policy updates");
 });
+test("latest counters win and metrics stay in first-reported order", () => {
+  const events = [
+    event(
+      "metrics",
+      { reward: 1, loss: 2, invalid: Number.NaN },
+      { counters: { episodes: 1, epochs: 2 } },
+    ),
+    event(
+      "metrics",
+      { loss: 1, reward: 2, wins: 3 },
+      { counters: { episodes: 3 } },
+    ),
+  ];
+  assert.deepEqual(namedCounters(events), { episodes: 3, epochs: 2 });
+  assert.deepEqual(metricsForDisplay(events, true, undefined, true), [
+    "reward",
+    "loss",
+    "wins",
+  ]);
+});
+
 test("older runs and malformed metadata retain a useful default presentation", () => {
   assert.equal(runContract([]).step_unit, "optimizer updates");
   assert.equal(

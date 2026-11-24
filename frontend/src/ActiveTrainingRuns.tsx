@@ -66,12 +66,16 @@ export function ActiveTrainingRuns() {
       document.removeEventListener("visibilitychange", focus);
     };
   }, [refresh]);
-  if (!runs.length && !open) return null;
+  if (!runs.length && !open && !error) return null;
   return (
     <>
       <button
         className="subtle-button active-training-button"
-        aria-label={`Active training runs: ${runs.length}`}
+        aria-label={
+          error
+            ? "Active training status unavailable"
+            : `Active training runs: ${runs.length}`
+        }
         title={
           error
             ? "Training status may be stale"

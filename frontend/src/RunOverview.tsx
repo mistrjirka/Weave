@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import { runContract } from "./trainingContract";
 import type { RunDetail } from "./trainingApi";
 import {
@@ -14,14 +15,19 @@ const headlineMetrics = [
 ] as const;
 
 export function RunOverview({ detail }: { detail: RunDetail }) {
-  const contract = runContract(detail.events);
-  const reported = [
-    ...new Set(
-      detail.events
-        .filter((event) => event.kind === "metrics")
-        .flatMap((event) => Object.keys(event.payload)),
-    ),
-  ];
+  const { events } = detail;
+  const { contract, latest, reported } = useMemo(() => {
+    const latest = new Map<string, (typeof events)[number]>();
+    const reported = new Set<string>();
+    for (const event of events) {
+      if (event.kind !== "metrics") continue;
+      for (const [key, value] of Object.entries(event.payload)) {
+        reported.add(key);
+        if (typeof value === "number") latest.set(key, event);
+      }
+    }
+    return { contract: runContract(events), latest, reported };
+  }, [events]);
   const headlines =
     contract.headline_metrics ??
     (detail.run.recipe === "custom"
@@ -32,18 +38,11 @@ export function RunOverview({ detail }: { detail: RunDetail }) {
           ]),
         ].slice(0, 4)
       : headlineMetrics);
-  const hasMetrics = detail.events.some((event) => event.kind === "metrics");
-  if (!hasMetrics) return null;
+  if (!latest.size) return null;
   return (
     <dl className="training-overview" aria-label="Latest training metrics">
       {headlines.map((metric) => {
-        const event = detail.events
-          .filter(
-            (item) =>
-              item.kind === "metrics" &&
-              typeof item.payload[metric] === "number",
-          )
-          .at(-1);
+        const event = latest.get(metric);
         const value = event?.payload[metric];
         return (
           typeof value === "number" && (

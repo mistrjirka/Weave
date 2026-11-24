@@ -6,6 +6,18 @@ export interface SavedProject {
   name: string;
   updated?: string;
 }
+/** A save assigns an identity to every undo/redo revision of the same document. */
+export function withProjectIdentity(project: Project, id: string): Project {
+  return { ...project, id };
+}
+
+export function matchesSavedRevision(
+  project: Project,
+  saved: string | null,
+): boolean {
+  return saved !== null && JSON.stringify(project) === saved;
+}
+
 export interface OpenProjectOptions {
   saved?: boolean;
   force?: boolean;

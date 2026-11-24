@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import signal
+import sqlite3
 import subprocess
 import sys
 import time
@@ -13,6 +14,27 @@ import time
 from .service import build_snapshot, events, hardware
 from .weave_training import Run, atomic_json
 from .recipe import is_code_first
+
+
+def index_busy(exc):
+    return isinstance(exc, sqlite3.OperationalError) and (getattr(exc, "sqlite_errorcode", 0) & 0xff) in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED)
+
+
+def index_events(directory, **options):
+    """Read the run's event index, or return None while another reader holds it.
+
+    Every index read takes SQLite's writer lock to advance the index, and the API,
+    SSE streams and MCP clients take the same lock. A busy dashboard or client
+    must never stop healthy training, so a lock timeout here only means "no new
+    information this tick"; the supervisor retries on its next tick. Other
+    database errors still fail the run.
+    """
+    try:
+        return events(directory, timeout=0.2, **options)
+    except sqlite3.OperationalError as exc:
+        if index_busy(exc):
+            return None
+        raise
 
 
 def main():
@@ -51,7 +73,10 @@ def main():
     evaluation = None
     completed_commands = set()
     evaluated = set()
+    checkpoints = []
+    metrics_received = False
     started = time.time()
+    terminal_wait_started = None
 
     def status(state, **extra):
         atomic_json(
@@ -138,24 +163,23 @@ def main():
                     pass
                 with (directory / "hardware.jsonl").open("a") as stream:
                     stream.write(json.dumps(record) + "\n")
-                checkpoints = [
-                    e
-                    for e in events(directory, kind="checkpoint")
-                    if e.get("channel") == "training"
-                ]
-                for path in (directory / "commands").glob("*.json"):
+                # Force stop must not wait behind any event-index access.
+                commands = list((directory / "commands").glob("*.json"))
+                for path in commands:
+                    request = json.loads(path.read_text())
+                    if request["kind"] == "kill" and request["id"] not in completed_commands:
+                        terminate(process)
+                        terminate(evaluation)
+                        status("killed", message="Force stopped; only previously completed checkpoints are available.")
+                        return
+                found = index_events(directory, kind="checkpoint")
+                if found is not None:
+                    checkpoints = [e for e in found if e.get("channel") == "training"]
+                for path in commands:
                     request = json.loads(path.read_text())
                     if request["id"] in completed_commands:
                         continue
-                    if request["kind"] == "kill":
-                        terminate(process)
-                        terminate(evaluation)
-                        status(
-                            "killed",
-                            message="Force stopped; only previously completed checkpoints are available.",
-                        )
-                        return
-                    if request["kind"] == "snapshot":
+                    if request["kind"] == "snapshot" and found is not None:
                         checkpoint = next(
                             (
                                 e
@@ -168,13 +192,19 @@ def main():
                             None,
                         )
                         if checkpoint or process.poll() is not None:
-                            build_snapshot(
-                                directory,
-                                checkpoint
-                                or (checkpoints[-1] if checkpoints else None),
-                                request["include_data"],
-                                request["id"],
-                            )
+                            try:
+                                build_snapshot(
+                                    directory,
+                                    checkpoint or (checkpoints[-1] if checkpoints else None),
+                                    request["include_data"],
+                                    request["id"],
+                                    index_timeout=0.2,
+                                )
+                            except sqlite3.OperationalError as exc:
+                                if not index_busy(exc):
+                                    raise
+                                found = None
+                                continue
                             completed_commands.add(request["id"])
                 if (
                     config["strategy"] == "train_eval"
@@ -190,7 +220,7 @@ def main():
                         evaluation = None
                     pending = [
                         e for e in checkpoints if e["payload"]["path"] not in evaluated
-                    ]
+                    ] if found is not None else []
                     if pending and evaluation is None:
                         # Evaluate latest snapshot; older superseded jobs do not pile up.
                         selected = pending[-1]["payload"]["path"]
@@ -212,8 +242,17 @@ def main():
                                 start_new_session=True,
                             )
                 if process.poll() is not None and evaluation is None:
+                    stopped = index_events(directory, kind="stopped", limit=1) if found is not None else None
+                    if stopped is None:
+                        if terminal_wait_started is None:
+                            terminal_wait_started = time.monotonic()
+                        if time.monotonic() - terminal_wait_started >= 10:
+                            status("unknown" if process.returncode == 0 else "failed", exit_code=process.returncode, message="Training exited, but its final state could not be determined because the event index remained busy.")
+                            break
+                        time.sleep(0.2)
+                        continue
                     state = "completed" if process.returncode == 0 else "failed"
-                    if events(directory, kind="stopped", limit=1):
+                    if stopped:
                         state = "stopped"
                     status(
                         state,
@@ -225,9 +264,12 @@ def main():
                         ),
                     )
                     break
+                if not metrics_received:
+                    found = index_events(directory, kind="metrics", limit=1)
+                    metrics_received = bool(found)
                 status(
                     "running" if process.poll() is None else "evaluating",
-                    metrics_received=bool(events(directory, kind="metrics", limit=1)),
+                    metrics_received=metrics_received,
                 )
                 time.sleep(2)
     except BaseException as exc:

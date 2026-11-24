@@ -19,6 +19,20 @@ def script(arguments=""):
     return f"from weave_support.trainer import TrainingConfig\nconfig = TrainingConfig({arguments})\n"
 
 
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        ("# from weave_support.trainer import TrainingConfig\n", False),
+        ('text = "from weave_support.trainer import TrainingConfig"\n', False),
+        ("if True:\n    from weave_support.trainer import TrainingConfig as C\n", True),
+        ("from weave_support.trainer import (TrainingConfig,)\n", True),
+        ("broken(\n", None),
+    ],
+)
+def test_preview_classifies_python_using_the_backend_ast(source, expected):
+    assert preview_stage_settings(stage(source))["code_first"] is expected
+
+
 def test_preview_uses_script_values_and_auto_strategy_without_changing_stage():
     item = stage(
         script(

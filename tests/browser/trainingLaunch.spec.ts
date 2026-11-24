@@ -104,11 +104,11 @@ test("launch saves first, reports failures beside Start, and selects the new run
       `/?model=${id}&view=training&stage=${stage.id}&run=${oldRun.id}`,
     );
     await expect(
-      page.getByText("Loading training workspace…", { exact: true }),
+      page.getByText("Loading selected run…", { exact: true }),
     ).toBeVisible();
     await expect(
       page.getByRole("button", { name: "Setup", exact: true }),
-    ).toHaveCount(0);
+    ).toBeEnabled();
     releaseInitial();
     await expect(
       page.getByRole("region", { name: "Run dashboard", exact: true }),
@@ -254,7 +254,55 @@ test("launch saves first, reports failures beside Start, and selects the new run
     ).toHaveCount(4);
     await expect(page.locator(".training-chart svg circle")).toHaveCount(0);
     let sampleStep = 1000;
+    const detailRequests: number[] = [];
+    await page.route(
+      `**/api/training/runs/${newRun}/status?compact=true`,
+      (route) =>
+        route.fulfill({
+          json: {
+            run_id: newRun,
+            status: { state: "running" },
+            last_event_id: `sample-${sampleStep}`,
+          },
+        }),
+    );
+    let incrementalSampleRequests = 0;
+    await page.route(
+      `**/api/training/runs/${newRun}/event-records?*`,
+      (route) => {
+        const after =
+          new URL(route.request().url()).searchParams.get("after") ?? "";
+        const id = `sample-${sampleStep}`;
+        const hasNewSample = after !== id && sampleStep > 1000;
+        if (hasNewSample) incrementalSampleRequests += 1;
+        return route.fulfill({
+          json: {
+            next_after: hasNewSample ? id : after,
+            events: hasNewSample
+              ? [
+                  {
+                    version: 1,
+                    id,
+                    time: Date.now() / 1000,
+                    kind: "sample",
+                    step: sampleStep,
+                    tokens: 0,
+                    channel: "evaluation",
+                    payload: {
+                      checkpoint: `checkpoints/step-${sampleStep}.pt`,
+                      prompt: "Hello",
+                      output: `Output at ${sampleStep}`,
+                      metadata: { decoding: "greedy" },
+                    },
+                  },
+                ]
+              : [],
+          },
+        });
+      },
+    );
     await page.route(`**/api/training/runs/${newRun}`, async (route) => {
+      detailRequests.push(Date.now());
       const fixture = structuredClone(detail);
       fixture.status.state = "running";
       for (const [step, age] of [
@@ -358,13 +406,15 @@ test("launch saves first, reports failures beside Start, and selects the new run
     await expect(page.locator(".training-sample")).toContainText(
       "Output at 1000",
     );
+    expect(detailRequests).toHaveLength(1);
     sampleStep = 1500;
     await expect(page.locator(".training-sample")).toContainText(
       "Output at 1500",
       { timeout: 10000 },
     );
+    expect(incrementalSampleRequests).toBeGreaterThan(0);
     await examples.selectOption("all");
-    await expect(page.locator(".training-sample")).toHaveCount(2);
+    await expect(page.locator(".training-sample")).toHaveCount(3);
     await expect(page.locator(".training-sample").first()).toContainText(
       "Output at 1500",
     );

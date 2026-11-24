@@ -340,7 +340,7 @@ All ranks can call `cache_documents`; its file lock ensures only one process bui
 If your loader does additional preparation only on rank 0, use the CPU preparation barrier instead of a GPU collective:
 
 ```python
-from weave_support.trainer import preparation_barrier
+from weave_support.preparation import preparation_barrier
 
 # Inside get_dataloaders(), on every rank:
 if rank == 0:

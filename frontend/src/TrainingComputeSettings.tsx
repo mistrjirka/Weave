@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { z } from "zod";
 import { Cpu } from "lucide-react";
+import { stableJSON } from "./trainingConfigEquality";
 import {
   trainingConfigSchema,
   trainingRequest,
@@ -11,6 +12,7 @@ import {
 
 const previewSchema = z.object({
   config: trainingConfigSchema,
+  code_first: z.boolean().nullable(),
   unresolved: z.array(z.string()),
   error: z.string().nullable(),
   supported: z.array(z.string()).nullable().optional(),
@@ -32,17 +34,15 @@ function pick<K extends keyof TrainingConfig>(
 }
 
 /** Preview Python literals on the server; never run a script just to populate a form. */
-export function useStageSettings(
-  stage: TrainingStage | undefined,
-  codeFirst: boolean,
-) {
+export function useStageSettings(stage: TrainingStage | undefined) {
   const [preview, setPreview] = useState<{
     stageId: string;
     script: string;
+    configJSON: string;
     value: z.infer<typeof previewSchema>;
   } | null>(null);
   const [error, setError] = useState("");
-  const configJSON = JSON.stringify(stage?.config);
+  const configJSON = stableJSON(stage?.config);
   useEffect(() => {
     if (!stage) return;
     const controller = new AbortController();
@@ -57,7 +57,12 @@ export function useStageSettings(
       )
         .then((value) => {
           if (!controller.signal.aborted)
-            setPreview({ stageId: stage.id, script: stage.script, value });
+            setPreview({
+              stageId: stage.id,
+              script: stage.script,
+              configJSON,
+              value,
+            });
         })
         .catch((failure: unknown) => {
           if (!controller.signal.aborted)
@@ -72,11 +77,20 @@ export function useStageSettings(
     };
   }, [stage?.id, stage?.script, configJSON]);
   const current =
-    preview && preview.stageId === stage?.id && preview.script === stage?.script
+    preview &&
+    preview.stageId === stage?.id &&
+    preview.script === stage?.script &&
+    preview.configJSON === configJSON
       ? preview.value
       : null;
   if (!stage || !current)
-    return { config: null, unresolved: [], error, supported: null };
+    return {
+      config: null,
+      codeFirst: null,
+      unresolved: [],
+      error,
+      supported: null,
+    };
   // Reflect changes immediately, while the debounced preview request catches up.
   const config = {
     ...stage.config,
@@ -90,12 +104,13 @@ export function useStageSettings(
     ...(stage.config.performance_mode === "override"
       ? pick(stage.config, performanceKeys)
       : {}),
-    ...(codeFirst && stage.config.evaluation_mode !== "script"
+    ...(current.code_first && stage.config.evaluation_mode !== "script"
       ? pick(stage.config, ["evaluation_mode", "evaluation_device"])
       : {}),
   };
   return {
     config,
+    codeFirst: current.code_first,
     unresolved: current.unresolved,
     supported: current.supported ?? null,
     error: error || current.error || "",
@@ -591,7 +606,8 @@ export function TrainingComputeSettings({
                 max={100}
                 value={config.profile_steps}
                 onChange={(event) => {
-                  const value = event.target.valueAsNumber;
+                  const value =
+                    event.target.value === "" ? 0 : event.target.valueAsNumber;
                   if (Number.isInteger(value) && value >= 0 && value <= 100)
                     performance({ profile_steps: value });
                 }}

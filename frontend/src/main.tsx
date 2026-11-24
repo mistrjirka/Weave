@@ -169,7 +169,11 @@ import {
   NewProjectForm,
   ReferenceCard,
 } from "./ProjectBrowser";
-import { createProject } from "./projectWorkflow";
+import {
+  createProject,
+  matchesSavedRevision,
+  withProjectIdentity,
+} from "./projectWorkflow";
 import type {
   OpenProjectOptions,
   ProjectTab,
@@ -1120,7 +1124,10 @@ function Bootstrap() {
         let recovered: unknown = null;
         try {
           recovered = JSON.parse(
-            localStorage.getItem("weave.project") || "null",
+            (location.model &&
+              localStorage.getItem("weave.project." + location.model)) ||
+              localStorage.getItem("weave.project") ||
+              "null",
           );
         } catch {}
         const restored = projectSchema.safeParse(recovered);
@@ -1219,8 +1226,12 @@ function Workbench({
     [tab, setTab] = useState(initialLocation.tab),
     [left, setLeft] = useState(initialLocation.library),
     [search, setSearch] = useState(""),
-    [report, setReport] = useState<ValidationReport | null>(null),
-    [source, setSource] = useState(""),
+    [lastReport, setReport] = useState<ValidationReport | null>(null),
+    [lastSource, setSource] = useState(""),
+    [validationFailure, setValidationFailure] = useState<{
+      input: string;
+      message: string;
+    } | null>(null),
     [modal, setModal] = useState<string | null>(
       initialLocation.workspace === "new"
         ? "new-project"
@@ -1233,7 +1244,11 @@ function Workbench({
     [dirty, setDirty] = useState(() => {
       try {
         const status = recoveryStatusSchema.safeParse(
-          JSON.parse(localStorage.getItem("weave.project.status") || "null"),
+          JSON.parse(
+            localStorage.getItem("weave.project.status." + initial.id) ||
+              localStorage.getItem("weave.project.status") ||
+              "null",
+          ),
         );
         if (status.success && status.data.id === initial.id)
           return status.data.dirty;
@@ -1352,6 +1367,13 @@ function Workbench({
     options: OpenProjectOptions;
   } | null>(null);
   const [saving, setSaving] = useState(false);
+  const savingRef = useRef(false);
+  const loadRequest = useRef(0);
+  const savedSnapshot = useRef<string | null>(
+    dirty ? null : JSON.stringify(initial),
+  );
+  const modalRef = useRef(modal);
+  modalRef.current = modal;
   const [deletedProject, setDeletedProject] = useState<Project | null>(null);
   const [tokenizerTarget, setTokenizerTarget] = useState<string | null>(null);
   const viewPath = useRef(path),
@@ -1376,10 +1398,18 @@ function Workbench({
   const fileRef = useRef<HTMLInputElement>(null);
   const ref = useRef<Project>(project);
   ref.current = project;
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const notify = (s: string) => {
     setToast(s);
-    setTimeout(() => setToast(""), 4500);
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    toastTimer.current = setTimeout(() => setToast(""), 4500);
   };
+  useEffect(
+    () => () => {
+      if (toastTimer.current) clearTimeout(toastTimer.current);
+    },
+    [],
+  );
   useEffect(() => {
     if (!dirty) return;
     const guard = (e: BeforeUnloadEvent) => {
@@ -1424,20 +1454,39 @@ function Workbench({
   useEffect(() => {
     try {
       localStorage.setItem(
+        "weave.project.status." + project.id,
+        JSON.stringify({ id: project.id, dirty }),
+      );
+      localStorage.setItem(
         "weave.project.status",
         JSON.stringify({ id: project.id, dirty }),
       );
-    } catch {}
+    } catch {
+      notify("Local recovery unavailable. Save your project to the server.");
+    }
   }, [project.id, dirty]);
   useEffect(() => {
     if (!project) return;
     try {
+      localStorage.setItem(
+        "weave.project." + project.id,
+        JSON.stringify(project),
+      );
       localStorage.setItem("weave.project", JSON.stringify(project));
-    } catch {}
+    } catch {
+      notify("Local recovery unavailable. Save your project to the server.");
+    }
   }, [project]);
   const compilationBody = useMemo(() => compilationInput(project), [project]);
+  const report = validatedInput === compilationBody ? lastReport : null;
+  const source = validatedInput === compilationBody ? lastSource : "";
+  const validationError =
+    validationFailure?.input === compilationBody
+      ? validationFailure.message
+      : "";
   useEffect(() => {
     const controller = new AbortController();
+    let active = true;
     const timer = setTimeout(() => {
       fetch("/api/code", {
         method: "POST",
@@ -1448,18 +1497,23 @@ function Workbench({
         .then(responseData)
         .then((d) => {
           const parsed = codeSchema.parse(d);
-          if (parsed.report) {
+          if (active && parsed.report) {
             setReport(parsed.report);
+            setValidationFailure(null);
             setValidatedInput(compilationBody);
             setSource(parsed.source);
           }
         })
         .catch((e) => {
-          if (e.name !== "AbortError")
-            notify("Validation unavailable: " + e.message);
+          if (active && e.name !== "AbortError")
+            setValidationFailure({
+              input: compilationBody,
+              message: describeError(e),
+            });
         });
     }, 220);
     return () => {
+      active = false;
       clearTimeout(timer);
       controller.abort();
     };
@@ -1496,7 +1550,8 @@ function Workbench({
       }
       ref.current = next;
       setProject(next);
-      if (markDirty) setDirty(true);
+      if (markDirty)
+        setDirty(!matchesSavedRevision(next, savedSnapshot.current));
     },
     [],
   );
@@ -1667,7 +1722,8 @@ function Workbench({
     ref.current = prev;
     setPath((p) => retainedPath(prev, p));
     setSelection(null);
-    setDirty(true);
+    editRevision.current++;
+    setDirty(!matchesSavedRevision(prev, savedSnapshot.current));
   };
   const redo = () => {
     if (!future.length) return;
@@ -1678,7 +1734,8 @@ function Workbench({
     ref.current = next;
     setPath((p) => retainedPath(next, p));
     setSelection(null);
-    setDirty(true);
+    editRevision.current++;
+    setDirty(!matchesSavedRevision(next, savedSnapshot.current));
   };
   useEffect(() => {
     // Clipboard events work on LAN HTTP too, without Clipboard API permissions.
@@ -1759,6 +1816,11 @@ function Workbench({
   }, [modal, tab, path, project]);
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
+        e.preventDefault();
+        if (!modal) void saveProject();
+        return;
+      }
       if (
         modal ||
         (e.target instanceof Element &&
@@ -1780,10 +1842,6 @@ function Workbench({
       if ((e.ctrlKey || e.metaKey) && e.key === "z") {
         e.preventDefault();
         e.shiftKey ? redo() : undo();
-      }
-      if ((e.ctrlKey || e.metaKey) && e.key === "s") {
-        e.preventDefault();
-        saveProject();
       }
       if ((e.ctrlKey || e.metaKey) && e.key === "g") {
         e.preventDefault();
@@ -2096,11 +2154,16 @@ function Workbench({
   function autoLayout() {
     void arrangeScope(path);
   }
+  function dirtyAfterSave() {
+    return !matchesSavedRevision(ref.current, savedSnapshot.current);
+  }
   async function saveProject() {
-    if (!ref.current || saving) return false;
+    if (!ref.current || savingRef.current) return false;
+    savingRef.current = true;
     setSaving(true);
     try {
       const before = ref.current;
+      const navigation = loadRequest.current;
       const id = ref.current.id?.startsWith("project-")
         ? ref.current.id
         : "project-" + uid();
@@ -2115,14 +2178,20 @@ function Workbench({
           (result.stage_sync?.updated
             ? ` · ${result.stage_sync.updated} training stage(s) synchronized`
             : "");
-      if (ref.current === before) {
-        setProject(next);
-        ref.current = next;
-        setDirty(false);
-      } else {
-        const current = { ...ref.current, id };
+      const stillCurrent =
+        navigation === loadRequest.current && ref.current.id === before.id;
+      if (stillCurrent) {
+        savedSnapshot.current = JSON.stringify(next);
+        const current = ref.current === before ? next : { ...ref.current, id };
+        setHistory((items) =>
+          items.map((item) => withProjectIdentity(item, id)),
+        );
+        setFuture((items) =>
+          items.map((item) => withProjectIdentity(item, id)),
+        );
         setProject(current);
         ref.current = current;
+        setDirty(!matchesSavedRevision(current, savedSnapshot.current));
       }
       try {
         setSaved(savedProjectsSchema.parse(await api("/projects")));
@@ -2134,11 +2203,12 @@ function Workbench({
             describeError(refreshError),
         );
       }
-      return true;
+      return stillCurrent;
     } catch (e) {
       notify(String(e));
       return false;
     } finally {
+      savingRef.current = false;
       setSaving(false);
     }
   }
@@ -2151,11 +2221,45 @@ function Workbench({
       setModal("unsaved");
       return false;
     }
+    const request = ++loadRequest.current;
+    const before = ref.current;
     try {
-      const loaded = options.saved
-        ? projectSchema.parse(await api("/projects/" + p.id))
-        : projectSchema.parse(p);
+      let recovered: Project | null = null;
+      if (options.saved) {
+        try {
+          const status = recoveryStatusSchema.safeParse(
+            JSON.parse(
+              localStorage.getItem("weave.project.status." + p.id) || "null",
+            ),
+          );
+          const draft = projectSchema.safeParse(
+            JSON.parse(localStorage.getItem("weave.project." + p.id) || "null"),
+          );
+          if (
+            status.success &&
+            status.data.id === p.id &&
+            status.data.dirty &&
+            draft.success &&
+            draft.data.id === p.id
+          )
+            recovered = draft.data;
+        } catch {
+          /* Fall back to the server copy. */
+        }
+      }
+      const loaded =
+        recovered ||
+        (options.saved
+          ? projectSchema.parse(
+              await api("/projects/" + encodeURIComponent(p.id)),
+            )
+          : projectSchema.parse(p));
+      if (request !== loadRequest.current || ref.current !== before)
+        return false;
       const next = localizeLayerDefaults(loaded);
+      savedSnapshot.current =
+        options.newDraft || recovered ? null : JSON.stringify(next);
+      editRevision.current++;
       pendingArrangement.current = new Set(
         options.arrange ? arrangeExample(next) : [],
       );
@@ -2166,7 +2270,7 @@ function Workbench({
       setSelectedEdge(null);
       setHistory([]);
       setFuture([]);
-      setDirty(!!options.newDraft);
+      setDirty(!!options.newDraft || !!recovered);
       setModal(null);
       setPendingLoad(null);
       setMobilePanel(null);
@@ -2181,11 +2285,13 @@ function Workbench({
     }
   }
   function startNewProject(starter = "blank") {
+    loadRequest.current++;
     setStarterId(starter);
     setMobilePanel(null);
     setModal("new-project");
   }
   function viewReference(example: Project) {
+    loadRequest.current++;
     setReferenceChoice("example:" + example.id);
     setReferenceLocation({ blocks: [], node: null });
     setSplitView(true);
@@ -2200,8 +2306,13 @@ function Workbench({
     try {
       const doc = projectSchema.parse(await api("/projects/" + p.id));
       await api("/projects/" + p.id, undefined, "DELETE");
-      setSaved(savedProjectsSchema.parse(await api("/projects")));
       setDeletedProject(doc);
+      setSaved((items) => items.filter((item) => item.id !== p.id));
+      try {
+        setSaved(savedProjectsSchema.parse(await api("/projects")));
+      } catch {
+        notify("Project deleted, but the project list could not be refreshed.");
+      }
       notify("Project deleted. You can undo this action.");
     } catch (e) {
       notify(String(e));
@@ -2211,8 +2322,18 @@ function Workbench({
     if (!deletedProject) return;
     try {
       await api("/projects/" + deletedProject.id, deletedProject, "PUT");
-      setSaved(savedProjectsSchema.parse(await api("/projects")));
+      setSaved((items) => [
+        ...items.filter((item) => item.id !== deletedProject.id),
+        deletedProject,
+      ]);
       setDeletedProject(null);
+      try {
+        setSaved(savedProjectsSchema.parse(await api("/projects")));
+      } catch {
+        notify(
+          "Project restored, but the project list could not be refreshed.",
+        );
+      }
       notify("Project restored");
     } catch (e) {
       notify(String(e));
@@ -3508,6 +3629,7 @@ function Workbench({
                 >
                   <button
                     onClick={() => setChecksOpen(!checksOpen)}
+                    aria-expanded={checksOpen}
                     className={report?.valid ? "valid" : "invalid"}
                   >
                     {report?.valid ? (
@@ -3519,7 +3641,9 @@ function Workbench({
                       ? report.valid
                         ? "Shapes compatible"
                         : report.errors.length + " graph issues"
-                      : "Checking graph…"}
+                      : validationError
+                        ? "Validation unavailable"
+                        : "Checking graph…"}
                     <ChevronDown size={12} />
                   </button>
                   {!!report?.warnings.length && (
@@ -3553,6 +3677,11 @@ function Workbench({
                         <X size={15} />
                       </button>
                     </div>
+                    {validationError && (
+                      <p role="alert">
+                        Validation unavailable: {validationError}
+                      </p>
+                    )}
                     {report?.valid && (
                       <p className="valid">
                         <CheckCircle2 size={15} />
@@ -4546,7 +4675,13 @@ function Workbench({
                     <div className="stat-row">
                       <span>Graph validation</span>
                       <b className={report?.valid ? "valid" : "invalid"}>
-                        {report?.valid ? "Compatible" : "Needs attention"}
+                        {report
+                          ? report.valid
+                            ? "Compatible"
+                            : "Needs attention"
+                          : validationError
+                            ? "Unavailable"
+                            : "Checking…"}
                       </b>
                     </div>
                   </>
@@ -4571,17 +4706,11 @@ function Workbench({
           Add blocks
         </button>
         <button
-          aria-expanded={mobilePanel === "library" && left === "models"}
+          aria-haspopup="dialog"
           onClick={() => {
-            if (tab === "training") {
-              setModal("projects");
-              return;
-            }
-            setLeft("models");
-            setSearch("");
-            setMobilePanel(
-              mobilePanel === "library" && left === "models" ? null : "library",
-            );
+            setMobilePanel(null);
+            setProjectTab("projects");
+            setModal("projects");
           }}
         >
           <FolderOpen size={18} />
@@ -4669,7 +4798,8 @@ function Workbench({
                       : "Projects & examples"
           }
           onClose={() => {
-            if (modal === "tokenizer" && saving) return;
+            if (saving) return;
+            loadRequest.current++;
             setModal(null);
             setPendingLoad(null);
           }}
@@ -4698,8 +4828,12 @@ function Workbench({
               </h2>
             </div>
             <button
-              disabled={modal === "tokenizer" && saving}
-              onClick={() => setModal(null)}
+              disabled={saving}
+              onClick={() => {
+                loadRequest.current++;
+                setPendingLoad(null);
+                setModal(null);
+              }}
               aria-label="Close dialog"
             >
               <X size={20} />
@@ -4725,7 +4859,12 @@ function Workbench({
                   disabled={saving}
                   onClick={async () => {
                     const next = pendingLoad;
-                    if (next && (await saveProject()))
+                    if (
+                      next &&
+                      (await saveProject()) &&
+                      modalRef.current === "unsaved" &&
+                      !dirtyAfterSave()
+                    )
                       await loadProject(next.project, {
                         ...next.options,
                         force: true,
@@ -4737,13 +4876,27 @@ function Workbench({
                     : "Save & open"}
                 </button>
                 <button
+                  disabled={saving}
                   onClick={() => {
                     const next = pendingLoad;
-                    if (next)
+                    if (next) {
+                      try {
+                        localStorage.removeItem(
+                          "weave.project." + ref.current.id,
+                        );
+                        localStorage.removeItem(
+                          "weave.project.status." + ref.current.id,
+                        );
+                        localStorage.removeItem("weave.project");
+                        localStorage.removeItem("weave.project.status");
+                      } catch {
+                        notify("Could not remove the local recovery draft.");
+                      }
                       loadProject(next.project, {
                         ...next.options,
                         force: true,
                       });
+                    }
                   }}
                 >
                   {pendingLoad?.options.newDraft
@@ -4818,6 +4971,7 @@ function Workbench({
                 void deleteSavedProject(p);
               }}
               onResume={() => {
+                loadRequest.current++;
                 setModal(null);
                 setMobilePanel(null);
               }}
@@ -4887,6 +5041,12 @@ function Workbench({
         <div className="toast" role="status">
           <CheckCircle2 size={16} />
           {toast}
+          <button
+            aria-label="Dismiss notification"
+            onClick={() => setToast("")}
+          >
+            <X size={14} />
+          </button>
           {deletedProject && !modal && toast.startsWith("Project deleted") && (
             <button className="toast-undo" onClick={restoreDeletedProject}>
               Undo

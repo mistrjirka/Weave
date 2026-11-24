@@ -52,6 +52,43 @@ def test_training_requires_auth_and_same_origin(training_client):
     )
 
 
+def test_event_records_latest_checkpoints_are_bounded_and_chronological(training_client):
+    client, root = training_client
+    client.post("/api/training/session", json={"token": "test-training-secret"})
+    directory = root / "training/runs/checkpoints"
+    directory.mkdir(parents=True)
+    (directory / "run.json").write_text("{}")
+    records = [
+        {"version": 1, "id": str(i), "time": i, "kind": "metrics" if i == 3 else "checkpoint", "step": i, "tokens": 0, "payload": {}}
+        for i in range(6)
+    ]
+    (directory / "events.jsonl").write_text("".join(json.dumps(event) + "\n" for event in records))
+    url = "/api/training/runs/checkpoints/event-records"
+    page = client.get(url, params={"kind": "checkpoint", "limit": 2, "latest": "true"}).json()
+    assert [event["id"] for event in page["events"]] == ["4", "5"]
+    assert page["next_after"] == "5"
+    first = client.get(url, params={"kind": "checkpoint", "limit": 2}).json()
+    assert [event["id"] for event in first["events"]] == ["0", "1"]
+    after = client.get(url, params={"kind": "checkpoint", "limit": 2, "latest": "true", "after": "1"}).json()
+    assert [event["id"] for event in after["events"]] == ["4", "5"]
+    empty = client.get(url, params={"kind": "checkpoint", "latest": "true", "after": "5"}).json()
+    assert empty == {"events": [], "next_after": "5"}
+
+
+def test_event_records_advance_past_large_unicode_event(training_client):
+    client, root = training_client
+    client.post("/api/training/session", json={"token": "test-training-secret"})
+    directory = root / "training/runs/large-event"
+    directory.mkdir(parents=True)
+    (directory / "run.json").write_text("{}")
+    event = {"version": 1, "id": "large", "time": 1, "kind": "sample", "step": 1, "tokens": 1, "payload": {"text": "é" * 300_000}}
+    (directory / "events.jsonl").write_text(json.dumps(event, ensure_ascii=False) + "\n")
+    response = client.get("/api/training/runs/large-event/event-records")
+    assert response.status_code == 200, response.text
+    assert response.json()["next_after"] == "large"
+    assert client.get("/api/training/runs/large-event/event-records?after=large").json()["events"] == []
+
+
 def test_stage_plan_preview_monitor_and_snapshot(training_client):
     client, root = training_client
     client.post("/api/training/session", json={"token": "test-training-secret"})
@@ -94,6 +131,15 @@ def test_stage_plan_preview_monitor_and_snapshot(training_client):
     detail = client.get("/api/training/runs/" + run_id).json()
     assert detail["status"]["state"] == "completed"
     assert any(event["kind"] == "sample" for event in detail["events"])
+    compact = client.get(f"/api/training/runs/{run_id}/status?compact=true").json()
+    assert compact == {"run_id": run_id, "status": detail["status"]}
+    first = client.get(f"/api/training/runs/{run_id}/event-records?limit=1").json()
+    assert len(first["events"]) == 1
+    following = client.get(
+        f"/api/training/runs/{run_id}/event-records",
+        params={"after": first["next_after"]},
+    ).json()
+    assert first["events"][0]["id"] not in {event["id"] for event in following["events"]}
     snapshot = client.post(
         "/api/training/runs/" + run_id + "/commands", json={"kind": "snapshot"}
     ).json()
