@@ -1,7 +1,14 @@
+import { RestartSnapshot } from "./training/RestartSnapshot";
+import {
+  activeStates,
+  canRestartValidation,
+  commandResponse,
+  validationPending,
+} from "./training/validationRestart";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Settings2, RotateCw, X } from "lucide-react";
 import { z } from "zod";
+import { Settings2, RotateCw, X } from "lucide-react";
 import { Dialog } from "./ui";
 import {
   detailSchema,
@@ -12,14 +19,6 @@ import {
   type TrainingRun,
   type ValidationSettings,
 } from "./trainingApi";
-
-const activeStates = new Set([
-  "starting",
-  "preparing",
-  "running",
-  "evaluating",
-]);
-const commandResponse = z.object({ id: z.string() });
 
 export function RunValidationControls({
   detail,
@@ -52,27 +51,8 @@ export function RunValidationControls({
   useEffect(() => () => abort.current?.abort(), []);
   const control = detail.validation_control;
   const active = activeStates.has(detail.status.state);
-  const checkpoints = detail.events.filter(
-    (event) => event.kind === "checkpoint" && !event.payload.remote,
-  );
-  const latest = checkpoints.at(-1);
-  const restorable = latest?.payload.metadata;
-  const exactResume =
-    detail.restart_context?.exact_resume ??
-    (typeof restorable === "object" &&
-      restorable !== null &&
-      "exact_resume" in restorable &&
-      restorable.exact_resume === true);
-  const canRestart =
-    enabled &&
-    detail.run.execution === "local" &&
-    !!detail.run.code_first &&
-    (active
-      ? !latest || exactResume
-      : exactResume && detail.status.state !== "completed");
-  const applied =
-    requested !== null && control?.applied_command_id === requested;
-  const pending = !!control?.pending || (requested !== null && !applied);
+  const { canRestart, latest } = canRestartValidation(detail, enabled, active);
+  const { applied, pending } = validationPending(detail, requested);
 
   function show() {
     setSettings(control?.pending?.settings ?? control?.current ?? settings);
@@ -350,21 +330,7 @@ export function RunValidationControls({
                       "Waiting for the trainer to apply the requested settings…"}
                 </p>
               )}
-              {detail.revision && (
-                <details>
-                  <summary>
-                    Restart snapshot ·{" "}
-                    {detail.revision.script_source === "edited"
-                      ? "edited script"
-                      : "previous script"}
-                  </summary>
-                  <p className="training-muted">
-                    Script, settings and file hashes are recorded in{" "}
-                    <code>{detail.directory}/revision.json</code>.{" "}
-                    {detail.revision.state_policy}
-                  </p>
-                </details>
-              )}
+              <RestartSnapshot detail={detail} />
               {confirmRestart ? (
                 <div className="training-restart-confirmation">
                   <label>

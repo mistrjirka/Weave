@@ -44,6 +44,8 @@ EXCLUDED_CODE_FOLDERS = {
 # The release before live controls has the same optimizer, scheduler and loader
 # checkpoint contract. Other unknown trainer revisions retain strict resume checks.
 VALIDATION_UPGRADE_FROM = {
+    # c3da536: the pre-split trainer has the same persisted checkpoint contract.
+    "5bd2cbb7ce7d4d103f02263f591652f317b6bb3d93d8b07501a76e32aec14251",
     # CPU-default trainer; persistent evaluation changes no training state.
     "3362649f89aa8e64da731c2f4e3e443a5a195f1a41a22320527e81bec8aa690a",
     # CPU-thread default only; checkpoint state and explicit limits are unchanged.

@@ -19,10 +19,23 @@ MANAGED_MODULES = {
     "load_tokenizer",
     "weave_training",
     "text_training",
+    "text_training_data",
+    "text_training_support",
+    "text_training_loop",
+    "weave_training_files",
+    "weave_training_commands",
+    "weave_training_inspection",
+    "weave_training_reporter",
     "trainer",
+    "trainer_lifecycle",
+    "trainer_state",
+    "trainer_loop",
+    "trainer_evaluation_jobs",
+    "trainer_evaluation",
     "data_stream",
     "cache_identity",
     "token_cache",
+    "token_cache_writer",
     "tuning_math",
     "tuning_runtime",
     "preparation",
@@ -32,6 +45,30 @@ MANAGED_MODULES = {
     "custom_training",
     "custom_evaluation",
 }
+
+
+# Helpers that must accompany a refreshed parent in an existing frozen stage.
+_RUNTIME_HELPERS = {
+    "trainer.py": (
+        "trainer_lifecycle.py", "trainer_state.py", "trainer_loop.py",
+        "trainer_evaluation_jobs.py", "trainer_evaluation.py",
+    ),
+    "weave_training.py": (
+        "weave_training_files.py", "weave_training_commands.py",
+        "weave_training_inspection.py", "weave_training_reporter.py",
+    ),
+    "text_training.py": (
+        "text_training_data.py", "text_training_support.py", "text_training_loop.py",
+    ),
+    "token_cache.py": ("token_cache_writer.py",),
+}
+
+
+def runtime_upgrade_helpers(refreshed_files):
+    """Return helper filenames required by the parent files being refreshed."""
+    return tuple(dict.fromkeys(
+        helper for name in refreshed_files for helper in _RUNTIME_HELPERS.get(name, ())
+    ))
 
 
 def rewrite_imports(source, prefix, modules=None):
@@ -167,11 +204,24 @@ def write_helpers(package):
     generated = []
     for name in (
         "text_training.py",
+        "text_training_data.py",
+        "text_training_support.py",
+        "text_training_loop.py",
         "weave_training.py",
+        "weave_training_files.py",
+        "weave_training_commands.py",
+        "weave_training_inspection.py",
+        "weave_training_reporter.py",
         "trainer.py",
+        "trainer_lifecycle.py",
+        "trainer_state.py",
+        "trainer_loop.py",
+        "trainer_evaluation_jobs.py",
+        "trainer_evaluation.py",
         "data_stream.py",
         "cache_identity.py",
         "token_cache.py",
+        "token_cache_writer.py",
         "tuning_math.py",
         "tuning_runtime.py",
         "preparation.py",

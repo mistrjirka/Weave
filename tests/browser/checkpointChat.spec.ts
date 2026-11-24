@@ -18,7 +18,7 @@ test("chat with the recommended checkpoint and continue raw text without changin
     [
       "-c",
       `
-import sys, json, shutil
+import sys, json, os, shutil
 from pathlib import Path
 sys.path.insert(0, 'tests')
 from test_checkpoint_chat import make_chat_run
@@ -29,7 +29,7 @@ project.update(id=sys.argv[2], name='Checkpoint chat verification')
 info=json.loads((source/'run.json').read_text())
 info['project_id']=sys.argv[2]
 (source/'run.json').write_text(json.dumps(info))
-destination=Path('data/training/runs')/source.name
+destination=Path(os.environ.get('WEAVE_DATA', 'data'))/'training'/'runs'/source.name
 shutil.copytree(source,destination)
 (root/'fixture.json').write_text(json.dumps({'project':project,'run':source.name,'directory':str(destination.resolve())}))
 `,
@@ -252,6 +252,13 @@ shutil.copytree(source,destination)
     await page.route("**" + chatURL + "/session", (route) =>
       route.fulfill({ json: configuredSession }),
     );
+    // The fake catalog advertises a decoder not registered on this test server.
+    // Stub its preflight alongside the catalog; real decoder validation is tested separately.
+    await page.route("**" + chatURL + "/validate-options", (route) => {
+      if (route.request().postDataJSON().decoder !== "xml-tool-grammar")
+        return route.continue();
+      return route.fulfill({ json: { errors: [], warnings: [] } });
+    });
     await page.route("**" + chatURL + "/settings", async (route) => {
       const body = route.request().postDataJSON();
       applied.push(body);

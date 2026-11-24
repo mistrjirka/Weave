@@ -1,0 +1,360 @@
+.training-workspace {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 16px 24px 32px;
+  color: var(--theme-text, #263b30);
+  background: var(--theme-base, #f7f9f5);
+}
+:is(.training-workspace, .training-controls) h2,
+:is(.training-workspace, .training-controls) h3,
+:is(.training-workspace, .training-controls) h4 {
+  margin: 0 0 10px;
+  line-height: 1.3;
+}
+:is(.training-workspace, .training-controls) h2 {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 21px;
+}
+:is(.training-workspace, .training-controls) h3 {
+  font-size: 15px;
+}
+:is(.training-workspace, .training-controls) h4 {
+  font-size: 13px;
+}
+:is(.training-workspace, .training-controls) p {
+  line-height: 1.6;
+  margin: 6px 0 14px;
+}
+:is(.training-workspace, .training-controls) button,
+.training-download {
+  border: 1px solid var(--line);
+  padding: 8px 11px;
+  border-radius: 7px;
+  background: var(--theme-raised, #fff);
+  color: inherit;
+  text-decoration: none;
+  min-height: 36px;
+}
+:is(.training-workspace, .training-controls) button:hover,
+.training-download:hover {
+  background: var(--theme-neutral-surface, #edf2e9);
+}
+:is(.training-workspace, .training-controls) button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+:is(.training-workspace, .training-controls) .primary {
+  background: var(--theme-green-strong, #283f31);
+  color: var(--theme-on-strong, #fff);
+  border-color: transparent;
+}
+:is(.training-workspace, .training-controls) button:focus-visible,
+:is(.training-workspace, .training-controls) input:focus-visible,
+:is(.training-workspace, .training-controls) textarea:focus-visible,
+:is(.training-workspace, .training-controls) select:focus-visible,
+:is(.training-workspace, .training-controls) summary:focus-visible,
+.training-download:focus-visible {
+  outline: 2px solid var(--theme-green-accent, #608d76);
+  outline-offset: 3px;
+}
+.training-heading,
+.training-section-heading,
+.training-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.training-heading {
+  margin-bottom: 22px;
+}
+.training-heading p,
+.training-muted {
+  color: var(--theme-muted, #59685d);
+  font-size: 12px;
+}
+.training-actions {
+  justify-content: flex-start;
+  gap: 8px;
+}
+.training-actions button {
+  min-height: 44px;
+}
+.training-device-heading {
+  scroll-margin-top: 16px;
+}
+.training-layout {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+  gap: 24px;
+  align-items: start;
+  max-width: 1800px;
+  margin: auto;
+}
+.training-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+.training-card {
+  padding: 24px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--theme-raised, #fff);
+  min-width: 0;
+}
+.training-card > .training-section-heading {
+  margin-bottom: 18px;
+}
+.training-card > h3 {
+  margin-top: 24px;
+}
+.training-stages {
+  padding: 4px 0;
+  min-width: 0;
+}
+.training-stages h3 {
+  margin: 0;
+}
+.training-stages > h3 {
+  margin-top: 28px;
+  margin-bottom: 12px;
+}
+.training-stages .training-stage,
+.training-stages .training-run {
+  width: 100%;
+  text-align: left;
+  justify-content: flex-start;
+  align-items: flex-start;
+  margin: 5px 0;
+  background: transparent;
+  border-color: transparent;
+}
+.training-stage > span {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  flex-shrink: 0;
+  border-radius: 7px;
+  background: var(--theme-neutral-surface, #edf2e9);
+}
+.training-stage strong,
+.training-run strong {
+  display: block;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.training-stage small,
+.training-run small {
+  display: block;
+  color: var(--theme-muted, #59685d);
+  font-size: 11px;
+  line-height: 1.6;
+}
+.training-run {
+  flex-direction: column;
+  gap: 3px !important;
+}
+.training-workspace .is-active {
+  border-color: var(--theme-green-accent, #6d8062);
+  background: var(--theme-neutral-surface, #edf2e9);
+}
+.training-stage-tools {
+  display: flex;
+  gap: 5px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+.training-stage-tools button {
+  padding: 6px;
+  min-width: 34px;
+}
+.training-tabs {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+.training-tabs button {
+  border-color: transparent;
+  background: transparent;
+  padding: 7px 10px;
+  font-size: 12px;
+}
+.training-tabs button[aria-pressed="true"] {
+  background: var(--theme-neutral-surface, #edf2e9);
+  border-color: var(--line);
+  font-weight: 600;
+}
+.training-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px 22px;
+  margin: 16px 0;
+}
+:is(.training-workspace, .training-controls) label {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  min-width: 0;
+  font-size: 12px;
+  font-weight: 600;
+}
+:is(.training-workspace, .training-controls) input:not([type="checkbox"]),
+:is(.training-workspace, .training-controls) select,
+:is(.training-workspace, .training-controls) textarea {
+  padding: 9px 10px;
+  width: 100%;
+  min-width: 0;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: var(--theme-base, #f7f9f5);
+  color: inherit;
+  font-weight: 400;
+  line-height: 1.45;
+}
+:is(.training-workspace, .training-controls) select {
+  min-height: 37px;
+}
+:is(.training-workspace, .training-controls) small {
+  color: var(--theme-muted, #59685d);
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+:is(.training-workspace, .training-controls) textarea {
+  resize: vertical;
+}
+.training-workspace .training-script {
+  font:
+    12px/1.7 "JetBrains Mono",
+    monospace;
+  min-height: 500px;
+  tab-size: 4;
+  margin-bottom: 12px;
+  white-space: pre;
+  overflow: auto;
+}
+.training-workspace details {
+  margin: 18px 0;
+  border-top: 1px solid var(--line);
+  padding-top: 14px;
+}
+:is(.training-workspace, .training-controls) summary {
+  cursor: pointer;
+  font-weight: 600;
+  line-height: 1.6;
+}
+.training-workspace .training-collapsible {
+  margin: 0;
+  border: 0;
+  padding: 0;
+}
+.training-collapsible[open] > summary {
+  margin-bottom: 18px;
+}
+.training-fp16-status {
+  padding: 14px;
+  margin-top: 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.training-message-log {
+  max-height: 280px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--theme-neutral-surface, #edf2e9);
+  overflow-wrap: anywhere;
+  font-size: 13px;
+}
+.training-message-log p + p {
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+}
+.training-message-error {
+  color: var(--theme-danger, #a13a32);
+}
+.training-workspace details > label {
+  margin-top: 16px;
+}
+.training-devices {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 14px 16px;
+  margin: 18px 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
+}
+.training-devices legend {
+  font-size: 12px;
+  padding: 0 6px;
+}
+.training-devices label,
+.training-inline-check {
+  flex-direction: row !important;
+  align-items: flex-start;
+  font-weight: 400 !important;
+}
+.training-devices small {
+  display: block;
+}
+:is(.training-workspace, .training-controls) input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  accent-color: var(--theme-green-accent, #608d76);
+  margin: 1px 0;
+}
+.training-launch {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 24px;
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+}
+.training-launch > span {
+  color: var(--theme-muted, #59685d);
+  font-size: 12px;
+}
+.training-launch button {
+  padding: 10px 17px;
+}
+.training-alert,
+.training-notice {
+  padding: 12px 16px;
+  border-radius: 8px;
+  overflow-wrap: anywhere;
+}
+.training-alert {
+  background: var(--theme-coral-surface, #f8e7df);
+  color: var(--theme-coral-text, #8c4335);
+}
+.training-notice {
+  background: var(--theme-green-surface, #e5efe0);
+  color: var(--theme-green-text, #34523b);
+}
+.training-empty {
+  text-align: center;
+  padding: 60px 24px;
+}
+.training-empty > svg {
+  margin-bottom: 14px;
+}
+.training-empty button {
+  margin-top: 12px;
+}

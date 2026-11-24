@@ -1,0 +1,403 @@
+/* Run monitoring is the primary workspace; setup/history are compact disclosures. */
+.training-layout {
+  display: block;
+}
+.training-stages {
+  margin: 0 0 10px;
+  padding: 0;
+}
+.training-main {
+  gap: 12px;
+}
+.training-setup-card {
+  padding: 20px;
+}
+.training-heading {
+  margin-bottom: 12px;
+}
+.training-workspace {
+  padding-top: 16px;
+}
+.training-overview {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+  margin: 14px 0;
+}
+.training-overview > div {
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--theme-base, #f7f9f5);
+}
+.training-overview dt {
+  color: var(--theme-muted, #59685d);
+  font-size: 12px;
+}
+.training-overview dd {
+  margin: 5px 0;
+  font-size: 26px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+.training-overview small {
+  display: block;
+  margin-top: 6px;
+  font-weight: 400;
+  font-size: 11px;
+  color: var(--theme-muted, #59685d);
+}
+.training-execution-status {
+  font-size: 13px;
+}
+.training-validation-status p {
+  font-size: 12px;
+  margin: 8px 0;
+}
+.training-chart-options {
+  margin: 0 0 12px !important;
+  border: 0 !important;
+  padding: 0 !important;
+}
+.training-chart {
+  border-top: 3px solid var(--chart-color, #2563eb);
+}
+.training-chart-line {
+  stroke: var(--chart-color, #2563eb);
+  stroke-width: 2.5;
+}
+.training-chart-point {
+  fill: var(--chart-color, #2563eb);
+}
+.training-chart-compare {
+  stroke: var(--theme-muted, #64748b);
+}
+.training-chart figcaption strong::before {
+  content: "";
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--chart-color, #2563eb);
+  margin-right: 7px;
+}
+html:is([data-theme="dark"], [data-theme="black"]) {
+  --metric-blue: #60a5fa;
+  --metric-purple: #c084fc;
+  --metric-teal: #2dd4bf;
+  --metric-orange: #fb923c;
+  --metric-pink: #f472b6;
+}
+@media (max-width: 760px) {
+  .training-stages {
+    border-bottom: 0;
+    padding-bottom: 0;
+  }
+  .training-overview {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+  .training-overview dd {
+    font-size: 23px;
+  }
+  .training-overview small,
+  .training-overview dt {
+    font-size: 13px;
+  }
+}
+
+.training-run-state {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--theme-muted, #637263);
+  margin-left: 8px;
+}
+
+.training-stopped-banner,
+.training-completed-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 14px;
+  border: 1px solid var(--theme-input-border, #8a9988);
+  border-left: 4px solid var(--theme-muted, #637263);
+  border-radius: 8px;
+  background: var(--theme-raised, #fff);
+}
+.training-completed-banner {
+  border-left-color: var(--theme-green-accent, #608d76);
+}
+.training-run-state {
+  display: inline-block;
+  padding: 3px 8px;
+  border-radius: 4px;
+  background: var(--theme-neutral-surface, #edf2e9);
+  text-transform: capitalize;
+}
+
+.training-chart-placeholder {
+  position: relative;
+}
+.training-chart-placeholder p {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  font-size: 13px;
+}
+.training-chart-placeholder p span {
+  background: var(--theme-raised, #fff);
+  padding: 6px 10px;
+}
+
+.training-finish-estimate {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--theme-muted, #59685d);
+}
+.training-finish-estimate svg {
+  flex-shrink: 0;
+}
+
+.training-progress-caption {
+  display: flex;
+  width: 100%;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 6px 16px;
+  flex-wrap: wrap;
+}
+.training-progress .training-finish-estimate,
+.training-progress .training-finish-estimate span {
+  white-space: normal;
+  margin: 0;
+}
+.training-history-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.modal.training-history-dialog {
+  width: min(560px, calc(100vw - 24px));
+  max-height: 85dvh;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  scrollbar-gutter: auto;
+}
+.training-history-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--line);
+}
+.training-history-heading h2 {
+  font-size: 16px;
+  margin: 0;
+}
+.training-history-heading .modal-close {
+  position: static;
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+}
+.training-history-content {
+  padding: 12px 16px;
+  overflow: auto;
+}
+.training-history-content .training-stages {
+  border: 0;
+  padding: 0;
+  margin: 0;
+}
+.training-dashboard {
+  container: training-dashboard / inline-size;
+  padding: 18px;
+}
+.training-dashboard > .training-section-heading {
+  margin-bottom: 10px;
+}
+.training-dashboard .training-section-heading h3 {
+  margin-bottom: 4px;
+}
+.training-overview {
+  gap: 10px;
+  margin: 10px 0;
+}
+.training-overview > div {
+  padding: 10px 12px;
+}
+@container training-dashboard (min-width: 1100px) {
+  .training-charts {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+.training-loading > p {
+  font-size: 14px;
+}
+.training-loading-layout {
+  display: grid;
+  gap: 16px;
+  margin-top: 16px;
+}
+.training-loading-bar {
+  height: 36px;
+  border-radius: 8px;
+  background: var(--theme-neutral-surface, #edf2e9);
+}
+.training-loading-card {
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--theme-raised, #fff);
+}
+.training-loading-card > .training-loading-bar {
+  width: 40%;
+  margin-bottom: 20px;
+}
+.training-loading-plots {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+.training-loading-plots > div {
+  height: 200px;
+  border-radius: 8px;
+  background: var(--theme-neutral-surface, #edf2e9);
+}
+@media (max-width: 760px) {
+  .training-history-button > span {
+    display: none;
+  }
+  .training-history-button {
+    width: 44px;
+    justify-content: center;
+  }
+  .training-history-heading .modal-close {
+    width: 44px;
+    height: 44px;
+  }
+  .training-loading-plots {
+    grid-template-columns: 1fr;
+  }
+}
+
+[data-testid="run-freshness"] > .training-finish-estimate {
+  margin-left: 12px;
+}
+
+.modal.training-validation-dialog {
+  width: min(620px, calc(100vw - 24px));
+  max-height: 90dvh;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  scrollbar-gutter: auto;
+}
+.training-controls {
+  color: var(--theme-text, #263b30);
+  font-size: 14px;
+}
+.training-controls input:not([type="checkbox"]):not([type="radio"]),
+.training-controls select {
+  min-height: 44px;
+  font-size: 14px;
+}
+.training-controls label {
+  font-size: 13px;
+}
+.training-controls button:not(.modal-close) {
+  min-height: 44px;
+  font-size: 13px;
+}
+.training-controls .training-actions {
+  margin-top: 16px;
+}
+.training-restart-details {
+  display: grid;
+  gap: 12px;
+  margin: 16px 0;
+}
+.training-restart-details div {
+  display: grid;
+  gap: 4px;
+}
+.training-restart-details dt {
+  font-weight: 600;
+  font-size: 13px;
+}
+.training-restart-details dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--theme-muted);
+  font-size: 13px;
+}
+.training-validation-content > .training-muted:first-child {
+  margin-top: 0;
+}
+.training-examples-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 8px 18px;
+  margin-bottom: 14px;
+}
+.training-examples-toolbar label {
+  display: grid;
+  gap: 6px;
+  max-width: 100%;
+}
+.training-examples-toolbar select {
+  min-height: 44px;
+  max-width: 100%;
+}
+.training-examples-toolbar p {
+  margin: 0;
+}
+.training-validation-content {
+  padding: 16px;
+  overflow: auto;
+}
+.training-validation-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  border: 0;
+  padding: 0;
+  margin: 16px 0;
+  min-width: 0;
+}
+.training-validation-fields label {
+  display: grid;
+  gap: 6px;
+  align-content: start;
+  font-size: 13px;
+}
+.training-validation-fields select,
+.training-validation-fields input {
+  width: 100%;
+  min-width: 0;
+  min-height: 44px;
+}
+.training-validation-fields small {
+  color: var(--theme-muted);
+}
+.training-restart-confirmation {
+  border-top: 1px solid var(--line);
+  margin-top: 16px;
+  padding-top: 12px;
+}
+@media (max-width: 480px) {
+  .training-validation-fields {
+    grid-template-columns: 1fr;
+  }
+}

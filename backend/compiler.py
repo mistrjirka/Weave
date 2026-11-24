@@ -43,7 +43,7 @@ def compile_project(project):
     source = black.format_str(source, mode=black.Mode(line_length=88))
     ast.parse(source)
     files["model.py"] = source
-    for filename in ("runtime.py", "export_helpers.py", "sparse_runtime.py"):
+    for filename in ("runtime.py", "runtime_attention.py", "export_helpers.py", "sparse_runtime.py"):
         files[filename] = support_source(
             filename, Path(__file__).with_name(filename).stat().st_mtime_ns
         )
@@ -153,7 +153,7 @@ def load_tokenizer(input_node=None):
     files["README.md"] = (
         "# "
         + project.get("name", "Exported graph")
-        + "\n\nRandomly initialized PyTorch architecture. Install requirements, then run `python example.py`.\n\n`model.py` contains named layers, direct tensor operations, and explicit loops. Specialized PyTorch layers live in `runtime.py`; named tensor helpers live in `export_helpers.py`, and attention-mask support lives in `sparse_runtime.py`. Keep these files together.\n\nDifferentiable blocks support standard PyTorch autograd. The example uses `torch.no_grad()` for inference. Training requires your own data, loss and optimizer; sampling/token-selection outputs are discrete.\n\nTokenizer files selected on input nodes are included in `tokenizers/<id>/`; `tokenizers.json` maps input node paths to their tokenizer. Use `load_tokenizer(input_node='source')` when inputs use different tokenizers. A declared custom Python shape contract is not a runtime proof.\n\n## Source references\n"
+        + "\n\nRandomly initialized PyTorch architecture. Install requirements, then run `python example.py`.\n\n`model.py` contains named layers, direct tensor operations, and explicit loops. Specialized PyTorch layers live in `runtime.py` and `runtime_attention.py`; named tensor helpers live in `export_helpers.py`, and attention-mask support lives in `sparse_runtime.py`. Keep these files together.\n\nDifferentiable blocks support standard PyTorch autograd. The example uses `torch.no_grad()` for inference. Training requires your own data, loss and optimizer; sampling/token-selection outputs are discrete.\n\nTokenizer files selected on input nodes are included in `tokenizers/<id>/`; `tokenizers.json` maps input node paths to their tokenizer. Use `load_tokenizer(input_node='source')` when inputs use different tokenizers. A declared custom Python shape contract is not a runtime proof.\n\n## Source references\n"
         + json.dumps(project.get("references", []), indent=2)
         + "\n"
     )

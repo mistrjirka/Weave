@@ -1,121 +1,9 @@
-import { useEffect, useState } from "react";
+import { TrainingValidationSettings } from "./training/TrainingValidationSettings";
+import { computeValues, performanceValues } from "./training/stageSettings";
+export { useStageSettings } from "./training/stageSettings";
 import { z } from "zod";
 import { Cpu } from "lucide-react";
-import { stableJSON } from "./trainingConfigEquality";
-import {
-  trainingConfigSchema,
-  trainingRequest,
-  type TrainingConfig,
-  type TrainingGPU,
-  type TrainingStage,
-} from "./trainingApi";
-
-const previewSchema = z.object({
-  config: trainingConfigSchema,
-  code_first: z.boolean().nullable(),
-  unresolved: z.array(z.string()),
-  error: z.string().nullable(),
-  supported: z.array(z.string()).nullable().optional(),
-});
-const computeKeys = ["strategy", "devices", "precision", "placement"] as const;
-const performanceKeys = [
-  "compile_mode",
-  "fused_optimizer",
-  "profile_steps",
-] as const;
-function pick<K extends keyof TrainingConfig>(
-  config: TrainingConfig,
-  keys: readonly K[],
-) {
-  return Object.fromEntries(keys.map((key) => [key, config[key]])) as Pick<
-    TrainingConfig,
-    K
-  >;
-}
-
-/** Preview Python literals on the server; never run a script just to populate a form. */
-export function useStageSettings(stage: TrainingStage | undefined) {
-  const [preview, setPreview] = useState<{
-    stageId: string;
-    script: string;
-    configJSON: string;
-    value: z.infer<typeof previewSchema>;
-  } | null>(null);
-  const [error, setError] = useState("");
-  const configJSON = stableJSON(stage?.config);
-  useEffect(() => {
-    if (!stage) return;
-    const controller = new AbortController();
-    const timer = window.setTimeout(() => {
-      setError("");
-      void trainingRequest(
-        "/settings/preview",
-        previewSchema,
-        stage,
-        "POST",
-        controller.signal,
-      )
-        .then((value) => {
-          if (!controller.signal.aborted)
-            setPreview({
-              stageId: stage.id,
-              script: stage.script,
-              configJSON,
-              value,
-            });
-        })
-        .catch((failure: unknown) => {
-          if (!controller.signal.aborted)
-            setError(
-              failure instanceof Error ? failure.message : String(failure),
-            );
-        });
-    }, 180);
-    return () => {
-      window.clearTimeout(timer);
-      controller.abort();
-    };
-  }, [stage?.id, stage?.script, configJSON]);
-  const current =
-    preview &&
-    preview.stageId === stage?.id &&
-    preview.script === stage?.script &&
-    preview.configJSON === configJSON
-      ? preview.value
-      : null;
-  if (!stage || !current)
-    return {
-      config: null,
-      codeFirst: null,
-      unresolved: [],
-      error,
-      supported: null,
-    };
-  // Reflect changes immediately, while the debounced preview request catches up.
-  const config = {
-    ...stage.config,
-    ...pick(current.config, computeKeys),
-    ...pick(current.config, performanceKeys),
-    evaluation_mode: current.config.evaluation_mode,
-    evaluation_device: current.config.evaluation_device,
-    ...(stage.config.compute_mode === "override"
-      ? pick(stage.config, computeKeys)
-      : {}),
-    ...(stage.config.performance_mode === "override"
-      ? pick(stage.config, performanceKeys)
-      : {}),
-    ...(current.code_first && stage.config.evaluation_mode !== "script"
-      ? pick(stage.config, ["evaluation_mode", "evaluation_device"])
-      : {}),
-  };
-  return {
-    config,
-    codeFirst: current.code_first,
-    unresolved: current.unresolved,
-    supported: current.supported ?? null,
-    error: error || current.error || "",
-  };
-}
+import { type TrainingConfig, type TrainingGPU } from "./trainingApi";
 
 export function computeSummary(config: TrainingConfig) {
   const devices = config.devices.length
@@ -183,7 +71,7 @@ export function TrainingComputeSettings({
   function compute(patch: Partial<TrainingConfig>) {
     if (!config) return;
     onChange({
-      ...pick(config, computeKeys),
+      ...computeValues(config),
       compute_mode: "override",
       ...patch,
     });
@@ -191,7 +79,7 @@ export function TrainingComputeSettings({
   function performance(patch: Partial<TrainingConfig>) {
     if (!config) return;
     onChange({
-      ...pick(config, performanceKeys),
+      ...performanceValues(config),
       performance_mode: "override",
       ...patch,
     });
@@ -443,118 +331,14 @@ export function TrainingComputeSettings({
             </details>
           )}
         </section>
-        <section
-          className="training-setup-section"
-          aria-label="Validation configuration"
-        >
-          <header>
-            <h3>Validation</h3>
-            <p>Check quality while training progresses.</p>
-          </header>
-          <div className="training-form-grid">
-            <label>
-              Validation execution
-              <select
-                aria-label="Validation execution"
-                disabled={
-                  !accepts("evaluation_mode") ||
-                  (!codeFirst && supported === null)
-                }
-                value={
-                  unknown.has("async_evaluation") ? "" : config.evaluation_mode
-                }
-                onChange={(event) =>
-                  onChange({
-                    evaluation_mode: z
-                      .enum(["inline", "async"])
-                      .parse(event.target.value),
-                    evaluation_device: config.evaluation_device ?? "cpu",
-                  })
-                }
-              >
-                {unknown.has("async_evaluation") && (
-                  <option value="">Calculated at runtime</option>
-                )}
-                <option value="inline">Inline · pause training</option>
-                <option value="async">Background · keep training</option>
-              </select>
-            </label>
-            <label>
-              Validation device
-              <select
-                aria-label="Validation device"
-                value={
-                  config.evaluation_mode === "async" ||
-                  config.strategy === "train_eval"
-                    ? unknown.has("evaluation_device")
-                      ? ""
-                      : (config.evaluation_device ?? "cpu")
-                    : "training"
-                }
-                disabled={
-                  !accepts("evaluation_device") ||
-                  (config.evaluation_mode !== "async" &&
-                    config.strategy !== "train_eval")
-                }
-                onChange={(event) =>
-                  onChange({
-                    evaluation_mode: "async",
-                    evaluation_device:
-                      event.target.value === "cpu"
-                        ? "cpu"
-                        : Number(event.target.value),
-                  })
-                }
-              >
-                {config.evaluation_mode !== "async" &&
-                  config.strategy !== "train_eval" && (
-                    <option value="training">Training device</option>
-                  )}
-                {unknown.has("evaluation_device") && (
-                  <option value="">Calculated at runtime</option>
-                )}
-                <option value="cpu" disabled={!codeFirst && supported === null}>
-                  CPU
-                </option>
-                {gpus.map((gpu) => (
-                  <option
-                    key={gpu.uuid}
-                    value={gpu.index}
-                    disabled={
-                      !codeFirst &&
-                      supported === null &&
-                      config.devices.includes(gpu.index)
-                    }
-                  >
-                    GPU {gpu.index} · {gpu.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-          </div>
-          <p className="training-field-note">
-            {supported !== null
-              ? "Your Python script implements evaluation. The optional AsyncEvaluator runs one immutable snapshot at a time."
-              : config.evaluation_mode === "async"
-                ? "One background worker evaluates checkpoints. Newer pending checkpoints replace older ones."
-                : "Training waits for each validation pass, using the same device."}
-          </p>
-          {config.evaluation_mode === "async" &&
-            typeof config.evaluation_device === "number" &&
-            config.devices.includes(config.evaluation_device) && (
-              <p className="training-field-note">
-                Validation shares a training GPU and will compete for memory and
-                compute.
-              </p>
-            )}
-          <p className="training-field-note">
-            {supported !== null
-              ? "Only declared settings are passed to your evaluation code. Custom live controls must be implemented by the script."
-              : codeFirst
-                ? "Validation frequency and batches are defined in the Python script. Live changes are available in Monitor."
-                : "This legacy recipe validates at checkpoint intervals. Select Training GPU + evaluation GPU for background validation."}
-          </p>
-        </section>
+        <TrainingValidationSettings
+          config={config}
+          gpus={gpus}
+          codeFirst={codeFirst}
+          supported={supported}
+          unknown={unknown}
+          onChange={onChange}
+        />
       </div>
       {codeFirst && (
         <details className="training-performance-settings">

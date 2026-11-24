@@ -1,0 +1,363 @@
+.input-tokenizer-settings {
+  margin-bottom: 22px;
+}
+.input-tokenizer-settings .tokenizer-chip {
+  width: 100%;
+  max-width: 100%;
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  height: auto;
+  white-space: normal;
+  gap: 8px;
+  font-size: 14px;
+}
+.input-tokenizer-settings .tokenizer-chip > span {
+  display: block;
+  font-size: inherit;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  flex: 1;
+}
+.input-tokenizer-settings .tokenizer-chip > svg {
+  flex-shrink: 0;
+}
+.input-tokenizer-summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 12px;
+  color: var(--theme-muted, #74816d);
+  font-size: 10px;
+}
+.input-tokenizer-summary > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+.input-tokenizer-summary > small {
+  white-space: nowrap;
+}
+.binding-resolution {
+  margin-top: -6px;
+  margin-bottom: 16px;
+  overflow-wrap: anywhere;
+}
+.graph-variables table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  margin: 16px 0;
+}
+.graph-variables th,
+.graph-variables td {
+  padding: 10px 6px;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
+  overflow-wrap: anywhere;
+}
+.graph-variables th {
+  font-weight: 550;
+}
+.graph-variables th:last-child,
+.graph-variables td:last-child {
+  width: 76px;
+  text-align: right;
+}
+.graph-variables input {
+  width: 100%;
+  min-width: 0;
+  padding: 8px 10px;
+  border-radius: 5px;
+  border: 1px solid var(--line);
+  background: var(--theme-base, #f7f9f5);
+  color: inherit;
+}
+.graph-variables input[aria-invalid="true"] {
+  border-color: var(--theme-coral-accent, #bc6c61);
+}
+.variable-add {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(64px, 100px) auto;
+  gap: 10px;
+  align-items: end;
+  margin: 20px 0;
+}
+.variable-add label {
+  min-width: 0;
+}
+.variable-add label > span {
+  display: block;
+  margin-bottom: 6px;
+}
+.variable-add button {
+  min-height: 35px;
+}
+.graph-variables details {
+  margin: 20px 0;
+}
+.graph-variables summary {
+  cursor: pointer;
+}
+.graph-actions .variables-button {
+  color: var(--theme-green-text, #3c603f);
+  width: auto;
+  padding: 4px 8px;
+  white-space: nowrap;
+}
+@media (max-width: 1100px) {
+  .variables-button-label {
+    display: none;
+  }
+}
+@media (max-width: 440px) {
+  .variable-add {
+    grid-template-columns: minmax(0, 1fr) 80px;
+  }
+  .variable-add button {
+    grid-column: 1 / -1;
+  }
+}
+
+.breadcrumbs .graph-up-button {
+  flex-shrink: 0;
+  gap: 5px;
+  margin-right: 6px;
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  color: var(--theme-green-text, #3c603f);
+  background: var(--theme-raised, #fff);
+}
+.weight-group-picker {
+  margin: 18px 0;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+.connection-picker {
+  position: fixed;
+  z-index: 1100;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--theme-raised, #fff);
+  color: var(--theme-green-text, #263b30);
+  box-shadow: 0 14px 42px #0003;
+}
+.connection-picker-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding: 14px 14px 10px;
+  gap: 8px;
+}
+.connection-picker-heading > div {
+  min-width: 0;
+}
+.connection-picker-heading strong,
+.connection-picker-heading small {
+  display: block;
+  overflow-wrap: anywhere;
+}
+.connection-picker-heading small {
+  margin-top: 4px;
+  font-size: 11px;
+}
+.connection-picker-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 12px 10px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--theme-base, #f7f9f5);
+}
+.connection-picker-search input {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  outline: none;
+}
+.connection-picker-search:focus-within {
+  outline: 2px solid var(--theme-green-line, #4d7739);
+  outline-offset: 1px;
+}
+.connection-picker-results {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 0 6px;
+}
+.connection-picker-results > button {
+  display: flex;
+  width: 100%;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 8px;
+  border-radius: 5px;
+  text-align: left;
+}
+.connection-picker-results > button[aria-selected="true"] {
+  background: var(--theme-green-surface, #e9f1e1);
+}
+.connection-picker-results > button > span {
+  min-width: 0;
+}
+.connection-picker-results strong,
+.connection-picker-results small {
+  display: block;
+  overflow-wrap: anywhere;
+}
+.connection-picker-results small {
+  font-size: 10px;
+  margin-top: 3px;
+}
+.connection-picker-results > button > small {
+  flex: 0 0 72px;
+  text-align: right;
+}
+.connection-picker-results > p {
+  padding: 0 8px;
+}
+.connection-picker-hint {
+  padding: 10px 14px;
+  margin: 0;
+  border-top: 1px solid var(--line);
+  font-size: 10px;
+}
+
+.react-flow__panel.top.left.variables-canvas-panel {
+  margin: 12px;
+  pointer-events: auto;
+  z-index: 8;
+}
+.graph-variable-card {
+  width: 284px;
+  max-width: calc(100vw - 48px);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--theme-raised, #fff);
+  color: var(--theme-green-text, #263b30);
+  box-shadow: 0 4px 15px #00000012;
+  font-size: 11px;
+}
+.variable-card-heading {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 7px 8px;
+  cursor: grab;
+  touch-action: none;
+}
+.variable-card-heading > strong {
+  flex: 1;
+}
+.variable-card-heading button {
+  min-height: 24px;
+  width: 24px;
+}
+.variable-card-body {
+  padding: 0 10px 10px;
+  max-height: min(390px, 45vh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.graph-variables.compact table {
+  margin: 0 0 6px;
+}
+.graph-variables.compact td,
+.graph-variables.compact th {
+  padding: 2px 4px;
+  vertical-align: middle;
+}
+.graph-variables.compact details {
+  margin: 2px 0 0;
+}
+.graph-variables.compact summary {
+  line-height: 1.2;
+}
+.graph-variables.compact td:last-child,
+.graph-variables.compact th:last-child {
+  width: 30px;
+}
+.graph-variables.compact thead th:last-child {
+  font-size: 0;
+}
+.graph-variables.compact input {
+  padding: 4px 6px;
+  font-size: 11px;
+}
+.graph-variables.compact button {
+  min-height: 24px;
+}
+.graph-variables.compact .variable-add {
+  grid-template-columns: minmax(0, 1fr) 70px;
+  margin: 8px 0;
+  gap: 6px;
+}
+.graph-variables.compact .variable-add button {
+  grid-column: 1 / -1;
+}
+@media (max-width: 760px),
+  (max-width: 1000px) and (max-height: 500px) and (pointer: coarse) {
+  .graph-variable-card {
+    width: 224px;
+  }
+  .variable-card-body {
+    max-height: 232px;
+  }
+}
+
+/* Keep phone navigation tools outside the focused node's reading area. */
+@media (max-width: 760px),
+  (max-width: 1000px) and (max-height: 500px) and (pointer: coarse) {
+  .flow-wrap .react-flow__minimap {
+    display: none;
+  }
+  .flow-wrap .react-flow__controls,
+  .is-split .flow-wrap .react-flow__controls {
+    top: 0;
+    right: 0;
+    bottom: auto;
+    left: auto;
+  }
+}
+
+.moe-preview {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 3px;
+  font-size: 10px;
+}
+.moe-preview > span:first-child,
+.moe-preview > span:nth-last-child(2),
+.moe-experts i {
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 4px;
+  font-style: normal;
+}
+.moe-experts {
+  display: grid;
+  gap: 3px;
+}
+.moe-paths {
+  line-height: 0.8;
+  opacity: 0.7;
+}
+.moe-preview small {
+  width: 100%;
+  text-align: center;
+  margin-top: 5px;
+}
